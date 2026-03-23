@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <realmCode code="US"/>
+  <typeId root="2.16.840.1.113883.1.3" extension="POCD_HD000040"/>
+  <templateId root="2.16.840.1.113883.10.20.22.1.1"/>
+  <templateId root="2.16.840.1.113883.10.20.22.1.14"/>
+  <id root="2.16.840.1.113883.3.9999" extension="SAMPLE-REFERRAL-001"/>
+  <code code="57133-1" codeSystem="2.16.840.1.113883.6.1" displayName="Referral Note"/>
+  <title>Referral Note</title>
+  <effectiveTime value="20240115120000+0000"/>
+  <confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>
+  <languageCode code="en-US"/>
+
+  <recordTarget>
+    <patientRole>
+      <id root="2.16.840.1.113883.3.9999" extension="PAT-001"/>
+      <patient>
+        <name use="L">
+          <given>Jane</given>
+          <family>Doe</family>
+        </name>
+        <administrativeGenderCode code="F" codeSystem="2.16.840.1.113883.5.1"/>
+        <birthTime value="19800315"/>
+      </patient>
+    </patientRole>
+  </recordTarget>
+
+  <component>
+    <structuredBody>
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.13"/>
+          <code code="46239-0" codeSystem="2.16.840.1.113883.6.1"
+                displayName="Chief Complaint and Reason for Visit"/>
+          <title>Chief Complaint / Reason for Referral</title>
+          <text>Patient referred for cardiology evaluation due to recurring chest pain and shortness of breath on exertion. Echo shows mild left ventricular dysfunction.</text>
+        </section>
+      </component>
+    </structuredBody>
+  </component>
+</ClinicalDocument>

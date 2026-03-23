@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Referral Review</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f4f6f8; color: #222; }
+    .container { max-width: 820px; margin: 32px auto; padding: 0 16px; }
+    h1 { font-size: 1.4rem; margin-bottom: 24px; color: #1a1a2e; }
+    .card { background: #fff; border-radius: 8px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: .06em; color: #666; margin-bottom: 14px; }
+    .field { display: flex; gap: 8px; margin-bottom: 8px; font-size: 0.95rem; }
+    .field .label { color: #555; min-width: 160px; }
+    .field .value { font-weight: 500; }
+    .list { padding-left: 18px; font-size: 0.92rem; line-height: 1.7; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; font-weight: 600; }
+    .badge-warn { background: #fff3cd; color: #856404; }
+    .badge-ok { background: #d1e7dd; color: #0a3622; }
+    .badge-risk { background: #f8d7da; color: #58151c; }
+    .missing-section { color: #856404; background: #fff3cd; padding: 4px 10px; border-radius: 4px; display: inline-block; margin: 3px 4px; font-size: 0.85rem; }
+    .assessment { border-left: 4px solid #0d6efd; padding-left: 14px; }
+    .assessment p { margin-bottom: 8px; font-size: 0.95rem; }
+    .concern { color: #dc3545; font-size: 0.9rem; margin-bottom: 4px; }
+    .actions { display: flex; gap: 12px; align-items: flex-start; }
+    .btn { padding: 10px 28px; border: none; border-radius: 6px; font-size: 0.95rem; font-weight: 600; cursor: pointer; }
+    .btn-accept { background: #198754; color: #fff; }
+    .btn-accept:hover { background: #157347; }
+    .btn-decline { background: #dc3545; color: #fff; }
+    .btn-decline:hover { background: #b02a37; }
+    .decline-form { display: none; margin-top: 14px; }
+    .decline-form.visible { display: block; }
+    .decline-form label { font-size: 0.9rem; color: #555; display: block; margin-bottom: 6px; }
+    .decline-form select, .decline-form input[type="text"] {
+      width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.92rem; margin-bottom: 10px;
+    }
+    .clinician-field { margin-bottom: 16px; }
+    .clinician-field label { font-size: 0.9rem; color: #555; display: block; margin-bottom: 4px; }
+    .clinician-field input { padding: 7px 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.92rem; width: 260px; }
+    .status-bar { padding: 10px 16px; border-radius: 6px; font-size: 0.92rem; margin-top: 12px; display: none; }
+    .status-bar.success { background: #d1e7dd; color: #0a3622; display: block; }
+    .status-bar.error { background: #f8d7da; color: #58151c; display: block; }
+    .state-badge { font-size: 0.8rem; font-weight: 600; padding: 3px 10px; border-radius: 12px; background: #e0e7ff; color: #3730a3; margin-left: 10px; vertical-align: middle; }
+  </style>
+</head>
+<body>
+<script>/*__PAGE_DATA__*/</script>
+<div class="container">
+  <h1>Referral Review <span class="state-badge" id="stateBadge"></span></h1>
+
+  <div class="card">
+    <h2>Patient Demographics</h2>
+    <div class="field"><span class="label">Name</span><span class="value" id="patientName"></span></div>
+    <div class="field"><span class="label">Date of Birth</span><span class="value" id="patientDob"></span></div>
+  </div>
+
+  <div class="card">
+    <h2>Referral Details</h2>
+    <div class="field"><span class="label">Reason for Referral</span><span class="value" id="referralReason"></span></div>
+    <div class="field"><span class="label">Referring Provider</span><span class="value" id="referrerAddress"></span></div>
+    <div class="field"><span class="label">Payer</span><span class="value" id="payer"></span></div>
+    <div class="field"><span class="label">Received</span><span class="value" id="receivedAt"></span></div>
+  </div>
+
+  <div class="card" id="clinicalCard">
+    <h2>Clinical Information</h2>
+    <div class="field"><span class="label">Problems</span><span class="value" id="problems"></span></div>
+    <div class="field"><span class="label">Allergies</span><span class="value" id="allergies"></span></div>
+    <div class="field"><span class="label">Medications</span><span class="value" id="medications"></span></div>
+    <div class="field"><span class="label">Diagnostic Results</span><span class="value" id="diagnosticResults"></span></div>
+    <div id="missingSections" style="margin-top: 10px;"></div>
+  </div>
+
+  <div class="card" id="assessmentCard">
+    <h2>AI Clinical Sufficiency Assessment <span style="font-size:0.75rem;color:#888;text-transform:none;letter-spacing:0">(advisory only)</span></h2>
+    <div class="assessment">
+      <p id="assessmentSummary">Loading...</p>
+      <div id="assessmentConcerns"></div>
+    </div>
+  </div>
+
+  <div class="card" id="actionCard">
+    <h2>Disposition Decision</h2>
+    <div class="clinician-field">
+      <label for="clinicianId">Clinician ID</label>
+      <input type="text" id="clinicianId" placeholder="e.g. dr-smith" />
+    </div>
+    <div class="actions">
+      <button class="btn btn-accept" onclick="submitAccept()">Accept Referral</button>
+      <button class="btn btn-decline" onclick="showDeclineForm()">Decline Referral</button>
+    </div>
+    <div class="decline-form" id="declineForm">
+      <label for="declineReason">Reason for Decline</label>
+      <select id="declineReasonSelect" onchange="syncDeclineReason()">
+        <option value="">— Select a reason —</option>
+        <option value="Out of Scope">Out of Scope</option>
+        <option value="Insufficient Clinical Information">Insufficient Clinical Information</option>
+        <option value="Patient Already Under Care">Patient Already Under Care</option>
+        <option value="Capacity Unavailable">Capacity Unavailable</option>
+        <option value="Other">Other (specify below)</option>
+      </select>
+      <input type="text" id="declineReasonText" placeholder="Additional details or custom reason" />
+      <button class="btn btn-decline" onclick="submitDecline()">Confirm Decline</button>
+    </div>
+    <div class="status-bar" id="statusBar"></div>
+  </div>
+</div>
+
+<script>
+  const data = window.__PAGE_DATA__;
+  const referralId = data.referralId;
+
+  // Populate patient demographics
+  document.getElementById('patientName').textContent =
+    `${data.patient.firstName} ${data.patient.lastName}`;
+  document.getElementById('patientDob').textContent = data.patient.dateOfBirth || '—';
+
+  // Populate referral details
+  document.getElementById('referralReason').textContent = data.referral.reasonForReferral || '—';
+  document.getElementById('referrerAddress').textContent = data.referral.referrerAddress || '—';
+  document.getElementById('receivedAt').textContent =
+    data.referral.createdAt ? new Date(data.referral.createdAt * 1000).toLocaleString() : '—';
+  document.getElementById('stateBadge').textContent = data.referral.state;
+
+  // Hide action card if referral is already decided
+  const terminalStates = ['Accepted', 'Declined', 'Scheduled', 'Encounter', 'Closed', 'Closed-Confirmed'];
+  if (terminalStates.includes(data.referral.state)) {
+    document.getElementById('actionCard').style.display = 'none';
+  }
+
+  // Populate AI assessment
+  if (data.assessment) {
+    const badge = data.assessment.sufficient
+      ? '<span class="badge badge-ok">Sufficient</span>'
+      : '<span class="badge badge-risk">Concerns Noted</span>';
+    document.getElementById('assessmentSummary').innerHTML = badge + ' ' + data.assessment.summary;
+    const concerns = data.assessment.concerns;
+    if (concerns && concerns.length > 0) {
+      document.getElementById('assessmentConcerns').innerHTML =
+        concerns.map(c => `<p class="concern">• ${c}</p>`).join('');
+    }
+  } else {
+    document.getElementById('assessmentSummary').textContent = 'Assessment pending — please refresh in a moment.';
+  }
+
+  // Populate clinical info (these come from the extended parse stored... see note below)
+  // For PoC: clinical detail fields are populated from referral metadata if available
+  document.getElementById('problems').textContent = '—';
+  document.getElementById('allergies').textContent = '—';
+  document.getElementById('medications').textContent = '—';
+  document.getElementById('diagnosticResults').textContent = '—';
+  document.getElementById('payer').textContent = '—';
+
+  function showDeclineForm() {
+    document.getElementById('declineForm').classList.add('visible');
+  }
+
+  function syncDeclineReason() {
+    const selected = document.getElementById('declineReasonSelect').value;
+    if (selected && selected !== 'Other') {
+      document.getElementById('declineReasonText').value = selected;
+    }
+  }
+
+  async function submitAccept() {
+    const clinicianId = document.getElementById('clinicianId').value.trim();
+    if (!clinicianId) { showStatus('Please enter your Clinician ID.', 'error'); return; }
+    await submitDisposition({ decision: 'Accept', clinicianId });
+  }
+
+  async function submitDecline() {
+    const clinicianId = document.getElementById('clinicianId').value.trim();
+    const declineReason = document.getElementById('declineReasonText').value.trim();
+    if (!clinicianId) { showStatus('Please enter your Clinician ID.', 'error'); return; }
+    if (!declineReason) { showStatus('Please enter a decline reason.', 'error'); return; }
+    await submitDisposition({ decision: 'Decline', clinicianId, declineReason });
+  }
+
+  async function submitDisposition(body) {
+    try {
+      const res = await fetch(`/referrals/${referralId}/disposition`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        showStatus(`Referral ${body.decision}ed successfully. RRI sent to referring provider.`, 'success');
+        document.getElementById('actionCard').style.display = 'none';
+        document.getElementById('stateBadge').textContent = body.decision === 'Accept' ? 'Accepted' : 'Declined';
+      } else {
+        showStatus(json.error || 'An error occurred.', 'error');
+      }
+    } catch {
+      showStatus('Network error — please try again.', 'error');
+    }
+  }
+
+  function showStatus(message, type) {
+    const bar = document.getElementById('statusBar');
+    bar.textContent = message;
+    bar.className = `status-bar ${type}`;
+  }
+</script>
+</body>
+</html>

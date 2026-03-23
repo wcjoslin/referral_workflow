@@ -1,0 +1,51 @@
+{
+  "name": "referral-workflow",
+  "version": "0.1.0",
+  "description": "360X Closed Loop Referral PoC",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node -r ./scripts/node-polyfill.js src/index.ts",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "ts-node src/db/migrate.ts",
+    "seed": "ts-node -r ./scripts/node-polyfill.js scripts/seed-demo.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@google/generative-ai": "^0.24.1",
+    "@kno2/bluebutton": "^0.6.11",
+    "@types/express": "^5.0.6",
+    "@types/mailparser": "^3.4.6",
+    "better-sqlite3": "^11.0.0",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.36.0",
+    "express": "^5.2.1",
+    "imapflow": "^1.0.162",
+    "mailparser": "^3.9.5",
+    "nodemailer": "^6.9.14",
+    "xmlbuilder2": "^3.1.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.9",
+    "@types/nodemailer": "^6.4.15",
+    "@typescript-eslint/eslint-plugin": "^7.16.0",
+    "@typescript-eslint/parser": "^7.16.0",
+    "drizzle-kit": "^0.27.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^30.3.0",
+    "prettier": "^3.3.2",
+    "ts-jest": "^29.2.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.3"
+  }
+}

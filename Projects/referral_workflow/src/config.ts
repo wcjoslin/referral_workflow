@@ -1,0 +1,47 @@
+import * as dotenv from 'dotenv';
+dotenv.config();
+
+function requireEnv(key: string): string {
+  const value = process.env[key];
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${key}`);
+  }
+  return value;
+}
+
+function optionalEnv(key: string, defaultValue: string): string {
+  return process.env[key] ?? defaultValue;
+}
+
+export const config = {
+  imap: {
+    host: requireEnv('IMAP_HOST'),
+    port: parseInt(optionalEnv('IMAP_PORT', '993'), 10),
+    user: requireEnv('IMAP_USER'),
+    password: requireEnv('IMAP_PASSWORD'),
+    mailbox: optionalEnv('IMAP_MAILBOX', 'INBOX'),
+    pollIntervalMs: parseInt(optionalEnv('IMAP_POLL_INTERVAL_MS', '10000'), 10),
+  },
+  smtp: {
+    host: requireEnv('SMTP_HOST'),
+    port: parseInt(optionalEnv('SMTP_PORT', '587'), 10),
+    user: requireEnv('SMTP_USER'),
+    password: requireEnv('SMTP_PASSWORD'),
+  },
+  receiving: {
+    directAddress: requireEnv('RECEIVING_DIRECT_ADDRESS'),
+  },
+  database: {
+    url: optionalEnv('DATABASE_URL', './referral.db'),
+  },
+  gemini: {
+    apiKey: optionalEnv('GEMINI_API_KEY', ''),
+  },
+  app: {
+    env: optionalEnv('NODE_ENV', 'development'),
+    logLevel: optionalEnv('LOG_LEVEL', 'info'),
+  },
+  server: {
+    port: parseInt(optionalEnv('PORT', '3000'), 10),
+  },
+} as const;
