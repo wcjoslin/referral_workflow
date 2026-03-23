@@ -10,10 +10,10 @@ This document is the single source of truth for implementation readiness across 
 ### Repository & Tooling
 - [x] TypeScript project initialized (`tsconfig.json` with `strict: true`)
 - [x] `package.json` configured with scripts: `build`, `test`, `lint`, `dev`
-- [ ] ESLint configured with TypeScript-aware rules (`@typescript-eslint`)
-- [ ] Prettier configured and integrated with ESLint
+- [x] ESLint configured with TypeScript-aware rules (`@typescript-eslint`)
+- [x] Prettier configured and integrated with ESLint
 - [x] Jest + `ts-jest` configured (`jest.config.ts`)
-- [ ] `.env.example` created with all required keys documented
+- [x] `.env.example` created with all required keys documented
 - [ ] `.env` added to `.gitignore`
 - [x] `src/config.ts` module created to load and validate all env vars at startup (fail fast if required vars are missing)
 
@@ -47,7 +47,7 @@ This document is the single source of truth for implementation readiness across 
 - [ ] SMTP/IMAP credentials stored in `.env`
 - [x] `drizzle-orm` and `drizzle-kit` installed
 - [x] `db/schema.ts` written with `patients`, `referrals`, and `outbound_messages` tables (defined in `ENGINEERING-PRD-01.md` Section 7)
-- [ ] Initial Drizzle migration generated (`drizzle-kit generate`) and applied
+- [x] Initial Drizzle migration generated (`drizzle-kit generate`) and applied
 - [x] Sample C-CDA Referral Note test files downloaded from [HL7 C-CDA Examples](https://github.com/HL7/C-CDA-Examples) and placed in `tests/fixtures/`
 
 ---
@@ -133,26 +133,26 @@ This document is the single source of truth for implementation readiness across 
 
 ## PRD-02: Process and Disposition Referral
 
-> **Architecture:** Not yet written — draft `ENGINEERING-PRD-02.md` before coding begins.
+> **Architecture:** Approved — see `ENGINEERING-PRD-02.md`
 
 ### PRD-02 Specific — Prerequisite
-- [ ] SQLite + Drizzle schema initialized and migration applied (Phase 0)
+- [x] SQLite + Drizzle schema initialized and migration applied (Phase 0)
 
-### PRD-02 Specific — Implementation *(preliminary — finalize after architecture approval)*
-- [ ] Auto-decline: validates presence of all required C-CDA sections; auto-generates `RRI^I12` rejection if incomplete
-- [ ] Clinician Review UI: displays patient demographics, payer info, reason for referral, problems/allergies/meds, diagnostic results
-- [ ] Missing optional sections flagged in UI (not blocking, but visible)
-- [ ] Claude API (`@anthropic-ai/sdk`) call: evaluates clinical sufficiency of C-CDA content for the specialty
-- [ ] Accept/Decline UI action: captures decision, clinician ID, and timestamp — written to `referrals` table
-- [ ] Decline reason: selected from predefined list or free-text input
-- [ ] `RRI^I12` generated for Accept (AA) and Decline (AR) — reason populated on decline
-- [ ] RRI transmitted via mock Direct gateway; `Message Control ID` logged to `outbound_messages`
-- [ ] State transition: `Acknowledged` → `Accepted` or `Declined`
+### PRD-02 Specific — Implementation
+- [x] Auto-decline: validates presence of all required C-CDA sections; auto-generates `RRI^I12` rejection if incomplete
+- [x] Clinician Review UI: displays patient demographics, reason for referral, problems/allergies/meds, diagnostic results
+- [x] Missing optional sections flagged in UI (not blocking, but visible)
+- [x] Gemini API (`@google/generative-ai`) call: evaluates clinical sufficiency of C-CDA content; result persisted to DB
+- [x] Accept/Decline UI action: captures decision, clinician ID, and timestamp — written to `referrals` table
+- [x] Decline reason: selected from predefined list or free-text input
+- [x] `RRI^I12` generated for Accept (AA) and Decline (AR) — reason populated on decline
+- [x] RRI transmitted via mock Direct gateway; `Message Control ID` logged to `outbound_messages`
+- [x] State transition: `Acknowledged` → `Accepted` or `Declined`
 
-### PRD-02 Specific — Testing *(preliminary)*
-- [ ] Unit: auto-decline fires correctly for a C-CDA missing required sections
-- [ ] Unit: `RRI^I12` message built correctly for Accept and Decline cases
-- [ ] Unit: Claude API returns a structured sufficiency verdict from sample C-CDA input
+### PRD-02 Specific — Testing
+- [x] Unit: auto-decline fires correctly for a C-CDA missing required sections
+- [x] Unit: `RRI^I12` message built correctly for Accept and Decline cases
+- [x] Unit: Gemini API returns a structured sufficiency verdict from sample C-CDA input
 - [ ] Integration: full flow — valid referral in DB → clinician clicks Accept → RRI sent → state updated to `Accepted`
 - [ ] Integration: auto-decline flow — incomplete C-CDA arrives → auto-rejected → RRI sent → state updated to `Declined`
 

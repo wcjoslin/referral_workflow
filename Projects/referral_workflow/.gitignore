@@ -6,3 +6,4 @@ dist/
 *.db-wal
 coverage/
 .processed_messages.json
+.claude/
