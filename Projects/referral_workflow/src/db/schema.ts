@@ -20,6 +20,7 @@ export const referrals = sqliteTable('referrals', {
   clinicianId: text('clinician_id'),
   appointmentDate: text('appointment_date'), // ISO 8601
   appointmentLocation: text('appointment_location'),
+  scheduledProvider: text('scheduled_provider'), // clinician assigned to the appointment
   aiAssessment: text('ai_assessment'), // JSON-serialised SufficiencyAssessment, nullable until Gemini responds
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),

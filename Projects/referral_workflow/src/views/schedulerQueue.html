@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scheduler Queue</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f4f6f8; color: #222; }
+    .container { max-width: 900px; margin: 32px auto; padding: 0 16px; }
+    h1 { font-size: 1.4rem; margin-bottom: 24px; color: #1a1a2e; }
+    .card { background: #fff; border-radius: 8px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+    th { text-align: left; padding: 10px 8px; border-bottom: 2px solid #e5e7eb; color: #555; font-weight: 600; text-transform: uppercase; font-size: 0.78rem; letter-spacing: 0.04em; }
+    td { padding: 10px 8px; border-bottom: 1px solid #f0f0f0; }
+    tr:last-child td { border-bottom: none; }
+    .btn { padding: 6px 16px; border: none; border-radius: 5px; font-size: 0.85rem; font-weight: 600; cursor: pointer; text-decoration: none; color: #fff; background: #0d6efd; display: inline-block; }
+    .btn:hover { background: #0b5ed7; }
+    .empty { color: #888; font-size: 0.95rem; padding: 20px 0; text-align: center; }
+    .state-badge { font-size: 0.78rem; font-weight: 600; padding: 2px 8px; border-radius: 4px; background: #e0e7ff; color: #3730a3; }
+  </style>
+</head>
+<body>
+<script>/*__QUEUE_DATA__*/</script>
+<div class="container">
+  <h1>Scheduling Queue</h1>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Patient</th>
+          <th>Reason</th>
+          <th>Received</th>
+          <th>State</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="queueBody"></tbody>
+    </table>
+    <div class="empty" id="emptyMsg" style="display:none;">No referrals awaiting scheduling.</div>
+  </div>
+</div>
+<script>
+  const items = window.__QUEUE_DATA__ || [];
+  const tbody = document.getElementById('queueBody');
+  const emptyMsg = document.getElementById('emptyMsg');
+
+  if (items.length === 0) {
+    emptyMsg.style.display = 'block';
+  } else {
+    items.forEach(item => {
+      const tr = document.createElement('tr');
+      const received = item.referral.createdAt
+        ? new Date(item.referral.createdAt * 1000).toLocaleDateString()
+        : '—';
+      tr.innerHTML = `
+        <td>${item.referral.id}</td>
+        <td>${item.patient.firstName} ${item.patient.lastName}</td>
+        <td>${item.referral.reasonForReferral || '—'}</td>
+        <td>${received}</td>
+        <td><span class="state-badge">${item.referral.state}</span></td>
+        <td><a class="btn" href="/referrals/${item.referral.id}/schedule">Schedule</a></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+</script>
+</body>
+</html>

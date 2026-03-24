@@ -15,6 +15,13 @@
       "when": 1774309800000,
       "tag": "0001_add_ai_assessment",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1774396200000,
+      "tag": "0002_add_scheduled_provider",
+      "breakpoints": true
     }
   ]
 }

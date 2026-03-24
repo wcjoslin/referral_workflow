@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Schedule Appointment</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f4f6f8; color: #222; }
+    .container { max-width: 820px; margin: 32px auto; padding: 0 16px; }
+    h1 { font-size: 1.4rem; margin-bottom: 24px; color: #1a1a2e; }
+    .card { background: #fff; border-radius: 8px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: .06em; color: #666; margin-bottom: 14px; }
+    .field { display: flex; gap: 8px; margin-bottom: 8px; font-size: 0.95rem; }
+    .field .label { color: #555; min-width: 160px; }
+    .field .value { font-weight: 500; }
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: block; font-size: 0.88rem; color: #555; margin-bottom: 4px; font-weight: 500; }
+    .form-group input, .form-group select { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.92rem; }
+    .form-group input[type="datetime-local"] { width: 280px; }
+    .resource-list { display: flex; flex-wrap: wrap; gap: 10px; }
+    .resource-item { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; }
+    .resource-item input[type="checkbox"] { width: auto; }
+    .btn { padding: 10px 28px; border: none; border-radius: 6px; font-size: 0.95rem; font-weight: 600; cursor: pointer; }
+    .btn-primary { background: #0d6efd; color: #fff; }
+    .btn-primary:hover { background: #0b5ed7; }
+    .status-bar { padding: 10px 16px; border-radius: 6px; font-size: 0.92rem; margin-top: 12px; display: none; }
+    .status-bar.success { background: #d1e7dd; color: #0a3622; display: block; }
+    .status-bar.error { background: #f8d7da; color: #58151c; display: block; }
+    .status-bar.warning { background: #fff3cd; color: #856404; display: block; }
+    .back-link { font-size: 0.88rem; color: #0d6efd; text-decoration: none; margin-bottom: 16px; display: inline-block; }
+    .back-link:hover { text-decoration: underline; }
+    .state-badge { font-size: 0.8rem; font-weight: 600; padding: 3px 10px; border-radius: 12px; background: #e0e7ff; color: #3730a3; margin-left: 10px; vertical-align: middle; }
+  </style>
+</head>
+<body>
+<script>/*__SCHEDULE_DATA__*/</script>
+<div class="container">
+  <a class="back-link" href="/scheduler/queue">&larr; Back to Queue</a>
+  <h1>Schedule Appointment <span class="state-badge" id="stateBadge"></span></h1>
+
+  <div class="card">
+    <h2>Patient Information</h2>
+    <div class="field"><span class="label">Name</span><span class="value" id="patientName"></span></div>
+    <div class="field"><span class="label">Date of Birth</span><span class="value" id="patientDob"></span></div>
+    <div class="field"><span class="label">Reason for Referral</span><span class="value" id="reason"></span></div>
+  </div>
+
+  <div class="card" id="formCard">
+    <h2>Appointment Details</h2>
+    <div class="form-group">
+      <label for="apptDatetime">Date & Time</label>
+      <input type="datetime-local" id="apptDatetime" />
+    </div>
+    <div class="form-group">
+      <label for="locationName">Location</label>
+      <select id="locationName"></select>
+    </div>
+    <div class="form-group">
+      <label for="provider">Scheduled Provider</label>
+      <input type="text" id="provider" placeholder="e.g. Dr. Sarah Chen" />
+    </div>
+    <div class="form-group">
+      <label>Resources / Equipment (optional)</label>
+      <div class="resource-list" id="resourceList"></div>
+    </div>
+    <button class="btn btn-primary" onclick="submitSchedule()">Confirm Appointment</button>
+    <div class="status-bar" id="statusBar"></div>
+  </div>
+
+  <div class="card" id="scheduledCard" style="display:none;">
+    <h2>Appointment Confirmed</h2>
+    <div class="field"><span class="label">Date & Time</span><span class="value" id="confirmedDatetime"></span></div>
+    <div class="field"><span class="label">Location</span><span class="value" id="confirmedLocation"></span></div>
+    <div class="field"><span class="label">Provider</span><span class="value" id="confirmedProvider"></span></div>
+  </div>
+</div>
+
+<script>
+  const data = window.__SCHEDULE_DATA__;
+  const referralId = data.referralId;
+
+  document.getElementById('patientName').textContent =
+    `${data.patient.firstName} ${data.patient.lastName}`;
+  document.getElementById('patientDob').textContent = data.patient.dateOfBirth || '—';
+  document.getElementById('reason').textContent = data.referral.reasonForReferral || '—';
+  document.getElementById('stateBadge').textContent = data.referral.state;
+
+  // If already scheduled, show confirmation instead of form
+  if (data.referral.state === 'Scheduled') {
+    document.getElementById('formCard').style.display = 'none';
+    document.getElementById('scheduledCard').style.display = 'block';
+    document.getElementById('confirmedDatetime').textContent =
+      data.referral.appointmentDate ? new Date(data.referral.appointmentDate).toLocaleString() : '—';
+    document.getElementById('confirmedLocation').textContent = data.referral.appointmentLocation || '—';
+    document.getElementById('confirmedProvider').textContent = data.referral.scheduledProvider || '—';
+  }
+
+  // Populate location dropdown and resource checkboxes from server data
+  const locSelect = document.getElementById('locationName');
+  const resList = document.getElementById('resourceList');
+  (data.resources || []).forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r.name;
+    opt.textContent = r.name;
+    locSelect.appendChild(opt);
+
+    const label = document.createElement('label');
+    label.className = 'resource-item';
+    label.innerHTML = `<input type="checkbox" value="${r.id}" /> ${r.name}`;
+    resList.appendChild(label);
+  });
+
+  // Default datetime: 7 days from now at 10:00
+  const def = new Date();
+  def.setDate(def.getDate() + 7);
+  def.setHours(10, 0, 0, 0);
+  document.getElementById('apptDatetime').value = def.toISOString().slice(0, 16);
+
+  async function submitSchedule() {
+    const apptDatetime = document.getElementById('apptDatetime').value;
+    const locationName = document.getElementById('locationName').value;
+    const provider = document.getElementById('provider').value.trim();
+
+    if (!apptDatetime || !locationName || !provider) {
+      showStatus('Please fill in all fields.', 'error');
+      return;
+    }
+
+    const resourceIds = [...document.querySelectorAll('#resourceList input:checked')]
+      .map(el => el.value);
+
+    try {
+      const res = await fetch(`/referrals/${referralId}/schedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appointmentDatetime: apptDatetime,
+          durationMinutes: 60,
+          locationName,
+          scheduledProvider: provider,
+          resourceIds,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        showStatus('Appointment confirmed. SIU^S12 sent to referring provider.', 'success');
+        document.getElementById('formCard').style.display = 'none';
+        document.getElementById('scheduledCard').style.display = 'block';
+        document.getElementById('confirmedDatetime').textContent = new Date(apptDatetime).toLocaleString();
+        document.getElementById('confirmedLocation').textContent = locationName;
+        document.getElementById('confirmedProvider').textContent = provider;
+        document.getElementById('stateBadge').textContent = 'Scheduled';
+      } else {
+        showStatus(json.error || 'An error occurred.', json.error && json.error.includes('conflict') ? 'warning' : 'error');
+      }
+    } catch {
+      showStatus('Network error — please try again.', 'error');
+    }
+  }
+
+  function showStatus(message, type) {
+    const bar = document.getElementById('statusBar');
+    bar.textContent = message;
+    bar.className = `status-bar ${type}`;
+  }
+</script>
+</body>
+</html>

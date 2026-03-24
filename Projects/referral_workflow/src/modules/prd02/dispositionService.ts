@@ -19,6 +19,7 @@ import { referrals, outboundMessages } from '../../db/schema';
 import { config } from '../../config';
 import { transition, ReferralState, InvalidStateTransitionError } from '../../state/referralStateMachine';
 import { buildRri } from './rriBuilder';
+import { onReferralAccepted } from '../prd03/mockScheduler';
 import { randomUUID } from 'crypto';
 
 export class ReferralNotFoundError extends Error {
@@ -86,6 +87,13 @@ async function applyDisposition(
   console.log(
     `[DispositionService] Referral #${referralId} ${nextState} by ${clinicianId}. RRI sent (control ID: ${messageControlId})`,
   );
+
+  // PRD-03: auto-schedule accepted referrals (non-blocking)
+  if (nextState === ReferralState.ACCEPTED) {
+    void onReferralAccepted(referralId).catch((err: Error) =>
+      console.error(`[MockScheduler] Failed for referral #${referralId}:`, err.message),
+    );
+  }
 }
 
 /**
