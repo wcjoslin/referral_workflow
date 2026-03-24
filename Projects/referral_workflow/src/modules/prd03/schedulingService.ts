@@ -19,6 +19,7 @@ import { transition, ReferralState } from '../../state/referralStateMachine';
 import { checkConflicts, Resource } from './resourceCalendar';
 import { buildSiu, isoToHl7 } from './siuBuilder';
 import { onReferralScheduled } from '../prd05/mockEncounter';
+import { autoAck } from '../prd06/mockReferrer';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -130,6 +131,11 @@ export async function scheduleReferral(
 
   console.log(
     `[SchedulingService] Referral #${referralId} scheduled for ${details.appointmentDatetime} at ${details.locationName}. SIU sent (control ID: ${messageControlId})`,
+  );
+
+  // PRD-06: auto-ACK from mock referrer (non-blocking)
+  void autoAck(messageControlId).catch((err: Error) =>
+    console.error(`[MockReferrer] ACK failed for ${messageControlId}:`, err.message),
   );
 
   // PRD-05: auto-trigger encounter (non-blocking)

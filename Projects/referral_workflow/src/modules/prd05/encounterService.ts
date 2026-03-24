@@ -13,6 +13,7 @@ import { referrals, patients, outboundMessages } from '../../db/schema';
 import { config } from '../../config';
 import { transition, ReferralState } from '../../state/referralStateMachine';
 import { onEncounterComplete } from '../prd04/mockEhr';
+import { autoAck } from '../prd06/mockReferrer';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -99,6 +100,11 @@ export async function markEncounterComplete(opts: EncounterOptions): Promise<voi
 
     console.log(
       `[EncounterService] Interim update sent for referral #${referralId} (control ID: ${messageControlId})`,
+    );
+
+    // PRD-06: auto-ACK from mock referrer (non-blocking)
+    void autoAck(messageControlId).catch((err: Error) =>
+      console.error(`[MockReferrer] ACK failed for ${messageControlId}:`, err.message),
     );
   }
 

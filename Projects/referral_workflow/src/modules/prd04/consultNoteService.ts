@@ -15,6 +15,7 @@ import { config } from '../../config';
 import { transition, ReferralState } from '../../state/referralStateMachine';
 import { structureNote } from './geminiConsultNote';
 import { buildConsultNoteCcda } from './ccdaBuilder';
+import { autoAck } from '../prd06/mockReferrer';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -124,5 +125,11 @@ export async function generateAndSend(opts: ConsultNoteOptions): Promise<void> {
 
   console.log(
     `[ConsultNoteService] Consult note sent for referral #${referralId} (control ID: ${messageControlId}). State → Closed`,
+  );
+
+  // PRD-06: auto-ACK from mock referrer (non-blocking)
+  // The ConsultNote ACK will trigger Closed → Closed-Confirmed
+  void autoAck(messageControlId).catch((err: Error) =>
+    console.error(`[MockReferrer] ACK failed for ${messageControlId}:`, err.message),
   );
 }

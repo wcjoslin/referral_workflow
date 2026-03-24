@@ -214,18 +214,18 @@ This document is the single source of truth for implementation readiness across 
 
 ## PRD-06: Acknowledge Final Report and Close Loop
 
-> **Architecture:** Not yet written — draft `ENGINEERING-PRD-06.md` before coding begins.
+> **Architecture:** Implemented inline — simple ACK parser + correlation service.
 
-### PRD-06 Specific *(preliminary — finalize after architecture approval)*
-- [ ] `mockReferrer.ts` auto-ACKs all inbound messages (RRI, SIU, Consult Note C-CDA)
-- [ ] Inbound `ACK` parser extracts `Message Control ID` from `MSA` segment
-- [ ] `Message Control ID` correlated to matching row in `outbound_messages` table
-- [ ] Matched message status updated: `Pending` → `Acknowledged`; `acknowledgedAt` timestamp recorded
-- [ ] Unmatched ACK logged without changing referral state
-- [ ] State transition: `Closed` → `Closed-Confirmed`
-- [ ] Unit: `ACK` message parsed, `Message Control ID` extracted from `MSA`
-- [ ] Unit: correlation logic matches ACK to correct `outbound_messages` row
-- [ ] Unit: unmatched ACK handled safely without state change
+### PRD-06 Specific
+- [x] `mockReferrer.ts` auto-ACKs all inbound messages (RRI, SIU, Consult Note C-CDA)
+- [x] Inbound `ACK` parser extracts `Message Control ID` from `MSA` segment
+- [x] `Message Control ID` correlated to matching row in `outbound_messages` table
+- [x] Matched message status updated: `Pending` → `Acknowledged`; `acknowledgedAt` timestamp recorded
+- [x] Unmatched ACK logged without changing referral state
+- [x] State transition: `Closed` → `Closed-Confirmed`
+- [x] Unit: `ACK` message parsed, `Message Control ID` extracted from `MSA`
+- [x] Unit: correlation logic matches ACK to correct `outbound_messages` row
+- [x] Unit: unmatched ACK handled safely without state change
 - [ ] Integration: `mockReferrer.ts` sends ACK for Consult Note → `outbound_messages` status updated → state updated to `Closed-Confirmed`
 
 ---

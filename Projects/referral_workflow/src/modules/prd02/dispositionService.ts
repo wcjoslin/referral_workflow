@@ -15,6 +15,7 @@
 import nodemailer from 'nodemailer';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db';
+import { autoAck } from '../prd06/mockReferrer';
 import { referrals, outboundMessages } from '../../db/schema';
 import { config } from '../../config';
 import { transition, ReferralState, InvalidStateTransitionError } from '../../state/referralStateMachine';
@@ -132,5 +133,10 @@ export async function sendRriMessage(
       status: 'Pending',
       sentAt: new Date(),
     });
+
+    // PRD-06: auto-ACK from mock referrer (non-blocking)
+    void autoAck(messageControlId).catch((err: Error) =>
+      console.error(`[MockReferrer] ACK failed for ${messageControlId}:`, err.message),
+    );
   }
 }

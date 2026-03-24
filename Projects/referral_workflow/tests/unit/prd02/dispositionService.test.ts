@@ -9,6 +9,9 @@ jest.mock('nodemailer');
 jest.mock('../../../src/modules/prd03/mockScheduler', () => ({
   onReferralAccepted: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock('../../../src/modules/prd06/mockReferrer', () => ({
+  autoAck: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../../../src/config', () => ({
   config: {
     smtp: { host: 'smtp.test', port: 587, user: 'user', password: 'pass' },

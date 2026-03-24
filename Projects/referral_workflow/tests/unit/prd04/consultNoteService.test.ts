@@ -5,6 +5,9 @@
  */
 
 jest.mock('nodemailer');
+jest.mock('../../../src/modules/prd06/mockReferrer', () => ({
+  autoAck: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../../../src/modules/prd04/geminiConsultNote', () => ({
   structureNote: jest.fn().mockResolvedValue({
     chiefComplaint: 'Chest pain',
