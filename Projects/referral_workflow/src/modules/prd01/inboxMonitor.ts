@@ -41,7 +41,7 @@ function saveProcessedIds(ids: Set<string>): void {
 async function pollOnce(client: ImapFlow, processedIds: Set<string>): Promise<void> {
   await client.mailboxOpen(config.imap.mailbox);
 
-  // Fetch all unseen messages
+  // Fetch all messages
   for await (const message of client.fetch('1:*', { envelope: true, source: true })) {
     const messageId = message.envelope?.messageId ?? `uid-${message.uid}`;
 
@@ -61,7 +61,9 @@ async function pollOnce(client: ImapFlow, processedIds: Set<string>): Promise<vo
       console.log('[InboxMonitor] ReferralData:', JSON.stringify(processed.referralData, null, 2));
       const referralId = await ingestReferral(processed);
       if (referralId !== null) {
-        console.log(`[InboxMonitor] Referral #${referralId} ready for review at http://localhost:${config.server.port}/referrals/${referralId}/review`);
+        console.log(
+          `[InboxMonitor] Referral #${referralId} ready for review at http://localhost:${config.server.port}/referrals/${referralId}/review`,
+        );
       }
     } catch (err) {
       console.error(`[InboxMonitor] Error processing message ${messageId}:`, err);
@@ -88,10 +90,9 @@ export async function startInboxMonitor(): Promise<void> {
       user: config.imap.user,
       pass: config.imap.password,
     },
-    logger: false, // suppress verbose imapflow logs
+    logger: false,
   });
 
-  // Persist IDs on graceful shutdown
   const shutdown = (): void => {
     console.log('[InboxMonitor] Shutting down...');
     saveProcessedIds(processedIds);
@@ -104,7 +105,6 @@ export async function startInboxMonitor(): Promise<void> {
   await client.connect();
   console.log(`[InboxMonitor] Connected to ${config.imap.host}. Polling every ${config.imap.pollIntervalMs}ms`);
 
-  // Initial poll, then interval
   await pollOnce(client, processedIds);
 
   setInterval(() => {
