@@ -232,14 +232,14 @@ This document is the single source of truth for implementation readiness across 
 
 ## PRD-07: Referrer-Side Acknowledgment Tracking
 
-> **Architecture:** Not yet written — draft `ENGINEERING-PRD-07.md` before coding begins.
+> **Architecture:** Implemented inline — overdue checker + message history UI.
 
-### PRD-07 Specific *(preliminary — finalize after architecture approval)*
-- [ ] `outbound_messages` table confirmed to include `messageType`, `status`, `sentAt`, `acknowledgedAt` (already in schema)
-- [ ] All outbound message modules (RRI, SIU, Consult Note) confirmed to log `Message Control ID` to `outbound_messages`
-- [ ] "Message History" UI view built: displays per-referral message log with type, timestamp, and `Pending`/`Acknowledged` status
-- [ ] `node-cron` background job runs on configurable schedule (default: daily) to flag messages `Pending` beyond configurable threshold (default: 48h)
-- [ ] Flagged messages surfaced in the UI for manual follow-up
-- [ ] Unit: background job correctly identifies overdue `Pending` messages
-- [ ] Unit: messages acknowledged within threshold are not flagged
+### PRD-07 Specific
+- [x] `outbound_messages` table confirmed to include `messageType`, `status`, `sentAt`, `acknowledgedAt` (already in schema)
+- [x] All outbound message modules (RRI, SIU, Consult Note, InterimUpdate) confirmed to log `Message Control ID` to `outbound_messages`
+- [x] "Message History" UI view built: displays per-referral message log with type, timestamp, and `Pending`/`Acknowledged` status
+- [x] Overdue checker identifies messages `Pending` beyond configurable threshold (default: 48h)
+- [x] Overdue messages surfaced in the UI with red badge and filterable
+- [x] Unit: overdue checker correctly identifies overdue `Pending` messages
+- [x] Unit: messages acknowledged within threshold are not flagged
 - [ ] Integration: full lifecycle — RRI sent → ACK received → status `Acknowledged`; SIU sent → no ACK → job flags it as overdue

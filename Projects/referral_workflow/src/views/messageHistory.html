@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Message History</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f4f6f8; color: #222; }
+    .container { max-width: 960px; margin: 32px auto; padding: 0 16px; }
+    h1 { font-size: 1.4rem; margin-bottom: 8px; color: #1a1a2e; }
+    .subtitle { font-size: 0.88rem; color: #666; margin-bottom: 24px; }
+    .card { background: #fff; border-radius: 8px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: .06em; color: #666; margin-bottom: 14px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #dee2e6; color: #555; font-size: 0.78rem; text-transform: uppercase; letter-spacing: .04em; }
+    td { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .badge-ack { background: #d1e7dd; color: #0a3622; }
+    .badge-pending { background: #fff3cd; color: #856404; }
+    .badge-overdue { background: #f8d7da; color: #58151c; }
+    .type-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: #e0e7ff; color: #3730a3; }
+    .ref-link { color: #0d6efd; text-decoration: none; font-weight: 500; }
+    .ref-link:hover { text-decoration: underline; }
+    .stats { display: flex; gap: 16px; margin-bottom: 20px; }
+    .stat-card { flex: 1; background: #fff; border-radius: 8px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); text-align: center; }
+    .stat-value { font-size: 1.8rem; font-weight: 700; }
+    .stat-label { font-size: 0.78rem; color: #666; margin-top: 4px; }
+    .stat-ack .stat-value { color: #198754; }
+    .stat-pending .stat-value { color: #856404; }
+    .stat-overdue .stat-value { color: #dc3545; }
+    .empty { color: #999; font-style: italic; padding: 20px 0; text-align: center; }
+    .filter-bar { margin-bottom: 16px; display: flex; gap: 10px; align-items: center; }
+    .filter-bar select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.88rem; }
+    .filter-bar label { font-size: 0.85rem; color: #555; }
+  </style>
+</head>
+<body>
+<script>/*__HISTORY_DATA__*/</script>
+<div class="container">
+  <h1>Message History</h1>
+  <p class="subtitle">Outbound message tracking across all referrals</p>
+
+  <div class="stats">
+    <div class="stat-card stat-ack">
+      <div class="stat-value" id="ackCount">0</div>
+      <div class="stat-label">Acknowledged</div>
+    </div>
+    <div class="stat-card stat-pending">
+      <div class="stat-value" id="pendingCount">0</div>
+      <div class="stat-label">Pending</div>
+    </div>
+    <div class="stat-card stat-overdue">
+      <div class="stat-value" id="overdueCount">0</div>
+      <div class="stat-label">Overdue (48h+)</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>All Outbound Messages</h2>
+    <div class="filter-bar">
+      <label for="typeFilter">Filter by type:</label>
+      <select id="typeFilter" onchange="applyFilter()">
+        <option value="">All</option>
+        <option value="RRI">RRI</option>
+        <option value="SIU">SIU</option>
+        <option value="InterimUpdate">Interim Update</option>
+        <option value="ConsultNote">Consult Note</option>
+      </select>
+      <label for="statusFilter">Status:</label>
+      <select id="statusFilter" onchange="applyFilter()">
+        <option value="">All</option>
+        <option value="Acknowledged">Acknowledged</option>
+        <option value="Pending">Pending</option>
+        <option value="Overdue">Overdue</option>
+      </select>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Referral</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Sent</th>
+          <th>Acknowledged</th>
+          <th>Control ID</th>
+        </tr>
+      </thead>
+      <tbody id="messageTable"></tbody>
+    </table>
+    <div class="empty" id="emptyMsg" style="display:none;">No messages match the current filter.</div>
+  </div>
+</div>
+
+<script>
+  const data = window.__HISTORY_DATA__;
+  const messages = data.messages || [];
+  const OVERDUE_MS = 48 * 60 * 60 * 1000;
+
+  function isOverdue(m) {
+    if (m.status !== 'Pending') return false;
+    const sentMs = typeof m.sentAt === 'number' ? m.sentAt * 1000 : new Date(m.sentAt).getTime();
+    return (Date.now() - sentMs) > OVERDUE_MS;
+  }
+
+  function fmtDate(val) {
+    if (!val) return '—';
+    const d = typeof val === 'number' ? new Date(val * 1000) : new Date(val);
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function getStatusClass(m) {
+    if (m.status === 'Acknowledged') return 'badge-ack';
+    if (isOverdue(m)) return 'badge-overdue';
+    return 'badge-pending';
+  }
+
+  function getStatusLabel(m) {
+    if (m.status === 'Acknowledged') return 'Acknowledged';
+    if (isOverdue(m)) return 'Overdue';
+    return 'Pending';
+  }
+
+  // Stats
+  const ackCount = messages.filter(m => m.status === 'Acknowledged').length;
+  const overdueCount = messages.filter(m => isOverdue(m)).length;
+  const pendingCount = messages.filter(m => m.status === 'Pending' && !isOverdue(m)).length;
+  document.getElementById('ackCount').textContent = ackCount;
+  document.getElementById('pendingCount').textContent = pendingCount;
+  document.getElementById('overdueCount').textContent = overdueCount;
+
+  function renderTable(filtered) {
+    const tbody = document.getElementById('messageTable');
+    const empty = document.getElementById('emptyMsg');
+    tbody.innerHTML = '';
+
+    if (filtered.length === 0) {
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+
+    for (const m of filtered) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><a class="ref-link" href="/referrals/${m.referralId}/review">#${m.referralId}</a></td>
+        <td><span class="type-badge">${m.messageType}</span></td>
+        <td><span class="badge ${getStatusClass(m)}">${getStatusLabel(m)}</span></td>
+        <td>${fmtDate(m.sentAt)}</td>
+        <td>${fmtDate(m.acknowledgedAt)}</td>
+        <td style="font-family:monospace;font-size:0.8rem;color:#888;">${m.messageControlId.slice(0, 8)}...</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
+  function applyFilter() {
+    const typeVal = document.getElementById('typeFilter').value;
+    const statusVal = document.getElementById('statusFilter').value;
+    let filtered = messages;
+    if (typeVal) filtered = filtered.filter(m => m.messageType === typeVal);
+    if (statusVal === 'Acknowledged') filtered = filtered.filter(m => m.status === 'Acknowledged');
+    else if (statusVal === 'Pending') filtered = filtered.filter(m => m.status === 'Pending' && !isOverdue(m));
+    else if (statusVal === 'Overdue') filtered = filtered.filter(m => isOverdue(m));
+    renderTable(filtered);
+  }
+
+  // Initial render — most recent first
+  messages.sort((a, b) => {
+    const aT = typeof a.sentAt === 'number' ? a.sentAt : new Date(a.sentAt).getTime() / 1000;
+    const bT = typeof b.sentAt === 'number' ? b.sentAt : new Date(b.sentAt).getTime() / 1000;
+    return bT - aT;
+  });
+  renderTable(messages);
+</script>
+</body>
+</html>

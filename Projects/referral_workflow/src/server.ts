@@ -12,6 +12,7 @@
  *   POST /referrals/:id/encounter       — mark encounter complete (PRD-05)
  *   GET  /referrals/:id/consult-note    — consult note form (PRD-04)
  *   POST /referrals/:id/consult-note    — generate and send consult note (PRD-04)
+ *   GET  /messages                      — message history dashboard (PRD-07)
  */
 
 import express, { Request, Response, NextFunction } from 'express';
@@ -392,6 +393,25 @@ app.post('/referrals/:id/consult-note', async (req: Request, res: Response, next
     } else {
       next(err);
     }
+  }
+});
+
+// ── PRD-07: Message History dashboard ─────────────────────────────────────────
+
+app.get('/messages', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const messages = await db.select().from(outboundMessages);
+
+    const templatePath = path.join(__dirname, 'views', 'messageHistory.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__HISTORY_DATA__*/',
+      `window.__HISTORY_DATA__ = ${JSON.stringify({ messages })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
+  } catch (err) {
+    next(err);
   }
 });
 
