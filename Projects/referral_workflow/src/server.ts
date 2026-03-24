@@ -8,6 +8,8 @@
  *   GET  /scheduler/queue               — scheduling queue page (PRD-03)
  *   GET  /referrals/:id/schedule        — scheduling form page (PRD-03)
  *   POST /referrals/:id/schedule        — submit appointment (PRD-03)
+ *   GET  /referrals/:id/encounter       — encounter status page (PRD-05)
+ *   POST /referrals/:id/encounter       — mark encounter complete (PRD-05)
  */
 
 import express, { Request, Response, NextFunction } from 'express';
@@ -20,6 +22,7 @@ import { accept, decline, ReferralNotFoundError as DispositionNotFoundError } fr
 import { getCachedAssessment } from './modules/prd02/referralService';
 import { scheduleReferral, ReferralNotFoundError, SchedulingConflictError } from './modules/prd03/schedulingService';
 import { getResources } from './modules/prd03/resourceCalendar';
+import { markEncounterComplete, ReferralNotFoundError as EncounterNotFoundError } from './modules/prd05/encounterService';
 import { InvalidStateTransitionError } from './state/referralStateMachine';
 import { config } from './config';
 
@@ -241,6 +244,72 @@ app.post('/referrals/:id/schedule', async (req: Request, res: Response, next: Ne
       res.status(404).json({ error: err.message });
     } else if (err instanceof SchedulingConflictError) {
       res.status(409).json({ error: err.message, conflicts: err.conflicts.map((c) => c.name) });
+    } else if (err instanceof InvalidStateTransitionError) {
+      res.status(409).json({ error: err.message });
+    } else {
+      next(err);
+    }
+  }
+});
+
+// ── PRD-05: Encounter routes ──────────────────────────────────────────────────
+
+// Encounter status page
+app.get('/referrals/:id/encounter', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+    if (!referral) {
+      res.status(404).json({ error: 'Referral not found' });
+      return;
+    }
+
+    const [patient] = await db.select().from(patients).where(eq(patients.id, referral.patientId));
+
+    const templatePath = path.join(__dirname, 'views', 'encounterAction.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__ENCOUNTER_DATA__*/',
+      `window.__ENCOUNTER_DATA__ = ${JSON.stringify({
+        referralId,
+        patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
+        referral,
+      })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Mark encounter complete API
+app.post('/referrals/:id/encounter', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    const { sendInterimUpdate } = req.body as { sendInterimUpdate?: boolean };
+
+    await markEncounterComplete({
+      referralId,
+      sendInterimUpdate: sendInterimUpdate ?? true,
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof EncounterNotFoundError) {
+      res.status(404).json({ error: err.message });
     } else if (err instanceof InvalidStateTransitionError) {
       res.status(409).json({ error: err.message });
     } else {

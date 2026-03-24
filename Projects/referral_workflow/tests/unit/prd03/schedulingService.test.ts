@@ -5,6 +5,9 @@
  */
 
 jest.mock('nodemailer');
+jest.mock('../../../src/modules/prd05/mockEncounter', () => ({
+  onReferralScheduled: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../../../src/config', () => ({
   config: {
     smtp: { host: 'smtp.test', port: 587, user: 'user', password: 'pass' },
@@ -38,6 +41,7 @@ jest.mock('../../../src/db', () => {
       appointment_location TEXT,
       scheduled_provider TEXT,
       ai_assessment TEXT,
+      clinical_data TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );

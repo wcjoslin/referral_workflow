@@ -22,6 +22,7 @@ export const referrals = sqliteTable('referrals', {
   appointmentLocation: text('appointment_location'),
   scheduledProvider: text('scheduled_provider'), // clinician assigned to the appointment
   aiAssessment: text('ai_assessment'), // JSON-serialised SufficiencyAssessment, nullable until Gemini responds
+  clinicalData: text('clinical_data'), // JSON-serialised extended CDA sections (problems, meds, allergies, results)
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 });

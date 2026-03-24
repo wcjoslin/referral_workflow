@@ -7,35 +7,420 @@
   <id root="2.16.840.1.113883.3.9999" extension="SAMPLE-REFERRAL-001"/>
   <code code="57133-1" codeSystem="2.16.840.1.113883.6.1" displayName="Referral Note"/>
   <title>Referral Note</title>
-  <effectiveTime value="20240115120000+0000"/>
+  <effectiveTime value="20260320120000+0000"/>
   <confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>
   <languageCode code="en-US"/>
 
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- Patient Demographics                                                  -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
   <recordTarget>
     <patientRole>
       <id root="2.16.840.1.113883.3.9999" extension="PAT-001"/>
+      <addr use="HP">
+        <streetAddressLine>123 Oak Street</streetAddressLine>
+        <city>Springfield</city>
+        <state>IL</state>
+        <postalCode>62704</postalCode>
+        <country>US</country>
+      </addr>
+      <telecom use="HP" value="tel:+1-555-867-5309"/>
       <patient>
         <name use="L">
           <given>Jane</given>
+          <given>Marie</given>
           <family>Doe</family>
         </name>
-        <administrativeGenderCode code="F" codeSystem="2.16.840.1.113883.5.1"/>
+        <administrativeGenderCode code="F" codeSystem="2.16.840.1.113883.5.1" displayName="Female"/>
         <birthTime value="19800315"/>
+        <maritalStatusCode code="M" codeSystem="2.16.840.1.113883.5.2" displayName="Married"/>
+        <languageCommunication>
+          <languageCode code="en"/>
+          <preferenceInd value="true"/>
+        </languageCommunication>
       </patient>
     </patientRole>
   </recordTarget>
 
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- Author (Referring Provider)                                           -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <author>
+    <time value="20260320120000+0000"/>
+    <assignedAuthor>
+      <id root="2.16.840.1.113883.3.9999" extension="PROV-DR-WILSON"/>
+      <assignedPerson>
+        <name>
+          <given>Robert</given>
+          <family>Wilson</family>
+          <prefix>Dr.</prefix>
+        </name>
+      </assignedPerson>
+      <representedOrganization>
+        <name>Springfield Family Medicine</name>
+        <telecom use="WP" value="tel:+1-555-234-5678"/>
+        <addr>
+          <streetAddressLine>456 Main Street</streetAddressLine>
+          <city>Springfield</city>
+          <state>IL</state>
+          <postalCode>62701</postalCode>
+        </addr>
+      </representedOrganization>
+    </assignedAuthor>
+  </author>
+
+  <custodian>
+    <assignedCustodian>
+      <representedCustodianOrganization>
+        <id root="2.16.840.1.113883.3.9999" extension="ORG-SFM"/>
+        <name>Springfield Family Medicine</name>
+      </representedCustodianOrganization>
+    </assignedCustodian>
+  </custodian>
+
   <component>
     <structuredBody>
+
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <!-- Chief Complaint / Reason for Referral                          -->
+      <!-- ════════════════════════════════════════════════════════════════ -->
       <component>
         <section>
           <templateId root="2.16.840.1.113883.10.20.22.2.13"/>
           <code code="46239-0" codeSystem="2.16.840.1.113883.6.1"
                 displayName="Chief Complaint and Reason for Visit"/>
           <title>Chief Complaint / Reason for Referral</title>
-          <text>Patient referred for cardiology evaluation due to recurring chest pain and shortness of breath on exertion. Echo shows mild left ventricular dysfunction.</text>
+          <text>Patient referred for cardiology evaluation due to recurring chest pain and shortness of breath on exertion over the past 3 months. Echocardiogram shows mild left ventricular dysfunction (EF 45%). Patient reports episodes of palpitations, especially during physical activity. Family history significant for coronary artery disease (father, MI at age 52). Current medications include metoprolol and lisinopril. Requesting evaluation for possible cardiac catheterization.</text>
         </section>
       </component>
+
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <!-- Problem List                                                    -->
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.5.1"/>
+          <code code="11450-4" codeSystem="2.16.840.1.113883.6.1" displayName="Problem List"/>
+          <title>Problems</title>
+          <text>
+            <list>
+              <item>Chest pain on exertion — onset 3 months ago, recurring 2-3 times weekly</item>
+              <item>Dyspnea on exertion (NYHA Class II)</item>
+              <item>Mild left ventricular systolic dysfunction (EF 45%)</item>
+              <item>Essential hypertension — diagnosed 2018, controlled on medication</item>
+              <item>Hyperlipidemia — diagnosed 2019, on statin therapy</item>
+              <item>Type 2 diabetes mellitus — diagnosed 2020, A1c 7.2% (last checked 2026-02-15)</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <code code="64572001" codeSystem="2.16.840.1.113883.6.96" displayName="Condition"/>
+                  <value xsi:type="CD" code="413341006" codeSystem="2.16.840.1.113883.6.96"
+                         displayName="Chest pain on exertion"/>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <code code="64572001" codeSystem="2.16.840.1.113883.6.96" displayName="Condition"/>
+                  <value xsi:type="CD" code="267036007" codeSystem="2.16.840.1.113883.6.96"
+                         displayName="Dyspnea on exertion"/>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <code code="64572001" codeSystem="2.16.840.1.113883.6.96" displayName="Condition"/>
+                  <value xsi:type="CD" code="38341003" codeSystem="2.16.840.1.113883.6.96"
+                         displayName="Essential hypertension"/>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <code code="64572001" codeSystem="2.16.840.1.113883.6.96" displayName="Condition"/>
+                  <value xsi:type="CD" code="55822004" codeSystem="2.16.840.1.113883.6.96"
+                         displayName="Hyperlipidemia"/>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <code code="64572001" codeSystem="2.16.840.1.113883.6.96" displayName="Condition"/>
+                  <value xsi:type="CD" code="44054006" codeSystem="2.16.840.1.113883.6.96"
+                         displayName="Type 2 diabetes mellitus"/>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+        </section>
+      </component>
+
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <!-- Medications                                                     -->
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.1.1"/>
+          <code code="10160-0" codeSystem="2.16.840.1.113883.6.1" displayName="Medications"/>
+          <title>Medications</title>
+          <text>
+            <list>
+              <item>Metoprolol succinate 50 mg PO daily — for heart rate control</item>
+              <item>Lisinopril 20 mg PO daily — for hypertension</item>
+              <item>Atorvastatin 40 mg PO daily — for hyperlipidemia</item>
+              <item>Metformin 1000 mg PO twice daily — for type 2 diabetes</item>
+              <item>Aspirin 81 mg PO daily — cardioprotective</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <substanceAdministration classCode="SBADM" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+              <consumable>
+                <manufacturedProduct classCode="MANU">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                  <manufacturedMaterial>
+                    <code code="866924" codeSystem="2.16.840.1.113883.6.88" displayName="Metoprolol succinate 50 mg"/>
+                  </manufacturedMaterial>
+                </manufacturedProduct>
+              </consumable>
+            </substanceAdministration>
+          </entry>
+          <entry typeCode="DRIV">
+            <substanceAdministration classCode="SBADM" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+              <consumable>
+                <manufacturedProduct classCode="MANU">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                  <manufacturedMaterial>
+                    <code code="314076" codeSystem="2.16.840.1.113883.6.88" displayName="Lisinopril 20 mg"/>
+                  </manufacturedMaterial>
+                </manufacturedProduct>
+              </consumable>
+            </substanceAdministration>
+          </entry>
+          <entry typeCode="DRIV">
+            <substanceAdministration classCode="SBADM" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+              <consumable>
+                <manufacturedProduct classCode="MANU">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                  <manufacturedMaterial>
+                    <code code="259255" codeSystem="2.16.840.1.113883.6.88" displayName="Atorvastatin 40 mg"/>
+                  </manufacturedMaterial>
+                </manufacturedProduct>
+              </consumable>
+            </substanceAdministration>
+          </entry>
+          <entry typeCode="DRIV">
+            <substanceAdministration classCode="SBADM" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+              <consumable>
+                <manufacturedProduct classCode="MANU">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                  <manufacturedMaterial>
+                    <code code="861007" codeSystem="2.16.840.1.113883.6.88" displayName="Metformin 1000 mg"/>
+                  </manufacturedMaterial>
+                </manufacturedProduct>
+              </consumable>
+            </substanceAdministration>
+          </entry>
+          <entry typeCode="DRIV">
+            <substanceAdministration classCode="SBADM" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+              <consumable>
+                <manufacturedProduct classCode="MANU">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                  <manufacturedMaterial>
+                    <code code="243670" codeSystem="2.16.840.1.113883.6.88" displayName="Aspirin 81 mg"/>
+                  </manufacturedMaterial>
+                </manufacturedProduct>
+              </consumable>
+            </substanceAdministration>
+          </entry>
+        </section>
+      </component>
+
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <!-- Allergies                                                       -->
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.6.1"/>
+          <code code="48765-2" codeSystem="2.16.840.1.113883.6.1" displayName="Allergies"/>
+          <title>Allergies and Adverse Reactions</title>
+          <text>
+            <list>
+              <item>Penicillin — anaphylaxis (severe, documented 2005)</item>
+              <item>Sulfonamides — rash (moderate, documented 2012)</item>
+              <item>No known food allergies</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.30"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.7"/>
+                  <participant typeCode="CSM">
+                    <participantRole classCode="MANU">
+                      <playingEntity classCode="MMAT">
+                        <code code="70618" codeSystem="2.16.840.1.113883.6.88" displayName="Penicillin"/>
+                      </playingEntity>
+                    </participantRole>
+                  </participant>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.30"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.7"/>
+                  <participant typeCode="CSM">
+                    <participantRole classCode="MANU">
+                      <playingEntity classCode="MMAT">
+                        <code code="76651" codeSystem="2.16.840.1.113883.6.88" displayName="Sulfonamide"/>
+                      </playingEntity>
+                    </participantRole>
+                  </participant>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+        </section>
+      </component>
+
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <!-- Results (Lab / Diagnostic)                                      -->
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.3.1"/>
+          <code code="30954-2" codeSystem="2.16.840.1.113883.6.1" displayName="Results"/>
+          <title>Diagnostic Results</title>
+          <text>
+            <list>
+              <item>Echocardiogram (2026-03-10): Ejection fraction 45%, mild LV dysfunction, no valvular abnormalities, mild LA enlargement</item>
+              <item>ECG/EKG (2026-03-10): Normal sinus rhythm, no ST changes, occasional PVCs</item>
+              <item>Lipid Panel (2026-02-15): Total cholesterol 210 mg/dL, LDL 135 mg/dL, HDL 42 mg/dL, Triglycerides 165 mg/dL</item>
+              <item>HbA1c (2026-02-15): 7.2%</item>
+              <item>BNP (2026-03-10): 180 pg/mL (mildly elevated, ref &lt;100)</item>
+              <item>Troponin I (2026-03-10): &lt;0.04 ng/mL (normal)</item>
+              <item>CBC (2026-02-15): WBC 7.2, Hgb 14.1, Plt 245 — all within normal limits</item>
+              <item>BMP (2026-02-15): Na 140, K 4.2, Cr 0.9, BUN 18, Glucose 142 — glucose mildly elevated</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <organizer classCode="BATTERY" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.1"/>
+              <code code="71425-3" codeSystem="2.16.840.1.113883.6.1" displayName="Echocardiogram"/>
+              <statusCode code="completed"/>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.2"/>
+                  <code code="10230-1" codeSystem="2.16.840.1.113883.6.1" displayName="Ejection Fraction"/>
+                  <effectiveTime value="20260310"/>
+                  <value xsi:type="PQ" value="45" unit="%"/>
+                  <referenceRange>
+                    <observationRange>
+                      <value xsi:type="IVL_PQ">
+                        <low value="55" unit="%"/>
+                        <high value="70" unit="%"/>
+                      </value>
+                    </observationRange>
+                  </referenceRange>
+                </observation>
+              </component>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.2"/>
+                  <code code="42148-7" codeSystem="2.16.840.1.113883.6.1" displayName="BNP"/>
+                  <effectiveTime value="20260310"/>
+                  <value xsi:type="PQ" value="180" unit="pg/mL"/>
+                  <referenceRange>
+                    <observationRange>
+                      <value xsi:type="IVL_PQ">
+                        <low value="0" unit="pg/mL"/>
+                        <high value="100" unit="pg/mL"/>
+                      </value>
+                    </observationRange>
+                  </referenceRange>
+                </observation>
+              </component>
+            </organizer>
+          </entry>
+        </section>
+      </component>
+
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <!-- Vital Signs                                                     -->
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.4.1"/>
+          <code code="8716-3" codeSystem="2.16.840.1.113883.6.1" displayName="Vital Signs"/>
+          <title>Vital Signs</title>
+          <text>
+            <list>
+              <item>Blood Pressure: 138/88 mmHg (2026-03-10)</item>
+              <item>Heart Rate: 78 bpm, regular (2026-03-10)</item>
+              <item>Respiratory Rate: 16 breaths/min (2026-03-10)</item>
+              <item>Temperature: 98.6 F (2026-03-10)</item>
+              <item>Weight: 198 lbs (2026-03-10)</item>
+              <item>Height: 5'10" (2026-03-10)</item>
+              <item>BMI: 28.4 (overweight)</item>
+            </list>
+          </text>
+        </section>
+      </component>
+
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <!-- Social History                                                  -->
+      <!-- ════════════════════════════════════════════════════════════════ -->
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.17"/>
+          <code code="29762-2" codeSystem="2.16.840.1.113883.6.1" displayName="Social History"/>
+          <title>Social History</title>
+          <text>
+            <list>
+              <item>Tobacco: Former smoker, quit 2015 (10 pack-year history)</item>
+              <item>Alcohol: Social, 2-3 drinks per week</item>
+              <item>Exercise: Sedentary due to symptoms; previously walked 30 min/day</item>
+              <item>Occupation: Accountant, desk job</item>
+              <item>Family History: Father — MI at age 52; Mother — hypertension, alive at 74</item>
+            </list>
+          </text>
+        </section>
+      </component>
+
     </structuredBody>
   </component>
 </ClinicalDocument>

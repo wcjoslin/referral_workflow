@@ -43,6 +43,7 @@ jest.mock('../../../src/db', () => {
       appointment_location TEXT,
       scheduled_provider TEXT,
       ai_assessment TEXT,
+      clinical_data TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );

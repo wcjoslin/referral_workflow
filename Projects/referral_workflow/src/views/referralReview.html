@@ -144,12 +144,38 @@
     document.getElementById('assessmentSummary').textContent = 'Assessment pending — please refresh in a moment.';
   }
 
-  // Populate clinical info (these come from the extended parse stored... see note below)
-  // For PoC: clinical detail fields are populated from referral metadata if available
-  document.getElementById('problems').textContent = '—';
-  document.getElementById('allergies').textContent = '—';
-  document.getElementById('medications').textContent = '—';
-  document.getElementById('diagnosticResults').textContent = '—';
+  // Populate clinical info from stored extended CDA parse
+  const clinical = data.referral.clinicalData ? JSON.parse(data.referral.clinicalData) : null;
+  if (clinical) {
+    document.getElementById('problems').innerHTML =
+      clinical.problems && clinical.problems.length > 0
+        ? '<ul class="list">' + clinical.problems.map(p => `<li>${p}</li>`).join('') + '</ul>'
+        : '—';
+    document.getElementById('allergies').innerHTML =
+      clinical.allergies && clinical.allergies.length > 0
+        ? '<ul class="list">' + clinical.allergies.map(a => `<li>${a}</li>`).join('') + '</ul>'
+        : '—';
+    document.getElementById('medications').innerHTML =
+      clinical.medications && clinical.medications.length > 0
+        ? '<ul class="list">' + clinical.medications.map(m => `<li>${m}</li>`).join('') + '</ul>'
+        : '—';
+    document.getElementById('diagnosticResults').innerHTML =
+      clinical.diagnosticResults && clinical.diagnosticResults.length > 0
+        ? '<ul class="list">' + clinical.diagnosticResults.map(r => `<li>${r}</li>`).join('') + '</ul>'
+        : '—';
+
+    // Show missing optional sections
+    if (clinical.missingOptionalSections && clinical.missingOptionalSections.length > 0) {
+      document.getElementById('missingSections').innerHTML =
+        '<span style="font-size:0.82rem;color:#666;">Missing optional sections: </span>' +
+        clinical.missingOptionalSections.map(s => `<span class="missing-section">${s}</span>`).join('');
+    }
+  } else {
+    document.getElementById('problems').textContent = '—';
+    document.getElementById('allergies').textContent = '—';
+    document.getElementById('medications').textContent = '—';
+    document.getElementById('diagnosticResults').textContent = '—';
+  }
   document.getElementById('payer').textContent = '—';
 
   function showDeclineForm() {

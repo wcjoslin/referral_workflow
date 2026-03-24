@@ -18,6 +18,7 @@ import { config } from '../../config';
 import { transition, ReferralState } from '../../state/referralStateMachine';
 import { checkConflicts, Resource } from './resourceCalendar';
 import { buildSiu, isoToHl7 } from './siuBuilder';
+import { onReferralScheduled } from '../prd05/mockEncounter';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -129,5 +130,10 @@ export async function scheduleReferral(
 
   console.log(
     `[SchedulingService] Referral #${referralId} scheduled for ${details.appointmentDatetime} at ${details.locationName}. SIU sent (control ID: ${messageControlId})`,
+  );
+
+  // PRD-05: auto-trigger encounter (non-blocking)
+  void onReferralScheduled(referralId).catch((err: Error) =>
+    console.error(`[MockEncounter] Failed for referral #${referralId}:`, err.message),
   );
 }

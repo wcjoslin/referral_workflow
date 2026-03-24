@@ -36,6 +36,26 @@ function saveProcessedIds(ids: Set<string>): void {
 }
 
 /**
+ * Senders to ignore — system/bounce addresses and our own outbound address.
+ * Prevents feedback loops when MDNs/RRIs land back in the same inbox.
+ */
+const IGNORED_SENDERS = [
+  'mailer-daemon@',
+  'no-reply@accounts.google.com',
+  'noreply@',
+];
+
+function shouldIgnore(senderAddress: string): boolean {
+  const lower = senderAddress.toLowerCase();
+  // Ignore known system senders
+  if (IGNORED_SENDERS.some((prefix) => lower.includes(prefix))) return true;
+  // Ignore emails from our own address (outbound MDNs, RRIs, SIUs)
+  if (lower === config.imap.user.toLowerCase()) return true;
+  if (lower === config.receiving.directAddress.toLowerCase()) return true;
+  return false;
+}
+
+/**
  * Polls the IMAP inbox once and processes any new, unprocessed messages.
  */
 async function pollOnce(client: ImapFlow, processedIds: Set<string>): Promise<void> {
@@ -47,6 +67,13 @@ async function pollOnce(client: ImapFlow, processedIds: Set<string>): Promise<vo
 
     if (processedIds.has(messageId)) {
       continue; // already processed
+    }
+
+    // Skip system/bounce/self emails to prevent feedback loops
+    const senderAddress = message.envelope?.from?.[0]?.address ?? '';
+    if (shouldIgnore(senderAddress)) {
+      processedIds.add(messageId);
+      continue;
     }
 
     if (!message.source) {
