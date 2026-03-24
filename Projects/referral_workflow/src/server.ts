@@ -10,6 +10,8 @@
  *   POST /referrals/:id/schedule        — submit appointment (PRD-03)
  *   GET  /referrals/:id/encounter       — encounter status page (PRD-05)
  *   POST /referrals/:id/encounter       — mark encounter complete (PRD-05)
+ *   GET  /referrals/:id/consult-note    — consult note form (PRD-04)
+ *   POST /referrals/:id/consult-note    — generate and send consult note (PRD-04)
  */
 
 import express, { Request, Response, NextFunction } from 'express';
@@ -17,12 +19,13 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { eq } from 'drizzle-orm';
 import { db } from './db';
-import { referrals, patients } from './db/schema';
+import { referrals, patients, outboundMessages } from './db/schema';
 import { accept, decline, ReferralNotFoundError as DispositionNotFoundError } from './modules/prd02/dispositionService';
 import { getCachedAssessment } from './modules/prd02/referralService';
 import { scheduleReferral, ReferralNotFoundError, SchedulingConflictError } from './modules/prd03/schedulingService';
 import { getResources } from './modules/prd03/resourceCalendar';
 import { markEncounterComplete, ReferralNotFoundError as EncounterNotFoundError } from './modules/prd05/encounterService';
+import { generateAndSend, ReferralNotFoundError as ConsultNotFoundError } from './modules/prd04/consultNoteService';
 import { InvalidStateTransitionError } from './state/referralStateMachine';
 import { config } from './config';
 
@@ -68,6 +71,12 @@ app.get('/referrals/:id/review', async (req: Request, res: Response, next: NextF
       }
     }
 
+    // Fetch outbound messages for the timeline
+    const messages = await db
+      .select()
+      .from(outboundMessages)
+      .where(eq(outboundMessages.referralId, referralId));
+
     const templatePath = path.join(__dirname, 'views', 'referralReview.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
 
@@ -76,6 +85,7 @@ app.get('/referrals/:id/review', async (req: Request, res: Response, next: NextF
       patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
       referral,
       assessment: assessment ?? null,
+      outboundMessages: messages,
     };
 
     // Inject data as a JSON block the page script can read
@@ -309,6 +319,73 @@ app.post('/referrals/:id/encounter', async (req: Request, res: Response, next: N
     res.json({ success: true });
   } catch (err) {
     if (err instanceof EncounterNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof InvalidStateTransitionError) {
+      res.status(409).json({ error: err.message });
+    } else {
+      next(err);
+    }
+  }
+});
+
+// ── PRD-04: Consult Note routes ───────────────────────────────────────────────
+
+// Consult note form page
+app.get('/referrals/:id/consult-note', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+    if (!referral) {
+      res.status(404).json({ error: 'Referral not found' });
+      return;
+    }
+
+    const [patient] = await db.select().from(patients).where(eq(patients.id, referral.patientId));
+
+    const templatePath = path.join(__dirname, 'views', 'consultNoteAction.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__CONSULT_DATA__*/',
+      `window.__CONSULT_DATA__ = ${JSON.stringify({
+        referralId,
+        patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
+        referral,
+      })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Generate and send consult note API
+app.post('/referrals/:id/consult-note', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    const { noteText } = req.body as { noteText?: string };
+    if (!noteText || noteText.trim().length === 0) {
+      res.status(400).json({ error: 'noteText is required' });
+      return;
+    }
+
+    await generateAndSend({ referralId, noteText: noteText.trim() });
+
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof ConsultNotFoundError) {
       res.status(404).json({ error: err.message });
     } else if (err instanceof InvalidStateTransitionError) {
       res.status(409).json({ error: err.message });

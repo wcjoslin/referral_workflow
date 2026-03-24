@@ -42,12 +42,30 @@
     .status-bar.success { background: #d1e7dd; color: #0a3622; display: block; }
     .status-bar.error { background: #f8d7da; color: #58151c; display: block; }
     .state-badge { font-size: 0.8rem; font-weight: 600; padding: 3px 10px; border-radius: 12px; background: #e0e7ff; color: #3730a3; margin-left: 10px; vertical-align: middle; }
+
+    /* Timeline */
+    .timeline { display: flex; align-items: flex-start; gap: 0; margin: 4px 0 0; overflow-x: auto; }
+    .tl-step { display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 90px; position: relative; }
+    .tl-dot { width: 28px; height: 28px; border-radius: 50%; border: 3px solid #dee2e6; background: #fff; display: flex; align-items: center; justify-content: center; z-index: 1; font-size: 0.7rem; font-weight: 700; color: #adb5bd; }
+    .tl-dot.active { border-color: #198754; background: #198754; color: #fff; }
+    .tl-dot.current { border-color: #0d6efd; background: #0d6efd; color: #fff; box-shadow: 0 0 0 4px rgba(13,110,253,.25); }
+    .tl-dot.declined { border-color: #dc3545; background: #dc3545; color: #fff; }
+    .tl-label { font-size: 0.72rem; font-weight: 600; color: #666; margin-top: 6px; text-align: center; }
+    .tl-time { font-size: 0.65rem; color: #999; margin-top: 2px; text-align: center; }
+    .tl-connector { position: absolute; top: 14px; left: 50%; width: 100%; height: 3px; background: #dee2e6; z-index: 0; }
+    .tl-connector.active { background: #198754; }
+    .tl-step:last-child .tl-connector { display: none; }
   </style>
 </head>
 <body>
 <script>/*__PAGE_DATA__*/</script>
 <div class="container">
   <h1>Referral Review <span class="state-badge" id="stateBadge"></span></h1>
+
+  <div class="card">
+    <h2>Referral Journey</h2>
+    <div class="timeline" id="timeline"></div>
+  </div>
 
   <div class="card">
     <h2>Patient Demographics</h2>
@@ -110,6 +128,101 @@
 <script>
   const data = window.__PAGE_DATA__;
   const referralId = data.referralId;
+
+  // ── Referral Journey Timeline ────────────────────────────────────────────
+  (function buildTimeline() {
+    const STEPS = [
+      { state: 'Received',    label: 'Received',  icon: '1' },
+      { state: 'Acknowledged',label: 'Ack\'d',    icon: '2' },
+      { state: 'Accepted',    label: 'Accepted',  icon: '3', alt: 'Declined' },
+      { state: 'Scheduled',   label: 'Scheduled', icon: '4' },
+      { state: 'Encounter',   label: 'Encounter', icon: '5' },
+      { state: 'Closed',      label: 'Closed',    icon: '6' },
+      { state: 'Closed-Confirmed', label: 'Confirmed', icon: '7' },
+    ];
+
+    // Build a map of state → timestamp from available data
+    const stateTimestamps = {};
+
+    // Received + Acknowledged happen at creation
+    const createdMs = data.referral.createdAt;
+    if (createdMs) {
+      const ts = typeof createdMs === 'number' ? new Date(createdMs * 1000) : new Date(createdMs);
+      stateTimestamps['Received'] = ts;
+      stateTimestamps['Acknowledged'] = ts;
+    }
+
+    // Derive timestamps from outbound messages
+    const msgs = data.outboundMessages || [];
+    for (const m of msgs) {
+      const ts = typeof m.sentAt === 'number' ? new Date(m.sentAt * 1000) : new Date(m.sentAt);
+      if (m.messageType === 'RRI') {
+        // RRI sent on Accept or Decline
+        const isDeclined = data.referral.state === 'Declined' ||
+          (data.referral.declineReason && !stateTimestamps['Accepted']);
+        stateTimestamps[isDeclined ? 'Declined' : 'Accepted'] = ts;
+      }
+      if (m.messageType === 'SIU') stateTimestamps['Scheduled'] = ts;
+      if (m.messageType === 'InterimUpdate') stateTimestamps['Encounter'] = ts;
+      if (m.messageType === 'ConsultNote') stateTimestamps['Closed'] = ts;
+    }
+
+    // Determine which states have been reached
+    const stateOrder = ['Received','Acknowledged','Accepted','Scheduled','Encounter','Closed','Closed-Confirmed'];
+    const declinedOrder = ['Received','Acknowledged','Declined'];
+    const isDeclined = data.referral.state === 'Declined';
+    const activeOrder = isDeclined ? declinedOrder : stateOrder;
+    const currentState = data.referral.state;
+    const currentIdx = activeOrder.indexOf(currentState);
+
+    const container = document.getElementById('timeline');
+
+    const displaySteps = isDeclined
+      ? [STEPS[0], STEPS[1], { state: 'Declined', label: 'Declined', icon: '✕' }]
+      : STEPS;
+
+    displaySteps.forEach(function(step, i) {
+      const stepIdx = activeOrder.indexOf(step.state);
+      const isActive = stepIdx >= 0 && stepIdx < currentIdx;
+      const isCurrent = step.state === currentState;
+      const isDeclinedStep = step.state === 'Declined';
+
+      const el = document.createElement('div');
+      el.className = 'tl-step';
+
+      // Connector line (between dots)
+      if (i < displaySteps.length - 1) {
+        const conn = document.createElement('div');
+        conn.className = 'tl-connector' + (isActive ? ' active' : '');
+        el.appendChild(conn);
+      }
+
+      const dot = document.createElement('div');
+      dot.className = 'tl-dot';
+      if (isDeclinedStep && isCurrent) dot.className += ' declined';
+      else if (isCurrent) dot.className += ' current';
+      else if (isActive) dot.className += ' active';
+      dot.textContent = isActive || isCurrent ? '✓' : step.icon;
+      if (isCurrent && !isActive) dot.textContent = isDeclinedStep ? '✕' : step.icon;
+      el.appendChild(dot);
+
+      const label = document.createElement('div');
+      label.className = 'tl-label';
+      label.textContent = step.label;
+      el.appendChild(label);
+
+      // Timestamp
+      const ts = stateTimestamps[step.state];
+      if (ts) {
+        const time = document.createElement('div');
+        time.className = 'tl-time';
+        time.textContent = ts.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        el.appendChild(time);
+      }
+
+      container.appendChild(el);
+    });
+  })();
 
   // Populate patient demographics
   document.getElementById('patientName').textContent =

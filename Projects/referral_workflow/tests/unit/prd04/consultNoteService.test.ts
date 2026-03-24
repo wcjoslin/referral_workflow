@@ -1,12 +1,18 @@
 /**
- * Unit tests for encounterService.ts
+ * Unit tests for consultNoteService.ts
  *
- * Uses in-memory SQLite. nodemailer mocked.
+ * Uses in-memory SQLite. nodemailer and geminiConsultNote mocked.
  */
 
 jest.mock('nodemailer');
-jest.mock('../../../src/modules/prd04/mockEhr', () => ({
-  onEncounterComplete: jest.fn().mockResolvedValue(undefined),
+jest.mock('../../../src/modules/prd04/geminiConsultNote', () => ({
+  structureNote: jest.fn().mockResolvedValue({
+    chiefComplaint: 'Chest pain',
+    historyOfPresentIllness: 'Progressive symptoms over 3 months',
+    assessment: 'Likely stable angina',
+    plan: 'Cardiac catheterization',
+    physicalExam: 'Regular rate and rhythm',
+  }),
 }));
 jest.mock('../../../src/config', () => ({
   config: {
@@ -63,16 +69,16 @@ import nodemailer from 'nodemailer';
 import { db } from '../../../src/db';
 import { patients, referrals, outboundMessages } from '../../../src/db/schema';
 import {
-  markEncounterComplete,
+  generateAndSend,
   ReferralNotFoundError,
-} from '../../../src/modules/prd05/encounterService';
+} from '../../../src/modules/prd04/consultNoteService';
 import { InvalidStateTransitionError } from '../../../src/state/referralStateMachine';
 import { eq } from 'drizzle-orm';
 
 const mockSendMail = jest.fn().mockResolvedValue({ messageId: 'test' });
 (nodemailer.createTransport as jest.Mock).mockReturnValue({ sendMail: mockSendMail });
 
-async function seedReferral(state = 'Scheduled'): Promise<number> {
+async function seedReferral(state = 'Encounter'): Promise<number> {
   const now = new Date();
   const [patient] = await db
     .insert(patients)
@@ -95,88 +101,79 @@ async function seedReferral(state = 'Scheduled'): Promise<number> {
   return referral.id;
 }
 
-describe('encounterService', () => {
+describe('consultNoteService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockSendMail.mockResolvedValue({ messageId: 'test' });
   });
 
-  describe('markEncounterComplete()', () => {
-    it('transitions referral state to Encounter', async () => {
-      const id = await seedReferral('Scheduled');
-      await markEncounterComplete({ referralId: id });
+  describe('generateAndSend()', () => {
+    it('transitions referral state to Closed', async () => {
+      const id = await seedReferral('Encounter');
+      await generateAndSend({ referralId: id, noteText: 'Sample clinical note' });
 
       const [updated] = await db.select().from(referrals).where(eq(referrals.id, id));
-      expect(updated.state).toBe('Encounter');
+      expect(updated.state).toBe('Closed');
     });
 
-    it('sends an interim update via SMTP by default', async () => {
-      const id = await seedReferral('Scheduled');
-      await markEncounterComplete({ referralId: id });
+    it('sends consult note via SMTP', async () => {
+      const id = await seedReferral('Encounter');
+      await generateAndSend({ referralId: id, noteText: 'Sample clinical note' });
       expect(mockSendMail).toHaveBeenCalledTimes(1);
     });
 
-    it('sends interim update to the referrer address', async () => {
-      const id = await seedReferral('Scheduled');
-      await markEncounterComplete({ referralId: id });
+    it('sends to the referrer address', async () => {
+      const id = await seedReferral('Encounter');
+      await generateAndSend({ referralId: id, noteText: 'Sample clinical note' });
       expect(mockSendMail).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'referrer@hospital.direct' }),
       );
     });
 
-    it('interim message contains patient name', async () => {
-      const id = await seedReferral('Scheduled');
-      await markEncounterComplete({ referralId: id });
-      const callArg = mockSendMail.mock.calls[0][0] as { text: string };
-      expect(callArg.text).toContain('Jane Doe');
+    it('includes C-CDA XML as attachment', async () => {
+      const id = await seedReferral('Encounter');
+      await generateAndSend({ referralId: id, noteText: 'Sample clinical note' });
+      const callArg = mockSendMail.mock.calls[0][0] as { attachments: Array<{ filename: string; content: string; contentType: string }> };
+      expect(callArg.attachments).toHaveLength(1);
+      expect(callArg.attachments[0].filename).toMatch(/consult-note-\d+\.xml/);
+      expect(callArg.attachments[0].content).toContain('ClinicalDocument');
+      expect(callArg.attachments[0].contentType).toBe('application/xml');
     });
 
-    it('logs the interim update to outbound_messages', async () => {
-      const id = await seedReferral('Scheduled');
-      await markEncounterComplete({ referralId: id });
+    it('logs the outbound ConsultNote message', async () => {
+      const id = await seedReferral('Encounter');
+      await generateAndSend({ referralId: id, noteText: 'Sample clinical note' });
 
       const messages = await db
         .select()
         .from(outboundMessages)
         .where(eq(outboundMessages.referralId, id));
       expect(messages).toHaveLength(1);
-      expect(messages[0].messageType).toBe('InterimUpdate');
+      expect(messages[0].messageType).toBe('ConsultNote');
       expect(messages[0].status).toBe('Pending');
     });
 
-    it('skips interim update when sendInterimUpdate is false', async () => {
-      const id = await seedReferral('Scheduled');
-      await markEncounterComplete({ referralId: id, sendInterimUpdate: false });
-
-      expect(mockSendMail).not.toHaveBeenCalled();
-
-      const messages = await db
-        .select()
-        .from(outboundMessages)
-        .where(eq(outboundMessages.referralId, id));
-      expect(messages).toHaveLength(0);
-    });
-
-    it('still transitions state when interim update is skipped', async () => {
-      const id = await seedReferral('Scheduled');
-      await markEncounterComplete({ referralId: id, sendInterimUpdate: false });
-
-      const [updated] = await db.select().from(referrals).where(eq(referrals.id, id));
-      expect(updated.state).toBe('Encounter');
+    it('subject line includes patient name and referral ID', async () => {
+      const id = await seedReferral('Encounter');
+      await generateAndSend({ referralId: id, noteText: 'Sample clinical note' });
+      const callArg = mockSendMail.mock.calls[0][0] as { subject: string };
+      expect(callArg.subject).toContain('Doe');
+      expect(callArg.subject).toContain('Jane');
+      expect(callArg.subject).toContain(String(id));
     });
   });
 
   describe('error handling', () => {
     it('throws ReferralNotFoundError for non-existent referral', async () => {
       await expect(
-        markEncounterComplete({ referralId: 99999 }),
+        generateAndSend({ referralId: 99999, noteText: 'text' }),
       ).rejects.toThrow(ReferralNotFoundError);
     });
 
     it('throws InvalidStateTransitionError for wrong state', async () => {
       const id = await seedReferral('Accepted');
       await expect(
-        markEncounterComplete({ referralId: id }),
+        generateAndSend({ referralId: id, noteText: 'text' }),
       ).rejects.toThrow(InvalidStateTransitionError);
     });
   });

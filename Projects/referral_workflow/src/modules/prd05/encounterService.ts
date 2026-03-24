@@ -12,6 +12,7 @@ import { db } from '../../db';
 import { referrals, patients, outboundMessages } from '../../db/schema';
 import { config } from '../../config';
 import { transition, ReferralState } from '../../state/referralStateMachine';
+import { onEncounterComplete } from '../prd04/mockEhr';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -100,4 +101,9 @@ export async function markEncounterComplete(opts: EncounterOptions): Promise<voi
       `[EncounterService] Interim update sent for referral #${referralId} (control ID: ${messageControlId})`,
     );
   }
+
+  // PRD-04: auto-trigger consult note generation (non-blocking)
+  void onEncounterComplete(referralId).catch((err: Error) =>
+    console.error(`[MockEHR] Failed for referral #${referralId}:`, err.message),
+  );
 }

@@ -45,13 +45,30 @@ const IGNORED_SENDERS = [
   'noreply@',
 ];
 
-function shouldIgnore(senderAddress: string): boolean {
+/**
+ * Subject prefixes used by our own outbound messages.
+ * If a message from our own address has one of these subjects, it's system-generated.
+ */
+const OWN_OUTBOUND_SUBJECTS = [
+  'rri^i12',         // disposition RRI
+  'siu^s12',         // scheduling SIU
+  'mdn',             // message disposition notification
+  'interim update',  // encounter interim update
+  'consultation note', // consult note C-CDA
+];
+
+function shouldIgnore(senderAddress: string, subject: string): boolean {
   const lower = senderAddress.toLowerCase();
-  // Ignore known system senders
+  const subjectLower = subject.toLowerCase();
+  // Ignore known system senders (bounce, Google alerts, etc.)
   if (IGNORED_SENDERS.some((prefix) => lower.includes(prefix))) return true;
-  // Ignore emails from our own address (outbound MDNs, RRIs, SIUs)
-  if (lower === config.imap.user.toLowerCase()) return true;
-  if (lower === config.receiving.directAddress.toLowerCase()) return true;
+  // Ignore our own outbound messages (matched by subject) to prevent feedback loops.
+  // We only filter self-sent messages that look like system-generated ones — not all
+  // mail from our address, since the PoC uses a single account for send+receive.
+  const isOwnAddress =
+    lower === config.imap.user.toLowerCase() ||
+    lower === config.receiving.directAddress.toLowerCase();
+  if (isOwnAddress && OWN_OUTBOUND_SUBJECTS.some((s) => subjectLower.includes(s))) return true;
   return false;
 }
 
@@ -69,9 +86,10 @@ async function pollOnce(client: ImapFlow, processedIds: Set<string>): Promise<vo
       continue; // already processed
     }
 
-    // Skip system/bounce/self emails to prevent feedback loops
+    // Skip system/bounce/self-generated emails to prevent feedback loops
     const senderAddress = message.envelope?.from?.[0]?.address ?? '';
-    if (shouldIgnore(senderAddress)) {
+    const subject = message.envelope?.subject ?? '';
+    if (shouldIgnore(senderAddress, subject)) {
       processedIds.add(messageId);
       continue;
     }
