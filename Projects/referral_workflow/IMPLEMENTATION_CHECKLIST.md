@@ -160,17 +160,17 @@ This document is the single source of truth for implementation readiness across 
 
 ## PRD-03: Schedule Patient and Notify Referrer
 
-> **Architecture:** Not yet written — draft `ENGINEERING-PRD-03.md` before coding begins.
+> **Architecture:** Approved — see `ENGINEERING-PRD-03.md`
 
-### PRD-03 Specific *(preliminary — finalize after architecture approval)*
-- [ ] `mockScheduler.ts` auto-assigns appointment slot on `Accepted` state transition
-- [ ] Scheduler UI: manual fallback for entering date, time, location, and assigned clinician
-- [ ] Resource/asset conflict detection against a mock availability calendar
-- [ ] `SIU^S12` generated with all required segments (MSH, SCH, PID)
-- [ ] SIU transmitted via mock Direct gateway; `Message Control ID` logged to `outbound_messages`
-- [ ] State transition: `Accepted` → `Scheduled`
-- [ ] Unit: `SIU^S12` built correctly with all required segments
-- [ ] Unit: scheduling conflict correctly detected against mock calendar
+### PRD-03 Specific
+- [x] `mockScheduler.ts` auto-assigns appointment slot on `Accepted` state transition
+- [x] Scheduler UI: manual fallback for entering date, time, location, and assigned clinician
+- [x] Resource/asset conflict detection against a mock availability calendar
+- [x] `SIU^S12` generated with all required segments (MSH, SCH, PID)
+- [x] SIU transmitted via mock Direct gateway; `Message Control ID` logged to `outbound_messages`
+- [x] State transition: `Accepted` → `Scheduled`
+- [x] Unit: `SIU^S12` built correctly with all required segments
+- [x] Unit: scheduling conflict correctly detected against mock calendar
 - [ ] Integration: `mockScheduler.ts` fires on acceptance → SIU sent → state updated to `Scheduled`
 
 ---
@@ -197,17 +197,17 @@ This document is the single source of truth for implementation readiness across 
 
 ## PRD-05: Patient Encounter and Interim Updates
 
-> **Architecture:** Not yet written — draft `ENGINEERING-PRD-05.md` before coding begins.
+> **Architecture:** Approved — see `ENGINEERING-PRD-05.md`
 
-### PRD-05 Specific *(preliminary — finalize after architecture approval)*
-- [ ] `mockEncounter.ts` sends `ADT^A04` after configurable delay from scheduled appointment time
-- [ ] `ADT^A04` listener processes event and triggers state transition
-- [ ] Manual "Mark Encounter Complete" UI fallback available
-- [ ] Optional interim Direct Secure Message generated and sent if enabled
-- [ ] Interim message transmission logged against the referral record
-- [ ] State transition: `Scheduled` → `Encounter`
-- [ ] Unit: `ADT^A04` parsed correctly, referral ID extracted
-- [ ] Unit: state transitions correctly from `Scheduled` to `Encounter`
+### PRD-05 Specific
+- [x] `mockEncounter.ts` sends `ADT^A04` after configurable delay from scheduled appointment time
+- [x] `ADT^A04` listener processes event and triggers state transition
+- [x] Manual "Mark Encounter Complete" UI fallback available
+- [x] Optional interim Direct Secure Message generated and sent if enabled
+- [x] Interim message transmission logged against the referral record
+- [x] State transition: `Scheduled` → `Encounter`
+- [x] Unit: `ADT^A04` parsed correctly, referral ID extracted
+- [x] Unit: state transitions correctly from `Scheduled` to `Encounter`
 - [ ] Integration: `mockEncounter.ts` fires → state updated to `Encounter` → optional interim message sent
 
 ---
