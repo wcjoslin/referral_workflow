@@ -27,7 +27,7 @@ const sampleCdaXml = fs.readFileSync(path.join(FIXTURES, 'sample-referral.xml'),
 
 const VALID_REFERRAL_DATA: cdaParser.ReferralData = {
   sourceMessageId: '<test-message-build-001@hospital.direct>',
-  patient: { firstName: 'Jane', lastName: 'Doe', dateOfBirth: '1980-03-15' },
+  patient: { firstName: 'Michael', lastName: 'Kihn', dateOfBirth: '1974-06-25' },
   reasonForReferral: 'Cardiology evaluation',
   isCdaValid: true,
   validationErrors: [],
@@ -67,7 +67,7 @@ function buildRawEmail(opts: { includeCda?: boolean } = {}): string {
   const headers = [
     'From: referrer@hospital.direct',
     'To: receiving@specialist.direct',
-    'Subject: Referral for Jane Doe',
+    'Subject: Referral for Michael Kihn',
     'Message-ID: <test-message-build-001@hospital.direct>',
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     '',  // blank line separating headers from body (required by RFC 2822)
@@ -158,7 +158,7 @@ describe('processInboundMessage', () => {
       mockSendMdn.mockRejectedValueOnce(new Error('SMTP connection refused'));
       const { referralData } = await processInboundMessage(buildRawEmail());
       // MDN failure is non-fatal — parsing should still complete
-      expect(referralData.patient.firstName).toBe('Jane');
+      expect(referralData.patient.firstName).toBe('Michael');
     });
   });
 });

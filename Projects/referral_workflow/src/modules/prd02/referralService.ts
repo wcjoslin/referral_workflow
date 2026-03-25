@@ -18,6 +18,7 @@ import { transition, ReferralState } from '../../state/referralStateMachine';
 import { assessSufficiency, SufficiencyAssessment } from './claudeService';
 import { buildRri } from './rriBuilder';
 import { sendRriMessage } from './dispositionService';
+import { enrichWithFhir } from '../prd08/fhirEnrichment';
 import { randomUUID } from 'crypto';
 import { eq } from 'drizzle-orm';
 
@@ -63,6 +64,9 @@ export async function ingestReferral(processed: ProcessedMessage): Promise<numbe
     return null;
   }
 
+  // FHIR enrichment — fills missing optional sections with live FHIR data
+  const enriched = await enrichWithFhir(extended);
+
   // Write patient record
   const [patient] = await db
     .insert(patients)
@@ -82,13 +86,7 @@ export async function ingestReferral(processed: ProcessedMessage): Promise<numbe
       sourceMessageId: extended.sourceMessageId,
       referrerAddress: processed.referrerAddress,
       reasonForReferral: extended.reasonForReferral,
-      clinicalData: JSON.stringify({
-        problems: extended.problems,
-        allergies: extended.allergies,
-        medications: extended.medications,
-        diagnosticResults: extended.diagnosticResults,
-        missingOptionalSections: extended.missingOptionalSections,
-      }),
+      clinicalData: JSON.stringify(enriched),
       state: ReferralState.RECEIVED,
       createdAt: now,
       updatedAt: now,

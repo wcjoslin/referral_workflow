@@ -2,52 +2,78 @@
  * Mock EHR trigger for the PRD-04 happy-path demo.
  *
  * Fires non-blocking after a referral encounter is marked complete (from encounterService).
- * Generates sample clinical note text and calls consultNoteService.generateAndSend().
+ * Loads the referral's FHIR patient ID (set during PRD-08 intake enrichment) and
+ * fetches live clinical data from FHIR to build the consult note text.
+ * Falls back to a hardcoded sample note if FHIR data is unavailable.
  *
  * In production this would be replaced by an inbound ORU^R01 listener
  * connected to the EHR system.
  */
 
+import { eq } from 'drizzle-orm';
+import { db } from '../../db';
+import { referrals, patients } from '../../db/schema';
 import { generateAndSend } from './consultNoteService';
+import { getPatientSummaryById, getPatientSummary } from '../prd08/fhirClient';
+import { formatConsultNoteFromFhir } from '../prd08/fhirConsultNote';
 
-const SAMPLE_CONSULT_NOTE = `
-Patient was referred for cardiology evaluation due to exertional chest pain and dyspnea.
+const FALLBACK_NOTE = `
+Patient was referred for specialist evaluation.
 
-Chief Complaint: Exertional chest pain and shortness of breath with activity for the past 3 months.
+Chief Complaint: Specialist consultation as per referral.
 
 History of Present Illness:
-The patient is a 44-year-old with a history of essential hypertension, hyperlipidemia, and type 2 diabetes mellitus who presents for cardiology consultation. She reports progressive chest tightness and dyspnea on exertion over the past 3 months, occurring with moderate activity such as climbing stairs or brisk walking. Symptoms resolve with rest within 5-10 minutes. She denies chest pain at rest, palpitations, syncope, or peripheral edema. Her current medications include lisinopril 20mg daily, metformin 1000mg BID, atorvastatin 40mg daily, and aspirin 81mg daily.
-
-Physical Examination:
-Vitals: BP 138/88 mmHg, HR 78 bpm, RR 16, O2 Sat 98% on room air, BMI 31.2
-General: Well-appearing, no acute distress
-Cardiovascular: Regular rate and rhythm, no murmurs, rubs, or gallops. JVP normal. No peripheral edema.
-Pulmonary: Clear to auscultation bilaterally, no wheezes or crackles.
+The patient was referred for further evaluation. Please refer to the original referral documentation for clinical context.
 
 Assessment:
-1. Exertional angina — likely stable angina given predictable onset with exertion and relief with rest. Risk factors include hypertension, hyperlipidemia, diabetes, and obesity.
-2. Echocardiogram shows preserved EF of 55% with mild diastolic dysfunction (Grade I). No significant valvular disease.
-3. Stress echocardiogram demonstrates mild anteroseptal wall motion abnormality at peak stress, suggestive of ischemia in the LAD territory.
-4. Lipid panel shows LDL 142 mg/dL despite atorvastatin — suboptimal control.
+Evaluation completed per referral request.
 
 Plan:
-1. Refer for cardiac catheterization to evaluate coronary anatomy given positive stress test.
-2. Intensify lipid management — increase atorvastatin to 80mg daily, target LDL < 70 mg/dL.
-3. Optimize blood pressure control — increase lisinopril to 40mg daily, target BP < 130/80.
-4. Add long-acting nitrate (isosorbide mononitrate 30mg daily) for angina prophylaxis.
-5. Cardiac rehabilitation referral after catheterization results available.
-6. Follow-up in 2 weeks for catheterization results and medication titration.
-7. Patient counseled on lifestyle modifications including dietary changes and gradual exercise program.
+1. Follow-up as clinically indicated.
+2. Results communicated to referring provider.
 `.trim();
 
 /**
  * Called (non-blocking) after a referral encounter is marked complete.
  */
 export async function onEncounterComplete(referralId: number): Promise<void> {
-  await generateAndSend({
-    referralId,
-    noteText: SAMPLE_CONSULT_NOTE,
-  });
+  let noteText = FALLBACK_NOTE;
 
+  try {
+    // Load referral + patient to get FHIR patient ID and reason
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+    if (!referral) throw new Error(`Referral #${referralId} not found`);
+
+    const [patient] = await db.select().from(patients).where(eq(patients.id, referral.patientId));
+    const reasonForReferral = referral.reasonForReferral ?? '';
+
+    // Try to get FHIR patient ID from enriched clinical data
+    let fhirPatientId: string | null = null;
+    if (referral.clinicalData) {
+      try {
+        const clinical = JSON.parse(referral.clinicalData);
+        fhirPatientId = clinical.fhirPatientId ?? null;
+      } catch { /* ignore parse errors */ }
+    }
+
+    // Fetch FHIR summary — by ID if available, otherwise by demographics
+    let summary = null;
+    if (fhirPatientId) {
+      summary = await getPatientSummaryById(fhirPatientId);
+    } else if (patient) {
+      summary = await getPatientSummary(patient.firstName, patient.lastName, patient.dateOfBirth);
+    }
+
+    if (summary) {
+      noteText = formatConsultNoteFromFhir(summary, reasonForReferral);
+      console.log(`[MockEHR] Built consult note from FHIR Patient/${summary.patient.id} for referral #${referralId}`);
+    } else {
+      console.warn(`[MockEHR] No FHIR data available for referral #${referralId} — using fallback note`);
+    }
+  } catch (err) {
+    console.warn(`[MockEHR] FHIR lookup failed for referral #${referralId}, using fallback:`, err instanceof Error ? err.message : err);
+  }
+
+  await generateAndSend({ referralId, noteText });
   console.log(`[MockEHR] Auto-generated and sent consult note for referral #${referralId}`);
 }

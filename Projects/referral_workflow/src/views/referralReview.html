@@ -20,6 +20,9 @@
     .badge-ok { background: #d1e7dd; color: #0a3622; }
     .badge-risk { background: #f8d7da; color: #58151c; }
     .missing-section { color: #856404; background: #fff3cd; padding: 4px 10px; border-radius: 4px; display: inline-block; margin: 3px 4px; font-size: 0.85rem; }
+    .badge-fhir { background: #cfe2ff; color: #084298; display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 0.72rem; font-weight: 600; margin-left: 6px; vertical-align: middle; }
+    .fhir-detail { font-size: 0.8rem; color: #888; margin-left: 4px; }
+    .fhir-summary { font-size: 0.82rem; color: #0d6efd; margin-bottom: 8px; }
     .assessment { border-left: 4px solid #0d6efd; padding-left: 14px; }
     .assessment p { margin-bottom: 8px; font-size: 0.95rem; }
     .concern { color: #dc3545; font-size: 0.9rem; margin-bottom: 4px; }
@@ -257,31 +260,52 @@
     document.getElementById('assessmentSummary').textContent = 'Assessment pending — please refresh in a moment.';
   }
 
-  // Populate clinical info from stored extended CDA parse
+  // Populate clinical info from stored extended CDA parse (supports both string[] and EnrichedClinicalItem[])
   const clinical = data.referral.clinicalData ? JSON.parse(data.referral.clinicalData) : null;
+
+  function renderClinicalList(items) {
+    if (!items || items.length === 0) return '—';
+    return '<ul class="list">' + items.map(function(item) {
+      if (typeof item === 'string') return '<li>' + item + '</li>';
+      var html = '<li>' + item.name;
+      if (item.source === 'fhir') html += '<span class="badge-fhir">FHIR</span>';
+      if (item.detail) html += '<span class="fhir-detail">' + item.detail + '</span>';
+      html += '</li>';
+      return html;
+    }).join('') + '</ul>';
+  }
+
   if (clinical) {
-    document.getElementById('problems').innerHTML =
-      clinical.problems && clinical.problems.length > 0
-        ? '<ul class="list">' + clinical.problems.map(p => `<li>${p}</li>`).join('') + '</ul>'
-        : '—';
-    document.getElementById('allergies').innerHTML =
-      clinical.allergies && clinical.allergies.length > 0
-        ? '<ul class="list">' + clinical.allergies.map(a => `<li>${a}</li>`).join('') + '</ul>'
-        : '—';
-    document.getElementById('medications').innerHTML =
-      clinical.medications && clinical.medications.length > 0
-        ? '<ul class="list">' + clinical.medications.map(m => `<li>${m}</li>`).join('') + '</ul>'
-        : '—';
-    document.getElementById('diagnosticResults').innerHTML =
-      clinical.diagnosticResults && clinical.diagnosticResults.length > 0
-        ? '<ul class="list">' + clinical.diagnosticResults.map(r => `<li>${r}</li>`).join('') + '</ul>'
-        : '—';
+    // FHIR enrichment summary
+    if (clinical.fhirPatientId) {
+      document.getElementById('missingSections').insertAdjacentHTML('beforebegin',
+        '<div class="fhir-summary">Enriched with ' + clinical.fhirItemsAdded +
+        ' items from FHIR lookup (Patient/' + clinical.fhirPatientId + ')</div>');
+    } else if (clinical.fhirEnrichmentTimestamp === null && clinical.fhirPatientId === null) {
+      // enrichWithFhir ran but found no match — only show if we have the enrichment fields
+      if ('fhirPatientId' in clinical) {
+        document.getElementById('missingSections').insertAdjacentHTML('beforebegin',
+          '<div class="fhir-summary" style="color:#888;">FHIR lookup: no matching patient found</div>');
+      }
+    }
+
+    document.getElementById('problems').innerHTML = renderClinicalList(clinical.problems);
+    document.getElementById('allergies').innerHTML = renderClinicalList(clinical.allergies);
+    document.getElementById('medications').innerHTML = renderClinicalList(clinical.medications);
+    document.getElementById('diagnosticResults').innerHTML = renderClinicalList(clinical.diagnosticResults);
+
+    // Show encounters if present (FHIR-sourced)
+    if (clinical.encounters && clinical.encounters.length > 0) {
+      var encountersHtml = '<div class="field"><span class="label">Encounters</span><span class="value">' +
+        renderClinicalList(clinical.encounters) + '</span></div>';
+      document.getElementById('diagnosticResults').closest('.field').insertAdjacentHTML('afterend', encountersHtml);
+    }
 
     // Show missing optional sections
     if (clinical.missingOptionalSections && clinical.missingOptionalSections.length > 0) {
       document.getElementById('missingSections').innerHTML =
         '<span style="font-size:0.82rem;color:#666;">Missing optional sections: </span>' +
-        clinical.missingOptionalSections.map(s => `<span class="missing-section">${s}</span>`).join('');
+        clinical.missingOptionalSections.map(function(s) { return '<span class="missing-section">' + s + '</span>'; }).join('');
     }
   } else {
     document.getElementById('problems').textContent = '—';

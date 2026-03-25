@@ -27,12 +27,11 @@
       <telecom use="HP" value="tel:+1-555-867-5309"/>
       <patient>
         <name use="L">
-          <given>Jane</given>
-          <given>Marie</given>
-          <family>Doe</family>
+          <given>Michael</given>
+          <family>Kihn</family>
         </name>
-        <administrativeGenderCode code="F" codeSystem="2.16.840.1.113883.5.1" displayName="Female"/>
-        <birthTime value="19800315"/>
+        <administrativeGenderCode code="M" codeSystem="2.16.840.1.113883.5.1" displayName="Male"/>
+        <birthTime value="19740625"/>
         <maritalStatusCode code="M" codeSystem="2.16.840.1.113883.5.2" displayName="Married"/>
         <languageCommunication>
           <languageCode code="en"/>

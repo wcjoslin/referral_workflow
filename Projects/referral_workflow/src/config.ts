@@ -41,6 +41,9 @@ export const config = {
     env: optionalEnv('NODE_ENV', 'development'),
     logLevel: optionalEnv('LOG_LEVEL', 'info'),
   },
+  fhir: {
+    baseUrl: optionalEnv('FHIR_BASE_URL', 'https://hapi.fhir.org/baseR4'),
+  },
   server: {
     port: parseInt(optionalEnv('PORT', '3000'), 10),
   },
