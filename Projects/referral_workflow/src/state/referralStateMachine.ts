@@ -5,12 +5,14 @@
  * All state changes must go through this module — no ad-hoc state updates.
  *
  * Valid lifecycle:
- * Received → Acknowledged → Accepted | Declined → Scheduled → Encounter → Closed → Closed-Confirmed
+ * Received → Acknowledged → Accepted | Declined | Pending-Information → Scheduled → Encounter → Closed → Closed-Confirmed
+ * Pending-Information → Acknowledged (info received) | Declined (timeout)
  */
 
 export const ReferralState = {
   RECEIVED: 'Received',
   ACKNOWLEDGED: 'Acknowledged',
+  PENDING_INFORMATION: 'Pending-Information',
   ACCEPTED: 'Accepted',
   DECLINED: 'Declined',
   SCHEDULED: 'Scheduled',
@@ -24,7 +26,8 @@ export type ReferralState = (typeof ReferralState)[keyof typeof ReferralState];
 // Defines which transitions are valid from each state
 const VALID_TRANSITIONS: Record<ReferralState, ReferralState[]> = {
   [ReferralState.RECEIVED]: [ReferralState.ACKNOWLEDGED],
-  [ReferralState.ACKNOWLEDGED]: [ReferralState.ACCEPTED, ReferralState.DECLINED],
+  [ReferralState.ACKNOWLEDGED]: [ReferralState.ACCEPTED, ReferralState.DECLINED, ReferralState.PENDING_INFORMATION],
+  [ReferralState.PENDING_INFORMATION]: [ReferralState.ACKNOWLEDGED, ReferralState.DECLINED],
   [ReferralState.ACCEPTED]: [ReferralState.SCHEDULED],
   [ReferralState.DECLINED]: [], // terminal
   [ReferralState.SCHEDULED]: [ReferralState.ENCOUNTER],

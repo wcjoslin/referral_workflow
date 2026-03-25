@@ -24,7 +24,25 @@ export const referrals = sqliteTable('referrals', {
   aiAssessment: text('ai_assessment'), // JSON-serialised SufficiencyAssessment, nullable until Gemini responds
   clinicalData: text('clinical_data'), // JSON-serialised extended CDA sections (problems, meds, allergies, results)
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  priorityFlag: integer('priority_flag', { mode: 'boolean' }).default(false),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+});
+
+export const skillExecutions = sqliteTable('skill_executions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  skillName: text('skill_name').notNull(),
+  referralId: integer('referral_id')
+    .references(() => referrals.id)
+    .notNull(),
+  triggerPoint: text('trigger_point').notNull(), // 'post-intake' | 'post-acceptance' | 'encounter-complete'
+  matched: integer('matched', { mode: 'boolean' }).notNull(),
+  confidence: text('confidence').notNull(), // stored as text, parsed to float
+  actionTaken: text('action_taken'), // null if no match, test mode, or below threshold
+  explanation: text('explanation').notNull(),
+  wasOverridden: integer('was_overridden', { mode: 'boolean' }).notNull().default(false),
+  overriddenBy: text('overridden_by'),
+  overrideReason: text('override_reason'),
+  executedAt: integer('executed_at', { mode: 'timestamp' }).notNull(),
 });
 
 export const outboundMessages = sqliteTable('outbound_messages', {

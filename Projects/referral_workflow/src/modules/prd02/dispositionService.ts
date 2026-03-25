@@ -21,6 +21,8 @@ import { config } from '../../config';
 import { transition, ReferralState, InvalidStateTransitionError } from '../../state/referralStateMachine';
 import { buildRri } from './rriBuilder';
 import { onReferralAccepted } from '../prd03/mockScheduler';
+import { evaluateSkills } from '../prd09/skillEvaluator';
+import { executeSkillAction } from '../prd09/skillActions';
 import { randomUUID } from 'crypto';
 
 export class ReferralNotFoundError extends Error {
@@ -94,6 +96,17 @@ async function applyDisposition(
     void onReferralAccepted(referralId).catch((err: Error) =>
       console.error(`[MockScheduler] Failed for referral #${referralId}:`, err.message),
     );
+
+    // PRD-09: fire post-acceptance skill evaluation (non-blocking)
+    void evaluateSkills('post-acceptance', referralId)
+      .then(async (evalResult) => {
+        if (evalResult.winningAction && !evalResult.winningAction.isTestMode) {
+          await executeSkillAction(evalResult.winningAction, referralId);
+        }
+      })
+      .catch((err) => {
+        console.error(`[SkillEvaluator] Post-acceptance evaluation failed for referral #${referralId}:`, err);
+      });
   }
 }
 

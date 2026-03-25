@@ -19,6 +19,8 @@ import { assessSufficiency, SufficiencyAssessment } from './claudeService';
 import { buildRri } from './rriBuilder';
 import { sendRriMessage } from './dispositionService';
 import { enrichWithFhir } from '../prd08/fhirEnrichment';
+import { evaluateSkills } from '../prd09/skillEvaluator';
+import { executeSkillAction } from '../prd09/skillActions';
 import { randomUUID } from 'crypto';
 import { eq } from 'drizzle-orm';
 
@@ -116,6 +118,17 @@ export async function ingestReferral(processed: ProcessedMessage): Promise<numbe
       console.error(`[ReferralService] Claude assessment failed for referral #${referral.id}:`, err);
       const fallback = { sufficient: true, summary: 'AI assessment unavailable.', concerns: [] };
       assessmentCache.set(referral.id, fallback);
+    });
+
+  // PRD-09: fire skill evaluation in background (non-blocking)
+  void evaluateSkills('post-intake', referral.id)
+    .then(async (evalResult) => {
+      if (evalResult.winningAction && !evalResult.winningAction.isTestMode) {
+        await executeSkillAction(evalResult.winningAction, referral.id);
+      }
+    })
+    .catch((err) => {
+      console.error(`[SkillEvaluator] Post-intake evaluation failed for referral #${referral.id}:`, err);
     });
 
   return referral.id;

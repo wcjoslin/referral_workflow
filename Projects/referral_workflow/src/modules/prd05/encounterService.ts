@@ -14,6 +14,8 @@ import { config } from '../../config';
 import { transition, ReferralState } from '../../state/referralStateMachine';
 import { onEncounterComplete } from '../prd04/mockEhr';
 import { autoAck } from '../prd06/mockReferrer';
+import { evaluateSkills } from '../prd09/skillEvaluator';
+import { executeSkillAction } from '../prd09/skillActions';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -107,6 +109,17 @@ export async function markEncounterComplete(opts: EncounterOptions): Promise<voi
       console.error(`[MockReferrer] ACK failed for ${messageControlId}:`, err.message),
     );
   }
+
+  // PRD-09: fire encounter-complete skill evaluation (non-blocking)
+  void evaluateSkills('encounter-complete', referralId)
+    .then(async (evalResult) => {
+      if (evalResult.winningAction && !evalResult.winningAction.isTestMode) {
+        await executeSkillAction(evalResult.winningAction, referralId);
+      }
+    })
+    .catch((err) => {
+      console.error(`[SkillEvaluator] Encounter-complete evaluation failed for referral #${referralId}:`, err);
+    });
 
   // PRD-04: auto-trigger consult note generation (non-blocking)
   void onEncounterComplete(referralId).catch((err: Error) =>

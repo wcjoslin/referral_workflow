@@ -44,6 +44,12 @@ export const config = {
   fhir: {
     baseUrl: optionalEnv('FHIR_BASE_URL', 'https://hapi.fhir.org/baseR4'),
   },
+  skills: {
+    dir: optionalEnv('SKILLS_DIR', './skills'),
+    overrideWindowHours: parseInt(optionalEnv('SKILL_OVERRIDE_WINDOW_HOURS', '24'), 10),
+    pendingInfoTimeoutHours: parseInt(optionalEnv('PENDING_INFO_TIMEOUT_HOURS', '72'), 10),
+    pendingInfoCheckIntervalMs: parseInt(optionalEnv('PENDING_INFO_CHECK_INTERVAL_MS', '3600000'), 10),
+  },
   server: {
     port: parseInt(optionalEnv('PORT', '3000'), 10),
   },

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Automation Rules — 360X Referral</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
+    .container { max-width: 1000px; margin: 0 auto; padding: 24px; }
+    h1 { margin-bottom: 8px; }
+    .subtitle { color: #666; margin-bottom: 24px; }
+    .nav { margin-bottom: 16px; font-size: 14px; }
+    .nav a { color: #0066cc; text-decoration: none; }
+    .nav a:hover { text-decoration: underline; }
+    .header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .btn { display: inline-block; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; text-decoration: none; color: #fff; }
+    .btn-primary { background: #0066cc; }
+    .btn-primary:hover { background: #0055aa; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: #fafafa; font-weight: 600; font-size: 13px; text-transform: uppercase; color: #666; }
+    td { font-size: 14px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .badge-active { background: #e6f4ea; color: #1e7e34; }
+    .badge-test { background: #fff3cd; color: #856404; }
+    .badge-off { background: #f0f0f0; color: #999; }
+    .badge-trigger { background: #e8f0fe; color: #1a73e8; }
+    .badge-action { background: #fce8e6; color: #c53929; }
+    .badge-action.request-info { background: #fff3cd; color: #856404; }
+    .badge-action.flag-priority { background: #fff3cd; color: #856404; }
+    .badge-action.auto-accept { background: #e6f4ea; color: #1e7e34; }
+    a.skill-link { color: #0066cc; text-decoration: none; }
+    a.skill-link:hover { text-decoration: underline; }
+    .stats { font-size: 13px; color: #666; }
+    .empty { text-align: center; padding: 48px; color: #999; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="nav">
+      <a href="/messages">← Message History</a>
+    </div>
+    <div class="header-row">
+      <div>
+        <h1>Automation Rules</h1>
+        <p class="subtitle">Manage Agent Skills that automate referral decisions</p>
+      </div>
+      <a href="/rules/create" class="btn btn-primary">+ Create Rule</a>
+    </div>
+    <table id="rulesTable">
+      <thead>
+        <tr>
+          <th>Pri</th>
+          <th>Name</th>
+          <th>Trigger</th>
+          <th>Action</th>
+          <th>Status</th>
+          <th>Stats</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rulesBody"></tbody>
+    </table>
+    <div id="emptyState" class="empty" style="display:none;">
+      No automation rules configured. <a href="/rules/create">Create your first rule</a>.
+    </div>
+  </div>
+
+  <script>
+    /*__RULES_DATA__*/
+
+    const data = window.__RULES_DATA__;
+    const tbody = document.getElementById('rulesBody');
+    const emptyState = document.getElementById('emptyState');
+
+    const triggerLabels = { 'post-intake': 'Post-Intake', 'post-acceptance': 'Post-Accept', 'encounter-complete': 'Encounter' };
+    const actionLabels = { 'auto-decline': 'Auto-Decline', 'request-info': 'Request Info', 'flag-priority': 'Flag Priority', 'auto-accept': 'Auto-Accept', 'custom-consult-routing': 'Consult Route' };
+
+    if (!data.skills || data.skills.length === 0) {
+      document.getElementById('rulesTable').style.display = 'none';
+      emptyState.style.display = 'block';
+    } else {
+      data.skills.sort((a, b) => a.priority - b.priority);
+      data.skills.forEach(skill => {
+        const status = skill.isTestMode ? 'test' : skill.isActive ? 'active' : 'off';
+        const statusClass = status === 'active' ? 'badge-active' : status === 'test' ? 'badge-test' : 'badge-off';
+        const statusLabel = status === 'active' ? 'Active' : status === 'test' ? 'Test' : 'Off';
+        const statsText = skill.totalEvals > 0 ? `${skill.totalEvals}/${skill.matchRate}%` : '0/—';
+        const actionClass = skill.actionType;
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${skill.priority}</td>
+          <td><a href="/rules/${skill.name}" class="skill-link">${skill.name}</a></td>
+          <td><span class="badge badge-trigger">${triggerLabels[skill.triggerPoint] || skill.triggerPoint}</span></td>
+          <td><span class="badge badge-action ${actionClass}">${actionLabels[skill.actionType] || skill.actionType}</span></td>
+          <td><span class="badge ${statusClass}">${statusLabel}</span></td>
+          <td class="stats">${statsText}</td>
+          <td><a href="/rules/${skill.name}/history" class="skill-link">History</a></td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Edit Rule — 360X Referral</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
+    .container { max-width: 800px; margin: 0 auto; padding: 24px; }
+    h1 { margin-bottom: 8px; }
+    .subtitle { color: #666; margin-bottom: 24px; }
+    .nav { margin-bottom: 16px; font-size: 14px; }
+    .nav a { color: #0066cc; text-decoration: none; }
+    .nav a:hover { text-decoration: underline; }
+    .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 16px; }
+    .card h2 { margin-bottom: 12px; font-size: 18px; }
+    label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 14px; }
+    .form-row { display: flex; gap: 16px; margin-bottom: 16px; }
+    .form-row > div { flex: 1; }
+    .radio-group { display: flex; gap: 16px; margin-bottom: 16px; }
+    .radio-group label { font-weight: 400; display: flex; align-items: center; gap: 4px; }
+    .slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .slider-row input[type="range"] { flex: 1; }
+    .slider-value { font-weight: 600; min-width: 40px; }
+    input[type="number"] { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; width: 80px; }
+    textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; font-family: monospace; resize: vertical; min-height: 200px; }
+    .btn { display: inline-block; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; text-decoration: none; color: #fff; }
+    .btn-primary { background: #0066cc; }
+    .btn-primary:hover { background: #0055aa; }
+    .btn-danger { background: #dc3545; }
+    .btn-danger:hover { background: #c82333; }
+    .btn-group { display: flex; gap: 8px; justify-content: space-between; margin-top: 16px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .badge-trigger { background: #e8f0fe; color: #1a73e8; }
+    .badge-action { background: #fce8e6; color: #c53929; }
+    pre { background: #f8f9fa; border: 1px solid #ddd; border-radius: 4px; padding: 12px; font-size: 13px; overflow-x: auto; white-space: pre-wrap; }
+    .status { margin-top: 12px; padding: 8px 12px; border-radius: 4px; font-size: 14px; display: none; }
+    .status-success { background: #e6f4ea; color: #1e7e34; }
+    .status-error { background: #fce8e6; color: #c53929; }
+    .meta-info { font-size: 13px; color: #666; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="nav">
+      <a href="/rules/admin">← Back to Rules</a>
+    </div>
+    <h1 id="skillName"></h1>
+    <p class="subtitle" id="skillDesc"></p>
+
+    <div class="card">
+      <h2>Configuration</h2>
+      <div class="meta-info" id="metaInfo"></div>
+
+      <label>Status</label>
+      <div class="radio-group">
+        <label><input type="radio" name="status" value="active" id="statusActive"> Active</label>
+        <label><input type="radio" name="status" value="test" id="statusTest"> Test Mode</label>
+        <label><input type="radio" name="status" value="off" id="statusOff"> Inactive</label>
+      </div>
+
+      <div class="slider-row">
+        <label>Confidence Threshold:</label>
+        <input type="range" id="confidence" min="0.5" max="1.0" step="0.05">
+        <span class="slider-value" id="confidenceValue"></span>
+      </div>
+
+      <div class="form-row">
+        <div>
+          <label for="priority">Priority</label>
+          <input type="number" id="priority" min="1" max="100">
+        </div>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="saveMetadata()">Save Changes</button>
+        <button class="btn btn-danger" onclick="deleteSkill()">Delete Rule</button>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>SKILL.md Body</h2>
+      <pre id="skillBody"></pre>
+    </div>
+
+    <div id="assetsCard" class="card" style="display:none;">
+      <h2>Assets</h2>
+      <div id="assetsContainer"></div>
+    </div>
+
+    <div id="refsCard" class="card" style="display:none;">
+      <h2>References</h2>
+      <div id="refsContainer"></div>
+    </div>
+  </div>
+
+  <script>
+    /*__EDIT_DATA__*/
+
+    const data = window.__EDIT_DATA__;
+    const skill = data.skill;
+
+    document.getElementById('skillName').textContent = skill.name;
+    document.getElementById('skillDesc').textContent = skill.description;
+    document.getElementById('metaInfo').innerHTML =
+      `Trigger: <span class="badge badge-trigger">${skill.triggerPoint}</span> &nbsp; Action: <span class="badge badge-action">${skill.actionType}</span>`;
+
+    // Status radios
+    if (skill.isTestMode) document.getElementById('statusTest').checked = true;
+    else if (skill.isActive) document.getElementById('statusActive').checked = true;
+    else document.getElementById('statusOff').checked = true;
+
+    // Confidence
+    document.getElementById('confidence').value = skill.confidenceThreshold;
+    document.getElementById('confidenceValue').textContent = skill.confidenceThreshold;
+    document.getElementById('confidence').addEventListener('input', (e) => {
+      document.getElementById('confidenceValue').textContent = e.target.value;
+    });
+
+    // Priority
+    document.getElementById('priority').value = skill.priority;
+
+    // Body
+    document.getElementById('skillBody').textContent = data.body;
+
+    // Assets
+    if (data.assets && Object.keys(data.assets).length > 0) {
+      const card = document.getElementById('assetsCard');
+      card.style.display = 'block';
+      const container = document.getElementById('assetsContainer');
+      for (const [filename, content] of Object.entries(data.assets)) {
+        const div = document.createElement('div');
+        div.style.marginBottom = '12px';
+        div.innerHTML = `
+          <label>${filename}</label>
+          <textarea id="asset-${filename}" style="min-height:120px;">${JSON.stringify(content, null, 2)}</textarea>
+          <button class="btn btn-primary" style="margin-top:4px;" onclick="saveAsset('${filename}')">Save ${filename}</button>
+        `;
+        container.appendChild(div);
+      }
+    }
+
+    // References
+    if (data.references && Object.keys(data.references).length > 0) {
+      const card = document.getElementById('refsCard');
+      card.style.display = 'block';
+      const container = document.getElementById('refsContainer');
+      for (const [filename, content] of Object.entries(data.references)) {
+        const div = document.createElement('div');
+        div.innerHTML = `<label>${filename}</label><pre>${content}</pre>`;
+        container.appendChild(div);
+      }
+    }
+
+    async function saveMetadata() {
+      const statusRadio = document.querySelector('input[name="status"]:checked').value;
+      const body = {
+        active: statusRadio === 'active',
+        testMode: statusRadio === 'test',
+        confidenceThreshold: parseFloat(document.getElementById('confidence').value),
+        priority: parseInt(document.getElementById('priority').value),
+      };
+
+      try {
+        const res = await fetch(`/rules/${skill.name}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.error);
+        showStatus('Changes saved.', 'success');
+      } catch (err) {
+        showStatus('Error: ' + err.message, 'error');
+      }
+    }
+
+    async function saveAsset(filename) {
+      const content = document.getElementById('asset-' + filename).value;
+      try {
+        const res = await fetch(`/rules/${skill.name}/assets/${filename}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content }),
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.error);
+        showStatus(`${filename} saved.`, 'success');
+      } catch (err) {
+        showStatus('Error: ' + err.message, 'error');
+      }
+    }
+
+    async function deleteSkill() {
+      if (!confirm(`Delete rule "${skill.name}"? This cannot be undone.`)) return;
+      try {
+        const res = await fetch(`/rules/${skill.name}`, { method: 'DELETE' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.error);
+        window.location.href = '/rules/admin';
+      } catch (err) {
+        showStatus('Error: ' + err.message, 'error');
+      }
+    }
+
+    function showStatus(msg, type) {
+      const el = document.getElementById('status');
+      el.style.display = 'block';
+      el.textContent = msg;
+      el.className = 'status status-' + type;
+      setTimeout(() => el.style.display = 'none', 3000);
+    }
+  </script>
+</body>
+</html>

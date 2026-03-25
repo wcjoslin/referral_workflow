@@ -47,8 +47,23 @@ jest.mock('../../../src/db', () => {
       scheduled_provider TEXT,
       ai_assessment TEXT,
       clinical_data TEXT,
+      priority_flag INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE skill_executions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      skill_name TEXT NOT NULL,
+      referral_id INTEGER NOT NULL,
+      trigger_point TEXT NOT NULL,
+      matched INTEGER NOT NULL,
+      confidence TEXT NOT NULL,
+      action_taken TEXT,
+      explanation TEXT NOT NULL,
+      was_overridden INTEGER DEFAULT 0 NOT NULL,
+      overridden_by TEXT,
+      override_reason TEXT,
+      executed_at INTEGER NOT NULL
     );
     CREATE TABLE outbound_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

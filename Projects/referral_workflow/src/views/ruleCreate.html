@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Create Automation Rule — 360X Referral</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
+    .container { max-width: 800px; margin: 0 auto; padding: 24px; }
+    h1 { margin-bottom: 8px; }
+    .subtitle { color: #666; margin-bottom: 24px; }
+    .nav { margin-bottom: 16px; font-size: 14px; }
+    .nav a { color: #0066cc; text-decoration: none; }
+    .nav a:hover { text-decoration: underline; }
+    .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 16px; }
+    label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 14px; }
+    .help { font-size: 12px; color: #999; margin-bottom: 12px; }
+    textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; resize: vertical; min-height: 80px; font-family: inherit; }
+    select, input[type="number"] { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+    .form-row { display: flex; gap: 16px; margin-bottom: 16px; }
+    .form-row > div { flex: 1; }
+    .slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .slider-row input[type="range"] { flex: 1; }
+    .slider-value { font-weight: 600; min-width: 40px; }
+    .btn { display: inline-block; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; text-decoration: none; color: #fff; }
+    .btn-primary { background: #0066cc; }
+    .btn-primary:hover { background: #0055aa; }
+    .btn-secondary { background: #6c757d; }
+    .btn-secondary:hover { background: #5a6268; }
+    .btn-success { background: #28a745; }
+    .btn-success:hover { background: #218838; }
+    .btn-warning { background: #ffc107; color: #333; }
+    .btn-warning:hover { background: #e0a800; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-group { display: flex; gap: 8px; margin-top: 16px; }
+    .preview { display: none; margin-top: 16px; }
+    .preview h3 { margin-bottom: 8px; }
+    .preview pre { background: #f8f9fa; border: 1px solid #ddd; border-radius: 4px; padding: 12px; overflow-x: auto; font-size: 13px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; }
+    .file-list { margin: 8px 0; padding-left: 20px; font-size: 13px; color: #666; }
+    .status { margin-top: 12px; padding: 8px 12px; border-radius: 4px; font-size: 14px; }
+    .status-loading { background: #e8f0fe; color: #1a73e8; }
+    .status-error { background: #fce8e6; color: #c53929; }
+    .status-success { background: #e6f4ea; color: #1e7e34; }
+    .timeout-row { display: none; }
+    .timeout-row.visible { display: flex; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="nav">
+      <a href="/rules/admin">← Back to Rules</a>
+    </div>
+    <h1>Create Automation Rule</h1>
+    <p class="subtitle">Describe your rule in plain English and AI will generate the skill</p>
+
+    <div class="card">
+      <label for="description">Describe your rule in plain English:</label>
+      <p class="help">Example: "Decline any referral where the patient's payer is not in our approved payer list"</p>
+      <textarea id="description" placeholder="Enter your rule description..."></textarea>
+
+      <div class="form-row" style="margin-top:16px;">
+        <div>
+          <label for="triggerPoint">Trigger Point</label>
+          <select id="triggerPoint">
+            <option value="post-intake">Post-Intake</option>
+            <option value="post-acceptance">Post-Acceptance</option>
+            <option value="encounter-complete">Encounter Complete</option>
+          </select>
+        </div>
+        <div>
+          <label for="actionType">Action Type</label>
+          <select id="actionType">
+            <option value="auto-decline">Auto-Decline</option>
+            <option value="request-info">Request Info</option>
+            <option value="flag-priority">Flag Priority</option>
+            <option value="auto-accept">Auto-Accept</option>
+            <option value="custom-consult-routing">Custom Consult Routing</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="slider-row">
+        <label>Confidence Threshold:</label>
+        <input type="range" id="confidence" min="0.5" max="1.0" step="0.05" value="0.85">
+        <span class="slider-value" id="confidenceValue">0.85</span>
+      </div>
+
+      <div class="form-row">
+        <div>
+          <label for="priority">Priority (lower = higher priority)</label>
+          <input type="number" id="priority" min="1" max="100" value="10">
+        </div>
+      </div>
+
+      <div class="form-row timeout-row" id="timeoutRow">
+        <div>
+          <label for="timeoutHours">Timeout (hours)</label>
+          <input type="number" id="timeoutHours" min="1" max="720" value="72">
+        </div>
+        <div>
+          <label for="timeoutAction">Timeout Action</label>
+          <select id="timeoutAction">
+            <option value="auto-decline">Auto-Decline</option>
+            <option value="escalate">Escalate</option>
+          </select>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" id="generateBtn" onclick="generate()">Generate Skill</button>
+
+      <div id="status" class="status" style="display:none;"></div>
+
+      <div id="preview" class="preview">
+        <h3>Generated Preview</h3>
+        <p>Generated files:</p>
+        <ul id="fileList" class="file-list"></ul>
+        <label>SKILL.md:</label>
+        <pre id="previewContent"></pre>
+
+        <div class="btn-group">
+          <button class="btn btn-success" onclick="saveSkill(false)">Save &amp; Activate</button>
+          <button class="btn btn-warning" onclick="saveSkill(true)">Save as Test Mode</button>
+          <a href="/rules/admin" class="btn btn-secondary">Cancel</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let generatedSkill = null;
+
+    document.getElementById('confidence').addEventListener('input', (e) => {
+      document.getElementById('confidenceValue').textContent = e.target.value;
+    });
+
+    document.getElementById('actionType').addEventListener('change', (e) => {
+      document.getElementById('timeoutRow').classList.toggle('visible', e.target.value === 'request-info');
+    });
+
+    async function generate() {
+      const description = document.getElementById('description').value.trim();
+      if (!description) { alert('Please enter a rule description'); return; }
+
+      const btn = document.getElementById('generateBtn');
+      btn.disabled = true;
+      showStatus('Generating skill with AI... this may take a moment.', 'loading');
+
+      try {
+        const body = {
+          description,
+          triggerPoint: document.getElementById('triggerPoint').value,
+          actionType: document.getElementById('actionType').value,
+          confidenceThreshold: parseFloat(document.getElementById('confidence').value),
+          priority: parseInt(document.getElementById('priority').value),
+        };
+
+        if (body.actionType === 'request-info') {
+          body.timeoutHours = parseInt(document.getElementById('timeoutHours').value);
+          body.timeoutAction = document.getElementById('timeoutAction').value;
+        }
+
+        const res = await fetch('/rules/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Generation failed');
+
+        generatedSkill = data.skill;
+        showPreview(generatedSkill);
+        showStatus('Skill generated successfully. Review and save below.', 'success');
+      } catch (err) {
+        showStatus('Error: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function showPreview(skill) {
+      const preview = document.getElementById('preview');
+      preview.style.display = 'block';
+
+      document.getElementById('previewContent').textContent = skill.files['SKILL.md'] || '';
+
+      const fileList = document.getElementById('fileList');
+      fileList.innerHTML = '';
+      Object.keys(skill.files).forEach(f => {
+        const li = document.createElement('li');
+        li.textContent = f;
+        fileList.appendChild(li);
+      });
+    }
+
+    async function saveSkill(testMode) {
+      if (!generatedSkill) return;
+
+      showStatus('Saving skill...', 'loading');
+      try {
+        const res = await fetch('/rules/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...generatedSkill, testMode }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Save failed');
+
+        showStatus('Skill saved! Redirecting...', 'success');
+        setTimeout(() => window.location.href = '/rules/admin', 1000);
+      } catch (err) {
+        showStatus('Error: ' + err.message, 'error');
+      }
+    }
+
+    function showStatus(msg, type) {
+      const el = document.getElementById('status');
+      el.style.display = 'block';
+      el.textContent = msg;
+      el.className = 'status status-' + type;
+    }
+  </script>
+</body>
+</html>
