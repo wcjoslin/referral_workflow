@@ -1,0 +1,10 @@
+[phases.build]
+cmds = [
+  "npm ci",
+  "npm run build",
+  "node dist/db/migrate.js",
+  "npx ts-node -r ./scripts/node-polyfill.js scripts/seed-demo.ts || true"
+]
+
+[start]
+cmd = "node -r ./scripts/node-polyfill.js dist/index.js"
