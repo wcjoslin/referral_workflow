@@ -5,6 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "prestart": "npm run build && node dist/db/migrate.js && (npx ts-node -r ./scripts/node-polyfill.js scripts/seed-demo.ts || true)",
     "start": "node -r ./scripts/node-polyfill.js dist/index.js",
     "dev": "ts-node -r ./scripts/node-polyfill.js src/index.ts",
     "test": "jest",
