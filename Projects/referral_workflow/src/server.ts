@@ -22,7 +22,9 @@ import { eq } from 'drizzle-orm';
 import { db } from './db';
 import { referrals, patients, outboundMessages } from './db/schema';
 import { accept, decline, ReferralNotFoundError as DispositionNotFoundError } from './modules/prd02/dispositionService';
-import { getCachedAssessment } from './modules/prd02/referralService';
+import { getCachedAssessment, ingestReferral } from './modules/prd02/referralService';
+import { processInboundMessage } from './modules/prd01/messageProcessor';
+import { buildRawEmail } from './demoScenarios';
 import { scheduleReferral, ReferralNotFoundError, SchedulingConflictError } from './modules/prd03/schedulingService';
 import { getResources } from './modules/prd03/resourceCalendar';
 import { markEncounterComplete, ReferralNotFoundError as EncounterNotFoundError } from './modules/prd05/encounterService';
@@ -78,6 +80,18 @@ app.get('/', async (_req: Request, res: Response, next: NextFunction) => {
 // Health check
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
+});
+
+app.get('/seed', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const cdaXml = fs.readFileSync(path.resolve(__dirname, '../tests/fixtures/sample-referral.xml'), 'utf-8');
+    const rawEmail = buildRawEmail(cdaXml);
+    const processed = await processInboundMessage(rawEmail);
+    const referralId = await ingestReferral(processed);
+    res.redirect(`/referrals/${referralId}/review`);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Clinician review page
