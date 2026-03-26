@@ -29,6 +29,13 @@
       "when": 1774378600000,
       "tag": "0003_add_clinical_data",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1774465000000,
+      "tag": "0004_add_skill_executions",
+      "breakpoints": true
     }
   ]
 }
