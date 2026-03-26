@@ -117,7 +117,19 @@ export async function scheduleReferral(
     from: config.receiving.directAddress,
     to: referral.referrerAddress,
     subject: `Appointment Scheduled — Referral #${referralId}`,
-    text: siuMessage,
+    text: [
+      `APPOINTMENT SCHEDULED — Referral #${referralId}`,
+      ``,
+      `Patient: ${patient?.lastName ?? ''}, ${patient?.firstName ?? ''}`,
+      `Date/Time: ${details.appointmentDatetime}`,
+      `Location: ${details.locationName}`,
+      `Provider: ${details.scheduledProvider}`,
+      `Duration: ${details.durationMinutes} min`,
+      ``,
+      `--- HL7 SIU^S12 ---`,
+      ``,
+      siuMessage,
+    ].join('\n'),
   });
 
   // 7. Log outbound message

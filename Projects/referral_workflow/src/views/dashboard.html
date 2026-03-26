@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>360X Referral Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #212529; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+    h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 24px; }
+    .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 28px; }
+    .stat-card { background: #fff; border-radius: 8px; padding: 14px 20px; min-width: 110px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .stat-card .num { font-size: 1.6rem; font-weight: 700; line-height: 1; }
+    .stat-card .label { font-size: 0.75rem; color: #6c757d; margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    thead th { background: #f8f9fa; font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #495057; padding: 12px 16px; text-align: left; border-bottom: 1px solid #dee2e6; }
+    tbody tr { border-bottom: 1px solid #f0f2f5; transition: background 0.1s; cursor: pointer; }
+    tbody tr:hover { background: #f8f9fa; }
+    tbody tr:last-child { border-bottom: none; }
+    td { padding: 12px 16px; font-size: 0.9rem; vertical-align: middle; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+    .badge-received    { background: #e9ecef; color: #495057; }
+    .badge-acknowledged { background: #cff4fc; color: #055160; }
+    .badge-accepted    { background: #d1e7dd; color: #0a3622; }
+    .badge-pending     { background: #fff3cd; color: #664d03; }
+    .badge-declined    { background: #f8d7da; color: #58151c; }
+    .badge-scheduled   { background: #d0efff; color: #0c63e4; }
+    .badge-encounter   { background: #e2d9f3; color: #3d0a91; }
+    .badge-closed      { background: #d1e7dd; color: #0a3622; }
+    .badge-confirmed   { background: #badbcc; color: #0a3622; font-style: italic; }
+    .priority-flag { color: #dc3545; font-weight: 700; font-size: 0.85rem; }
+    .empty { text-align: center; padding: 48px 24px; color: #6c757d; }
+    .empty a { color: #ffc107; font-weight: 600; text-decoration: none; }
+    .empty a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<!--__NAV__-->
+<script>/*__DASHBOARD_DATA__*/</script>
+<div class="container">
+  <h1>Referral Dashboard</h1>
+  <div class="stats" id="stats"></div>
+  <div id="tableWrapper"></div>
+</div>
+<script>
+  const { items } = window.__DASHBOARD_DATA__;
+
+  function stateBadge(state) {
+    const map = {
+      'Received': 'received', 'Acknowledged': 'acknowledged', 'Accepted': 'accepted',
+      'Pending-Information': 'pending', 'Declined': 'declined', 'Scheduled': 'scheduled',
+      'Encounter': 'encounter', 'Closed': 'closed', 'Closed-Confirmed': 'confirmed',
+    };
+    return `<span class="badge badge-${map[state] ?? 'received'}">${state}</span>`;
+  }
+
+  // Stats
+  const statsDef = [
+    { label: 'Total', fn: () => items.length },
+    { label: 'Active', fn: () => items.filter(i => !['Declined','Closed-Confirmed'].includes(i.referral.state)).length },
+    { label: 'Acknowledged', fn: () => items.filter(i => i.referral.state === 'Acknowledged').length },
+    { label: 'Pending Info', fn: () => items.filter(i => i.referral.state === 'Pending-Information').length },
+    { label: 'Declined', fn: () => items.filter(i => i.referral.state === 'Declined').length },
+    { label: 'Closed', fn: () => items.filter(i => ['Closed','Closed-Confirmed'].includes(i.referral.state)).length },
+  ];
+  document.getElementById('stats').innerHTML = statsDef.map(s =>
+    `<div class="stat-card"><div class="num">${s.fn()}</div><div class="label">${s.label}</div></div>`
+  ).join('');
+
+  // Table
+  if (items.length === 0) {
+    document.getElementById('tableWrapper').innerHTML =
+      '<div class="empty"><p>No referrals yet.</p><p><a href="/demo">Launch a demo scenario →</a></p></div>';
+  } else {
+    const rows = items.map(({ referral: r, patient: p }) => {
+      const name = `${p.lastName}, ${p.firstName}`;
+      const created = r.createdAt ? new Date(typeof r.createdAt === 'number' ? r.createdAt * 1000 : r.createdAt).toLocaleDateString() : '—';
+      const priority = r.priorityFlag ? '<span class="priority-flag">⚑</span>' : '';
+      const declineLine = (r.state === 'Declined' && r.declineReason)
+        ? `<div style="font-size:0.72rem;color:#842029;margin-top:4px;white-space:normal;">${r.declineReason.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`
+        : '';
+      return `<tr onclick="location.href='/referrals/${r.id}/review'">
+        <td>#${r.id}</td>
+        <td>${name} ${priority}</td>
+        <td>${stateBadge(r.state)}${declineLine}</td>
+        <td>${r.reasonForReferral ? r.reasonForReferral.substring(0, 60) + (r.reasonForReferral.length > 60 ? '…' : '') : '—'}</td>
+        <td>${created}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('tableWrapper').innerHTML = `
+      <table>
+        <thead><tr><th>#</th><th>Patient</th><th>State</th><th>Reason</th><th>Created</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+</script>
+</body>
+</html>

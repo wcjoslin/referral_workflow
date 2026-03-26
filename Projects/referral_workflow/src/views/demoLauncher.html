@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Demo Launcher — 360X Referral</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #212529; }
+    .container { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+    h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 8px; }
+    .subtitle { color: #6c757d; margin: 0 0 32px; font-size: 0.95rem; }
+    .scenarios { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 18px; }
+    .card { background: #fff; border-radius: 10px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border-left: 4px solid #dee2e6; }
+    .card.full       { border-left-color: #198754; }
+    .card.incomplete { border-left-color: #ffc107; }
+    .card.fhir       { border-left-color: #0d6efd; }
+    .card.payer      { border-left-color: #dc3545; }
+    .card h2 { font-size: 1.05rem; font-weight: 700; margin: 0 0 6px; }
+    .card p { font-size: 0.875rem; color: #495057; margin: 0 0 12px; line-height: 1.5; }
+    .outcome { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 3px 10px; border-radius: 20px; margin-bottom: 16px; }
+    .outcome-green  { background: #d1e7dd; color: #0a3622; }
+    .outcome-yellow { background: #fff3cd; color: #664d03; }
+    .outcome-blue   { background: #cff4fc; color: #055160; }
+    .outcome-red    { background: #f8d7da; color: #58151c; }
+    .btn { display: inline-block; padding: 8px 20px; border-radius: 6px; border: none; font-size: 0.88rem; font-weight: 600; cursor: pointer; color: #fff; }
+    .btn-green  { background: #198754; }
+    .btn-yellow { background: #e6a817; }
+    .btn-blue   { background: #0d6efd; }
+    .btn-red    { background: #dc3545; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .log-panel { margin-top: 28px; background: #1e1e2e; border-radius: 10px; padding: 20px 24px; display: none; }
+    .log-panel h3 { color: #cdd6f4; font-size: 0.9rem; margin: 0 0 12px; }
+    .log-entries { font-family: 'Cascadia Code', 'Fira Mono', monospace; font-size: 0.8rem; color: #a6e3a1; max-height: 200px; overflow-y: auto; }
+    .log-entry { margin-bottom: 4px; }
+    .log-entry .ts { color: #6c7086; margin-right: 8px; }
+    .log-entry .state { font-weight: 700; }
+    .done-link { margin-top: 16px; display: none; }
+    .done-link a { display: inline-block; padding: 10px 22px; background: #fff; color: #1a1a2e; border-radius: 6px; font-weight: 700; text-decoration: none; font-size: 0.9rem; }
+    .done-link a:hover { background: #f0f2f5; }
+    .error-msg { color: #f38ba8; font-size: 0.82rem; margin-top: 8px; display: none; }
+  </style>
+</head>
+<body>
+<!--__NAV__-->
+<div class="container">
+  <h1>Demo Launcher</h1>
+  <p class="subtitle">Select a scenario to inject a pre-canned referral and watch it progress through the 360X workflow in real time.</p>
+
+  <div class="scenarios">
+
+    <!-- Scenario 1: Full Workflow -->
+    <div class="card full" id="card-full-workflow">
+      <h2>Full Non-Stop Workflow</h2>
+      <p>A complete C-CDA with all structured data. Injects referral for <strong>Sarah Chen</strong>. Accept in the UI to trigger the automated cascade: schedule → encounter → consult note → closed-confirmed.</p>
+      <div><span class="outcome outcome-green">Terminal: Closed-Confirmed</span></div>
+      <button class="btn btn-green" onclick="launch('full-workflow', this)">Launch</button>
+    </div>
+
+    <!-- Scenario 2: Incomplete Info -->
+    <div class="card incomplete" id="card-incomplete-info">
+      <h2>Incomplete Info Request</h2>
+      <p>A C-CDA with no structured ICD-10 codes for <strong>James Okafor</strong>. The system immediately sends an information request to the referrer and places the referral in <em>Pending-Information</em> state. Awaits referrer response or timeout.</p>
+      <div><span class="outcome outcome-yellow">Terminal: Pending-Information</span></div>
+      <button class="btn btn-yellow" onclick="launch('incomplete-info', this)">Launch</button>
+    </div>
+
+    <!-- Scenario 3: FHIR-Enriched -->
+    <div class="card fhir" id="card-fhir-enriched">
+      <h2>FHIR-Enriched Referral</h2>
+      <p>A sparse C-CDA for <strong>Michael Kihn</strong> (known FHIR patient). During ingest, the system queries the HAPI FHIR server and supplements missing problems and medications. The referral review page shows FHIR enrichment indicators.</p>
+      <div><span class="outcome outcome-blue">Awaits clinician decision</span></div>
+      <button class="btn btn-blue" onclick="launch('fhir-enriched', this)">Launch</button>
+    </div>
+
+    <!-- Scenario 4: Payer Rejection -->
+    <div class="card payer" id="card-payer-rejection">
+      <h2>Payer Network Rejection</h2>
+      <p>A complete C-CDA for <strong>Marcus Webb</strong> with an out-of-network payer. The <em>payer-network-check</em> skill fires automatically and auto-declines the referral before it reaches the clinician.</p>
+      <div><span class="outcome outcome-red">Terminal: Declined (skill auto-decline)</span></div>
+      <button class="btn btn-red" onclick="launch('payer-rejection', this)">Launch</button>
+    </div>
+
+  </div>
+
+  <!-- Step log -->
+  <div class="log-panel" id="logPanel">
+    <h3 id="logTitle">Referral progress</h3>
+    <div class="log-entries" id="logEntries"></div>
+    <div class="error-msg" id="errorMsg"></div>
+    <div class="done-link" id="doneLink">
+      <a id="reviewLink" href="#">View Referral →</a>
+    </div>
+  </div>
+</div>
+
+<script>
+  const TERMINAL_STATES = ['Declined', 'Closed-Confirmed'];
+
+  function formatTime(iso) {
+    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function appendLog(state, at) {
+    const entries = document.getElementById('logEntries');
+    const div = document.createElement('div');
+    div.className = 'log-entry';
+    div.innerHTML = `<span class="ts">${formatTime(at)}</span><span class="state">→ ${state}</span>`;
+    entries.appendChild(div);
+    entries.scrollTop = entries.scrollHeight;
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('errorMsg');
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
+  async function launch(scenario, btn) {
+    // Disable all buttons
+    document.querySelectorAll('.btn').forEach(b => b.disabled = true);
+    btn.textContent = 'Launching…';
+
+    const logPanel = document.getElementById('logPanel');
+    const logTitle = document.getElementById('logTitle');
+    const errorMsg = document.getElementById('errorMsg');
+    const doneLink = document.getElementById('doneLink');
+    const reviewLink = document.getElementById('reviewLink');
+
+    // Reset log
+    document.getElementById('logEntries').innerHTML = '';
+    errorMsg.style.display = 'none';
+    doneLink.style.display = 'none';
+    logPanel.style.display = 'block';
+    logTitle.textContent = `Launching scenario: ${scenario}…`;
+
+    let referralId;
+    try {
+      const res = await fetch('/demo/launch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenario }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        showError(data.error ?? 'Launch failed');
+        document.querySelectorAll('.btn').forEach(b => b.disabled = false);
+        btn.textContent = 'Launch';
+        return;
+      }
+      referralId = data.referralId;
+    } catch (err) {
+      showError('Network error — could not reach server');
+      document.querySelectorAll('.btn').forEach(b => b.disabled = false);
+      btn.textContent = 'Launch';
+      return;
+    }
+
+    logTitle.textContent = `Referral #${referralId} — tracking state changes`;
+    reviewLink.href = `/referrals/${referralId}/review`;
+
+    // Open SSE stream
+    const es = new EventSource(`/demo/events/${referralId}`);
+
+    es.onmessage = (e) => {
+      const { state, at } = JSON.parse(e.data);
+      appendLog(state, at);
+    };
+
+    es.addEventListener('done', (e) => {
+      const { state } = JSON.parse(e.data);
+      appendLog(state + ' (terminal)', new Date().toISOString());
+      doneLink.style.display = 'block';
+      es.close();
+      btn.textContent = 'Launch';
+      // Leave other buttons disabled so only one scenario runs at a time
+      btn.disabled = false;
+    });
+
+    es.onerror = () => {
+      showError('SSE stream disconnected. The referral may still be progressing — use the review link if available.');
+      if (referralId) {
+        doneLink.style.display = 'block';
+        reviewLink.href = `/referrals/${referralId}/review`;
+      }
+      es.close();
+      document.querySelectorAll('.btn').forEach(b => b.disabled = false);
+      btn.textContent = 'Launch';
+    };
+  }
+</script>
+</body>
+</html>

@@ -61,6 +61,7 @@
   </style>
 </head>
 <body>
+<!--__NAV__-->
 <script>/*__PAGE_DATA__*/</script>
 <div class="container">
   <h1>Referral Review <span class="state-badge" id="stateBadge"></span> <a href="/messages" style="font-size:0.78rem;font-weight:400;color:#0d6efd;text-decoration:none;margin-left:12px;">Message History →</a></h1>
@@ -79,6 +80,7 @@
   <div class="card">
     <h2>Referral Details</h2>
     <div class="field"><span class="label">Reason for Referral</span><span class="value" id="referralReason"></span></div>
+    <div class="field" id="declineReasonField" style="display:none;"><span class="label" style="color:#dc3545;">Decline Reason</span><span class="value" style="color:#842029;font-weight:600;" id="declineReasonValue"></span></div>
     <div class="field"><span class="label">Referring Provider</span><span class="value" id="referrerAddress"></span></div>
     <div class="field"><span class="label">Payer</span><span class="value" id="payer"></span></div>
     <div class="field"><span class="label">Received</span><span class="value" id="receivedAt"></span></div>
@@ -238,6 +240,12 @@
   document.getElementById('receivedAt').textContent =
     data.referral.createdAt ? new Date(data.referral.createdAt * 1000).toLocaleString() : '—';
   document.getElementById('stateBadge').textContent = data.referral.state;
+
+  // Show decline reason if present
+  if (data.referral.declineReason) {
+    document.getElementById('declineReasonValue').textContent = data.referral.declineReason;
+    document.getElementById('declineReasonField').style.display = '';
+  }
 
   // Hide action card if referral is already decided
   const terminalStates = ['Accepted', 'Declined', 'Scheduled', 'Encounter', 'Closed', 'Closed-Confirmed'];

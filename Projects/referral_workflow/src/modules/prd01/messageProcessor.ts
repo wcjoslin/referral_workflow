@@ -28,7 +28,7 @@ export async function processInboundMessage(rawEmail: Buffer | string): Promise<
   // Step 1: Send MDN immediately — regardless of attachment presence
   if (fromAddress) {
     try {
-      await sendMdn({ toAddress: fromAddress, originalMessageId: messageId });
+      await sendMdn({ toAddress: fromAddress, originalMessageId: messageId, senderDisplayName: parsed.from?.value?.[0]?.name });
       console.log(`[MessageProcessor] MDN sent to ${fromAddress} for message ${messageId}`);
     } catch (err) {
       // Log but do not throw — MDN failure should not block parsing

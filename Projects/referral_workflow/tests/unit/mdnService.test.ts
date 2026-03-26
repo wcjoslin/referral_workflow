@@ -75,6 +75,27 @@ describe('sendMdn', () => {
     );
   });
 
+  it('sets a generic subject when no senderDisplayName is provided', async () => {
+    await sendMdn({
+      toAddress: 'referrer@hospital.direct',
+      originalMessageId: '<abc123@referral.direct>',
+    });
+
+    const callArgs = mockSendMail.mock.calls[0][0] as Record<string, unknown>;
+    expect(callArgs.subject).toBe('Referral Received');
+  });
+
+  it('includes sender display name in subject when senderDisplayName is provided', async () => {
+    await sendMdn({
+      toAddress: 'referrer@hospital.direct',
+      originalMessageId: '<abc123@referral.direct>',
+      senderDisplayName: 'Dr. Robert Wilson',
+    });
+
+    const callArgs = mockSendMail.mock.calls[0][0] as Record<string, unknown>;
+    expect(callArgs.subject).toBe('Referral Received — from Dr. Robert Wilson');
+  });
+
   it('includes the Final-Recipient as the receiving Direct address', async () => {
     await sendMdn({
       toAddress: 'referrer@hospital.direct',

@@ -6,6 +6,8 @@ export interface MdnOptions {
   toAddress: string;
   /** The Message-ID header value from the inbound referral email */
   originalMessageId: string;
+  /** Display name of the sender (e.g. "Dr. Robert Wilson") — used to personalise the subject line */
+  senderDisplayName?: string;
 }
 
 /**
@@ -19,7 +21,7 @@ export interface MdnOptions {
  * This is an email-protocol acknowledgment — NOT an HL7 V2 message.
  */
 export async function sendMdn(options: MdnOptions): Promise<void> {
-  const { toAddress, originalMessageId } = options;
+  const { toAddress, originalMessageId, senderDisplayName } = options;
 
   const transport = nodemailer.createTransport({
     host: config.smtp.host,
@@ -42,7 +44,7 @@ export async function sendMdn(options: MdnOptions): Promise<void> {
   await transport.sendMail({
     from: config.receiving.directAddress,
     to: toAddress,
-    subject: 'Message Delivery Notification',
+    subject: senderDisplayName ? `Referral Received — from ${senderDisplayName}` : 'Referral Received',
     // multipart/report with report-type=disposition-notification
     attachments: [
       {

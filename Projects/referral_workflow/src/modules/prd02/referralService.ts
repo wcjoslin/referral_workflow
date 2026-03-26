@@ -152,7 +152,7 @@ async function autoDecline(sourceMessageId: string, referrerAddress: string, rea
   });
 
   try {
-    await sendRriMessage(rriMessage, referrerAddress, messageControlId, null);
+    await sendRriMessage(rriMessage, referrerAddress, messageControlId, null, 'AR');
     console.log(`[ReferralService] Auto-decline RRI sent for ${sourceMessageId}`);
   } catch (err) {
     console.error(`[ReferralService] Failed to send auto-decline RRI for ${sourceMessageId}:`, err);

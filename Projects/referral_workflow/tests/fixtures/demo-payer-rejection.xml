@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- DEMO SCENARIO: Payer Rejection — complete C-CDA; payer "OutOfNetwork Insurance Co" injected by demo-scenarios.ts -->
+<!-- The payer-network-check skill (active, not test-mode) will auto-decline this referral -->
+<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <realmCode code="US"/>
+  <typeId root="2.16.840.1.113883.1.3" extension="POCD_HD000040"/>
+  <templateId root="2.16.840.1.113883.10.20.22.1.1"/>
+  <templateId root="2.16.840.1.113883.10.20.22.1.14"/>
+  <id root="2.16.840.1.113883.3.9999" extension="DEMO-PAYER-001"/>
+  <code code="57133-1" codeSystem="2.16.840.1.113883.6.1" displayName="Referral Note"/>
+  <title>Referral Note</title>
+  <effectiveTime value="20260320120000+0000"/>
+  <confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>
+  <languageCode code="en-US"/>
+
+  <recordTarget>
+    <patientRole>
+      <id root="2.16.840.1.113883.3.9999" extension="PAT-DEMO-PAYER"/>
+      <addr use="HP">
+        <streetAddressLine>54 Willow Court</streetAddressLine>
+        <city>Naperville</city>
+        <state>IL</state>
+        <postalCode>60540</postalCode>
+        <country>US</country>
+      </addr>
+      <telecom use="HP" value="tel:+1-555-555-0123"/>
+      <patient>
+        <name use="L">
+          <given>Marcus</given>
+          <family>Webb</family>
+        </name>
+        <administrativeGenderCode code="M" codeSystem="2.16.840.1.113883.5.1" displayName="Male"/>
+        <birthTime value="19680910"/>
+        <languageCommunication>
+          <languageCode code="en"/>
+          <preferenceInd value="true"/>
+        </languageCommunication>
+      </patient>
+    </patientRole>
+  </recordTarget>
+
+  <author>
+    <time value="20260320120000+0000"/>
+    <assignedAuthor>
+      <id root="2.16.840.1.113883.3.9999" extension="PROV-DR-NGUYEN"/>
+      <assignedPerson>
+        <name>
+          <given>Linh</given>
+          <family>Nguyen</family>
+          <prefix>Dr.</prefix>
+        </name>
+      </assignedPerson>
+      <representedOrganization>
+        <name>Naperville Internal Medicine</name>
+        <telecom use="WP" value="tel:+1-555-678-9012"/>
+        <addr>
+          <streetAddressLine>200 Medical Center Drive</streetAddressLine>
+          <city>Naperville</city>
+          <state>IL</state>
+          <postalCode>60540</postalCode>
+        </addr>
+      </representedOrganization>
+    </assignedAuthor>
+  </author>
+
+  <custodian>
+    <assignedCustodian>
+      <representedCustodianOrganization>
+        <id root="2.16.840.1.113883.3.9999" extension="ORG-NIM"/>
+        <name>Naperville Internal Medicine</name>
+      </representedCustodianOrganization>
+    </assignedCustodian>
+  </custodian>
+
+  <component>
+    <structuredBody>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.13"/>
+          <code code="46239-0" codeSystem="2.16.840.1.113883.6.1"
+                displayName="Chief Complaint and Reason for Visit"/>
+          <title>Chief Complaint / Reason for Referral</title>
+          <text>Patient referred for orthopedic evaluation due to chronic right knee pain with progressive limitation of mobility over 18 months. X-ray shows moderate osteoarthritis with joint space narrowing. Conservative treatment (NSAIDs, physical therapy) has not provided adequate relief. Requesting evaluation for possible surgical intervention including total knee replacement.</text>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.5.1"/>
+          <code code="11450-4" codeSystem="2.16.840.1.113883.6.1" displayName="Problem List"/>
+          <title>Problems</title>
+          <text>
+            <list>
+              <item>Right knee osteoarthritis, moderate — ICD-10: M17.11</item>
+              <item>Chronic right knee pain — ICD-10: M25.361</item>
+              <item>Limited range of motion, right knee</item>
+              <item>Obesity — BMI 31.2 — ICD-10: E66.9</item>
+              <item>Essential hypertension — ICD-10: I10</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <code code="64572001" codeSystem="2.16.840.1.113883.6.96" displayName="Condition"/>
+                  <value xsi:type="CD" code="239873007" codeSystem="2.16.840.1.113883.6.96"
+                         displayName="Osteoarthritis of knee"/>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <code code="64572001" codeSystem="2.16.840.1.113883.6.96" displayName="Condition"/>
+                  <value xsi:type="CD" code="38341003" codeSystem="2.16.840.1.113883.6.96"
+                         displayName="Essential hypertension"/>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.1.1"/>
+          <code code="10160-0" codeSystem="2.16.840.1.113883.6.1" displayName="Medications"/>
+          <title>Medications</title>
+          <text>
+            <list>
+              <item>Naproxen 500 mg PO twice daily — for knee pain</item>
+              <item>Lisinopril 10 mg PO daily — for hypertension</item>
+              <item>Omeprazole 20 mg PO daily — GI protection with NSAID</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <substanceAdministration classCode="SBADM" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+              <consumable>
+                <manufacturedProduct classCode="MANU">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                  <manufacturedMaterial>
+                    <code code="849574" codeSystem="2.16.840.1.113883.6.88" displayName="Naproxen 500 mg"/>
+                  </manufacturedMaterial>
+                </manufacturedProduct>
+              </consumable>
+            </substanceAdministration>
+          </entry>
+          <entry typeCode="DRIV">
+            <substanceAdministration classCode="SBADM" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+              <consumable>
+                <manufacturedProduct classCode="MANU">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                  <manufacturedMaterial>
+                    <code code="314076" codeSystem="2.16.840.1.113883.6.88" displayName="Lisinopril 10 mg"/>
+                  </manufacturedMaterial>
+                </manufacturedProduct>
+              </consumable>
+            </substanceAdministration>
+          </entry>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.6.1"/>
+          <code code="48765-2" codeSystem="2.16.840.1.113883.6.1" displayName="Allergies"/>
+          <title>Allergies and Adverse Reactions</title>
+          <text>
+            <list>
+              <item>Aspirin — GI upset (mild)</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.30"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.7"/>
+                  <participant typeCode="CSM">
+                    <participantRole classCode="MANU">
+                      <playingEntity classCode="MMAT">
+                        <code code="243670" codeSystem="2.16.840.1.113883.6.88" displayName="Aspirin"/>
+                      </playingEntity>
+                    </participantRole>
+                  </participant>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.3.1"/>
+          <code code="30954-2" codeSystem="2.16.840.1.113883.6.1" displayName="Results"/>
+          <title>Diagnostic Results</title>
+          <text>
+            <list>
+              <item>Right knee X-ray (2026-02-20): Moderate medial compartment joint space narrowing, osteophyte formation, no fracture</item>
+              <item>MRI Right Knee (2026-03-01): Grade III medial meniscal tear, moderate OA changes, no ligamentous injury</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <organizer classCode="BATTERY" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.1"/>
+              <code code="36643-5" codeSystem="2.16.840.1.113883.6.1" displayName="Knee X-ray"/>
+              <statusCode code="completed"/>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.2"/>
+                  <code code="36643-5" codeSystem="2.16.840.1.113883.6.1" displayName="Right knee X-ray"/>
+                  <effectiveTime value="20260220"/>
+                  <value xsi:type="ST">Moderate medial compartment joint space narrowing with osteophyte formation</value>
+                </observation>
+              </component>
+            </organizer>
+          </entry>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.4.1"/>
+          <code code="8716-3" codeSystem="2.16.840.1.113883.6.1" displayName="Vital Signs"/>
+          <title>Vital Signs</title>
+          <text>
+            <list>
+              <item>Blood Pressure: 144/90 mmHg</item>
+              <item>Heart Rate: 82 bpm</item>
+              <item>Weight: 215 lbs, Height: 5'11", BMI: 30.0</item>
+            </list>
+          </text>
+        </section>
+      </component>
+
+    </structuredBody>
+  </component>
+</ClinicalDocument>

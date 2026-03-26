@@ -156,6 +156,22 @@ describe('dispositionService', () => {
       expect(callArg.text).toContain('MSA|AA');
     });
 
+    it('email subject includes Accepted and referral ID', async () => {
+      const id = await seedReferral('Acknowledged');
+      await accept(id, 'dr-smith');
+      const callArg = mockSendMail.mock.calls[0][0] as { subject: string };
+      expect(callArg.subject).toContain('Accepted');
+      expect(callArg.subject).toContain(`#${id}`);
+    });
+
+    it('email body contains human-readable preamble before HL7', async () => {
+      const id = await seedReferral('Acknowledged');
+      await accept(id, 'dr-smith');
+      const callArg = mockSendMail.mock.calls[0][0] as { text: string };
+      expect(callArg.text).toContain('REFERRAL ACCEPTED');
+      expect(callArg.text).toContain('HL7 RRI^I12');
+    });
+
     it('logs the outbound message to outbound_messages', async () => {
       const id = await seedReferral('Acknowledged');
       await accept(id, 'dr-smith');
@@ -193,6 +209,22 @@ describe('dispositionService', () => {
 
       const callArg = mockSendMail.mock.calls[0][0] as { text: string };
       expect(callArg.text).toContain('MSA|AR');
+    });
+
+    it('email subject includes Declined and referral ID', async () => {
+      const id = await seedReferral('Acknowledged');
+      await decline(id, 'dr-smith', 'Out of Scope');
+      const callArg = mockSendMail.mock.calls[0][0] as { subject: string };
+      expect(callArg.subject).toContain('Declined');
+      expect(callArg.subject).toContain(`#${id}`);
+    });
+
+    it('email body contains human-readable preamble before HL7', async () => {
+      const id = await seedReferral('Acknowledged');
+      await decline(id, 'dr-smith', 'Out of Scope');
+      const callArg = mockSendMail.mock.calls[0][0] as { text: string };
+      expect(callArg.text).toContain('REFERRAL DECLINED');
+      expect(callArg.text).toContain('HL7 RRI^I12');
     });
 
     it('RRI message text contains the decline reason', async () => {

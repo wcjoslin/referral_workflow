@@ -10,45 +10,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { processInboundMessage } from '../src/modules/prd01/messageProcessor';
 import { ingestReferral } from '../src/modules/prd02/referralService';
+import { buildRawEmail } from '../src/demoScenarios';
 
 const FIXTURE = path.resolve(__dirname, '../tests/fixtures/sample-referral.xml');
 const cdaXml = fs.readFileSync(FIXTURE, 'utf-8');
 const PORT = process.env.PORT ?? '3000';
-
-// Build a minimal raw RFC 2822 email with the C-CDA attached
-function buildRawEmail(cdaContent: string): string {
-  const boundary = 'DEMO_BOUNDARY_001';
-  const CRLF = '\r\n';
-
-  const textPart = [
-    `--${boundary}`,
-    'Content-Type: text/plain',
-    '',
-    'Please find the referral attached.',
-  ].join(CRLF);
-
-  const cdaPart = [
-    `--${boundary}`,
-    'Content-Type: application/xml',
-    'Content-Disposition: attachment; filename="referral.xml"',
-    'Content-Transfer-Encoding: base64',
-    '',
-    Buffer.from(cdaContent).toString('base64'),
-  ].join(CRLF);
-
-  const parts = [textPart, cdaPart, `--${boundary}--`].join(CRLF);
-
-  const headers = [
-    'From: referrer@hospital.direct',
-    'To: receiving@specialist.direct',
-    'Subject: Referral — Demo Patient',
-    `Message-ID: <demo-seed-${Date.now()}@hospital.direct>`,
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    '',
-  ].join(CRLF);
-
-  return headers + parts;
-}
 
 async function main(): Promise<void> {
   console.log('Seeding demo referral...\n');

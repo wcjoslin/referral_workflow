@@ -37,6 +37,44 @@ import { desc, and } from 'drizzle-orm';
 export const app = express();
 app.use(express.json());
 
+// ── Navigation ────────────────────────────────────────────────────────────────
+
+const NAV_HTML = `<nav style="background:#1a1a2e;padding:12px 24px;display:flex;gap:24px;align-items:center;position:sticky;top:0;z-index:100;box-shadow:0 2px 4px rgba(0,0,0,0.4);">
+  <span style="color:#fff;font-weight:700;font-size:0.95rem;letter-spacing:0.02em;">360X Referral</span>
+  <a href="/" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;margin-left:8px;">Home</a>
+  <a href="/messages" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Inbox</a>
+  <a href="/rules/admin" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Skills</a>
+  <a href="/demo" style="color:#ffc107;text-decoration:none;font-size:0.88rem;font-weight:600;">Demo Launcher</a>
+</nav>`;
+
+function injectNav(html: string): string {
+  return html.replace('<!--__NAV__-->', NAV_HTML);
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
+app.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const allReferrals = await db.select().from(referrals).orderBy(desc(referrals.createdAt));
+    const items = await Promise.all(
+      allReferrals.map(async (r) => {
+        const [patient] = await db.select().from(patients).where(eq(patients.id, r.patientId));
+        return { referral: r, patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' } };
+      }),
+    );
+    const templatePath = path.join(__dirname, 'views', 'dashboard.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__DASHBOARD_DATA__*/',
+      `window.__DASHBOARD_DATA__ = ${JSON.stringify({ items })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Health check
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
@@ -100,7 +138,7 @@ app.get('/referrals/:id/review', async (req: Request, res: Response, next: NextF
     );
 
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.send(injectNav(html));
   } catch (err) {
     next(err);
   }
@@ -179,7 +217,7 @@ app.get('/scheduler/queue', async (_req: Request, res: Response, next: NextFunct
       `window.__QUEUE_DATA__ = ${JSON.stringify(items)};`,
     );
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.send(injectNav(html));
   } catch (err) {
     next(err);
   }
@@ -215,7 +253,7 @@ app.get('/referrals/:id/schedule', async (req: Request, res: Response, next: Nex
       })};`,
     );
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.send(injectNav(html));
   } catch (err) {
     next(err);
   }
@@ -298,7 +336,7 @@ app.get('/referrals/:id/encounter', async (req: Request, res: Response, next: Ne
       })};`,
     );
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.send(injectNav(html));
   } catch (err) {
     next(err);
   }
@@ -364,7 +402,7 @@ app.get('/referrals/:id/consult-note', async (req: Request, res: Response, next:
       })};`,
     );
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.send(injectNav(html));
   } catch (err) {
     next(err);
   }
@@ -413,7 +451,7 @@ app.get('/messages', async (_req: Request, res: Response, next: NextFunction) =>
       `window.__HISTORY_DATA__ = ${JSON.stringify({ messages })};`,
     );
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.send(injectNav(html));
   } catch (err) {
     next(err);
   }
@@ -448,7 +486,7 @@ app.get('/rules/admin', async (_req: Request, res: Response, next: NextFunction)
       `window.__RULES_DATA__ = ${JSON.stringify({ skills: skillStats })};`,
     );
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.send(injectNav(html));
   } catch (err) {
     next(err);
   }
@@ -460,7 +498,7 @@ app.get('/rules/create', async (_req: Request, res: Response, next: NextFunction
     const templatePath = path.join(__dirname, 'views', 'ruleCreate.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     res.setHeader('Content-Type', 'text/html');
-    res.send(template);
+    res.send(injectNav(template));
   } catch (err) {
     next(err);
   }
@@ -542,7 +580,7 @@ app.get('/rules/:name', async (req: Request, res: Response, next: NextFunction) 
       `window.__EDIT_DATA__ = ${JSON.stringify({ skill, body, assets, references })};`,
     );
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.send(injectNav(html));
   } catch (err) {
     next(err);
   }
@@ -678,7 +716,7 @@ app.get('/rules/:name/history', async (req: Request, res: Response, next: NextFu
       `window.__HISTORY_DATA__ = ${JSON.stringify({ skillName: nameParam, executions })};`,
     );
     res.setHeader('Content-Type', 'text/html');
-    res.send(html);
+    res.send(injectNav(html));
   } catch (err) {
     next(err);
   }
@@ -787,6 +825,75 @@ app.post('/referrals/:id/override', async (req: Request, res: Response, next: Ne
   } catch (err) {
     next(err);
   }
+});
+
+// ── Demo Launcher routes ─────────────────────────────────────────────────────
+
+app.get('/demo', (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const templatePath = path.join(__dirname, 'views', 'demoLauncher.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(template));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/demo/launch', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { scenario } = req.body as { scenario?: string };
+    const validScenarios = ['full-workflow', 'incomplete-info', 'fhir-enriched', 'payer-rejection'] as const;
+    type Scenario = typeof validScenarios[number];
+    if (!scenario || !validScenarios.includes(scenario as Scenario)) {
+      res.status(400).json({ error: `scenario must be one of: ${validScenarios.join(', ')}` });
+      return;
+    }
+    const { launchFullWorkflow, launchIncompleteInfo, launchFhirEnriched, launchPayerRejection } =
+      await import('./demoScenarios');
+    const scenarioFns: Record<Scenario, () => Promise<number>> = {
+      'full-workflow':   launchFullWorkflow,
+      'incomplete-info': launchIncompleteInfo,
+      'fhir-enriched':   launchFhirEnriched,
+      'payer-rejection': launchPayerRejection,
+    };
+    const referralId = await scenarioFns[scenario as Scenario]();
+    res.json({ referralId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/demo/events/:referralId', (req: Request, res: Response) => {
+  const idParam = Array.isArray(req.params.referralId) ? req.params.referralId[0] : req.params.referralId;
+  const referralId = parseInt(idParam, 10);
+  if (isNaN(referralId)) { res.status(400).end(); return; }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  let lastState = '';
+  const TERMINAL_STATES = ['Declined', 'Closed-Confirmed'];
+
+  const intervalId = setInterval(async () => {
+    try {
+      const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+      if (!referral) return;
+      if (referral.state !== lastState) {
+        lastState = referral.state;
+        res.write(`data: ${JSON.stringify({ state: referral.state, at: new Date().toISOString() })}\n\n`);
+        if (TERMINAL_STATES.includes(referral.state)) {
+          res.write(`event: done\ndata: ${JSON.stringify({ state: referral.state })}\n\n`);
+          clearInterval(intervalId);
+          res.end();
+        }
+      }
+    } catch { /* ignore poll errors */ }
+  }, 1500);
+
+  req.on('close', () => clearInterval(intervalId));
 });
 
 // Generic error handler

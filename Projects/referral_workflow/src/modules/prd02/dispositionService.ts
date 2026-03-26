@@ -85,7 +85,8 @@ async function applyDisposition(
   });
 
   // Send and log
-  await sendRriMessage(rriMessage, referral.referrerAddress, messageControlId, referralId);
+  const acceptCode = nextState === ReferralState.ACCEPTED ? 'AA' : 'AR';
+  await sendRriMessage(rriMessage, referral.referrerAddress, messageControlId, referralId, acceptCode);
 
   console.log(
     `[DispositionService] Referral #${referralId} ${nextState} by ${clinicianId}. RRI sent (control ID: ${messageControlId})`,
@@ -123,6 +124,7 @@ export async function sendRriMessage(
   toAddress: string,
   messageControlId: string,
   referralId: number | null,
+  acceptCode?: 'AA' | 'AR',
 ): Promise<void> {
   const transport = nodemailer.createTransport({
     host: config.smtp.host,
@@ -130,11 +132,30 @@ export async function sendRriMessage(
     auth: { user: config.smtp.user, pass: config.smtp.password },
   });
 
+  const idLabel = referralId != null ? `#${referralId}` : 'N/A';
+  const subject =
+    acceptCode === 'AA'
+      ? `Referral Accepted — ${idLabel}`
+      : acceptCode === 'AR'
+        ? `Referral Declined — ${idLabel}`
+        : 'Referral Disposition';
+
+  const preamble =
+    acceptCode === 'AA'
+      ? [`REFERRAL ACCEPTED — ${idLabel}`, ``, `This referral has been accepted and will be scheduled.`]
+      : acceptCode === 'AR'
+        ? [`REFERRAL DECLINED — ${idLabel}`, ``, `This referral has been declined. See decline reason in the HL7 message below.`]
+        : [];
+
+  const body = preamble.length > 0
+    ? [...preamble, ``, `--- HL7 RRI^I12 ---`, ``, rriMessage].join('\n')
+    : rriMessage;
+
   await transport.sendMail({
     from: config.receiving.directAddress,
     to: toAddress,
-    subject: 'Referral Disposition',
-    text: rriMessage,
+    subject,
+    text: body,
   });
 
   // Log to outbound_messages if this referral is in the DB
