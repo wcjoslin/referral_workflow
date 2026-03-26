@@ -5,6 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "start": "node -r ./scripts/node-polyfill.js dist/index.js",
     "dev": "ts-node -r ./scripts/node-polyfill.js src/index.ts",
     "test": "jest",
     "test:watch": "jest --watch",
