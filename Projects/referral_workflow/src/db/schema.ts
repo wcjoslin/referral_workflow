@@ -56,3 +56,38 @@ export const outboundMessages = sqliteTable('outbound_messages', {
   sentAt: integer('sent_at', { mode: 'timestamp' }).notNull(),
   acknowledgedAt: integer('acknowledged_at', { mode: 'timestamp' }),
 });
+
+// ── Claims Attachment Workflow (X12N 277/275) ─────────────────────────────────
+
+export const attachmentRequests = sqliteTable('attachment_requests', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  patientId: integer('patient_id').references(() => patients.id), // nullable until FHIR patient matched
+  controlNumber: text('control_number').notNull().unique(), // ISA13 interchange control number from 277
+  claimNumber: text('claim_number'), // claim reference from 277
+  payerName: text('payer_name').notNull(),
+  payerIdentifier: text('payer_identifier').notNull(), // payer ID from NM1 loop
+  subscriberName: text('subscriber_name').notNull(), // patient name as provided by payer
+  subscriberId: text('subscriber_id'), // member/subscriber ID
+  subscriberDob: text('subscriber_dob'), // ISO 8601, used for FHIR patient match
+  requestedLoincCodes: text('requested_loinc_codes').notNull(), // JSON array of LOINC strings
+  sourceFile: text('source_file').notNull(), // original .edi filename
+  state: text('state').notNull().default('Received'), // see ClaimsAttachmentState
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+});
+
+export const attachmentResponses = sqliteTable('attachment_responses', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  requestId: integer('request_id')
+    .references(() => attachmentRequests.id)
+    .notNull(),
+  loincCode: text('loinc_code').notNull(), // one response per LOINC code requested
+  ccdaDocumentType: text('ccda_document_type').notNull(), // human label, e.g. "History and Physical"
+  ccdaXml: text('ccda_xml'), // generated C-CDA document (null until built)
+  fhirData: text('fhir_data'), // JSON — FHIR query results used to build the C-CDA
+  signedByName: text('signed_by_name'),
+  signedByNpi: text('signed_by_npi'),
+  signedAt: integer('signed_at', { mode: 'timestamp' }),
+  sentAt: integer('sent_at', { mode: 'timestamp' }),
+  x12ControlNumber: text('x12_control_number'), // 275 ISA control number assigned at send time
+});

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claims Attachment Queue</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      background: #f5f5f5;
+      color: #333;
+    }
+    .container {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 24px;
+      color: #1a1a2e;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    th {
+      background: #f0f0f0;
+      padding: 12px 16px;
+      text-align: left;
+      font-weight: 600;
+      border-bottom: 1px solid #ddd;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #eee;
+      font-size: 0.95rem;
+    }
+    tr:hover {
+      background: #f9f9f9;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 3px;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .badge.received {
+      background: #e3f2fd;
+      color: #1976d2;
+    }
+    .badge.processing {
+      background: #fff3e0;
+      color: #f57c00;
+    }
+    .badge.pending-signature {
+      background: #fce4ec;
+      color: #c2185b;
+    }
+    .badge.sent {
+      background: #e8f5e9;
+      color: #388e3c;
+    }
+    a {
+      color: #1976d2;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .empty {
+      padding: 40px;
+      text-align: center;
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+  <!--__NAV__-->
+
+  <div class="container">
+    <h1>Claims Attachment Requests</h1>
+
+    <div id="content"></div>
+  </div>
+
+  <script>/*__CLAIMS_DATA__*/</script>
+  <script>
+    const data = window.__CLAIMS_DATA__;
+
+    function formatDate(timestamp) {
+      if (!timestamp) return 'N/A';
+      const date = new Date(timestamp);
+      return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function renderTable() {
+      const content = document.getElementById('content');
+
+      if (!data.items || data.items.length === 0) {
+        content.innerHTML = '<div class="empty">No claims requests yet.</div>';
+        return;
+      }
+
+      let html = `<table>
+        <thead>
+          <tr>
+            <th>Patient</th>
+            <th>Payer</th>
+            <th>Claim #</th>
+            <th>Documents</th>
+            <th>State</th>
+            <th>Received</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+      data.items.forEach(item => {
+        const req = item.request;
+        const loincCodes = JSON.parse(req.requestedLoincCodes).length;
+        const stateBadgeClass = req.state.toLowerCase().replace(/ /g, '-');
+
+        html += `<tr>
+          <td>${req.subscriberName}</td>
+          <td>${req.payerName}</td>
+          <td>${req.claimNumber || 'N/A'}</td>
+          <td>${loincCodes} document(s)</td>
+          <td><span class="badge ${stateBadgeClass}">${req.state}</span></td>
+          <td>${formatDate(req.createdAt)}</td>
+          <td><a href="/claims/${req.id}">View</a></td>
+        </tr>`;
+      });
+
+      html += `</tbody></table>`;
+      content.innerHTML = html;
+    }
+
+    renderTable();
+  </script>
+</body>
+</html>

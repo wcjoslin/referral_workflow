@@ -13,6 +13,10 @@
  *   GET  /referrals/:id/consult-note    — consult note form (PRD-04)
  *   POST /referrals/:id/consult-note    — generate and send consult note (PRD-04)
  *   GET  /messages                      — message history dashboard (PRD-07)
+ *   GET  /claims                        — claims attachment queue (claims intake)
+ *   GET  /claims/:id                    — claims request detail + sign UI
+ *   POST /claims/:id/sign               — sign and embed provider info
+ *   POST /claims/:id/send               — build 275 and send
  */
 
 import express, { Request, Response, NextFunction } from 'express';
@@ -20,20 +24,21 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { eq } from 'drizzle-orm';
 import { db } from './db';
-import { referrals, patients, outboundMessages } from './db/schema';
+import { referrals, patients, outboundMessages, attachmentRequests, attachmentResponses } from './db/schema';
 import { accept, decline, ReferralNotFoundError as DispositionNotFoundError } from './modules/prd02/dispositionService';
-import { getCachedAssessment, ingestReferral } from './modules/prd02/referralService';
-import { processInboundMessage } from './modules/prd01/messageProcessor';
-import { buildRawEmail } from './demoScenarios';
+import { getCachedAssessment } from './modules/prd02/referralService';
 import { scheduleReferral, ReferralNotFoundError, SchedulingConflictError } from './modules/prd03/schedulingService';
 import { getResources } from './modules/prd03/resourceCalendar';
 import { markEncounterComplete, ReferralNotFoundError as EncounterNotFoundError } from './modules/prd05/encounterService';
 import { generateAndSend, ReferralNotFoundError as ConsultNotFoundError } from './modules/prd04/consultNoteService';
 import { InvalidStateTransitionError } from './state/referralStateMachine';
+import { InvalidClaimsStateTransitionError } from './state/claimsStateMachine';
 import { config } from './config';
 import { skillExecutions } from './db/schema';
 import { getSkillCatalog, loadSkillBody, loadSkillAssets, loadSkillReferences, parseSkillMd } from './modules/prd09/skillLoader';
 import { generateSkill, writeSkillToDir } from './modules/prd09/skillGenerator';
+import { signRequest } from './modules/claims/review/signatureService';
+import { sendResponse } from './modules/claims/response/responseService';
 import { desc, and } from 'drizzle-orm';
 
 export const app = express();
@@ -45,6 +50,8 @@ const NAV_HTML = `<nav style="background:#1a1a2e;padding:12px 24px;display:flex;
   <span style="color:#fff;font-weight:700;font-size:0.95rem;letter-spacing:0.02em;">360X Referral</span>
   <a href="/" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;margin-left:8px;">Home</a>
   <a href="/messages" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Inbox</a>
+  <a href="/overview" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Overview</a>
+  <a href="/claims" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Claims</a>
   <a href="/rules/admin" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Skills</a>
   <a href="/demo" style="color:#ffc107;text-decoration:none;font-size:0.88rem;font-weight:600;">Demo Launcher</a>
 </nav>`;
@@ -82,13 +89,13 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
 });
 
-app.get('/seed', async (_req: Request, res: Response, next: NextFunction) => {
+// Workflow Overview page
+app.get('/overview', (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const cdaXml = fs.readFileSync(path.resolve(__dirname, '../tests/fixtures/sample-referral.xml'), 'utf-8');
-    const rawEmail = buildRawEmail(cdaXml);
-    const processed = await processInboundMessage(rawEmail);
-    const referralId = await ingestReferral(processed);
-    res.redirect(`/referrals/${referralId}/review`);
+    const templatePath = path.join(__dirname, 'views', 'workflowOverview.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(template));
   } catch (err) {
     next(err);
   }
@@ -911,6 +918,105 @@ app.get('/demo/events/:referralId', (req: Request, res: Response) => {
 });
 
 // Generic error handler
+// ── Claims Attachment Workflow Routes ────────────────────────────────────────
+
+// Claims queue
+app.get('/claims', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requests = await db.select().from(attachmentRequests).orderBy(desc(attachmentRequests.createdAt));
+    const items = await Promise.all(
+      requests.map(async (ar) => {
+        const [patient] = ar.patientId ? await db.select().from(patients).where(eq(patients.id, ar.patientId)) : [null];
+        return {
+          request: ar,
+          patient: patient ?? { firstName: ar.subscriberName, lastName: '', dateOfBirth: ar.subscriberDob },
+        };
+      }),
+    );
+    const templatePath = path.join(__dirname, 'views', 'claimsQueue.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__CLAIMS_DATA__*/',
+      `window.__CLAIMS_DATA__ = ${JSON.stringify({ items })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Claims request detail and sign form
+app.get('/claims/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const requestId = parseInt(idParam, 10);
+
+    const [request] = await db.select().from(attachmentRequests).where(eq(attachmentRequests.id, requestId));
+    if (!request) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+
+    const [patient] = request.patientId
+      ? await db.select().from(patients).where(eq(patients.id, request.patientId))
+      : [null];
+
+    const responses = await db
+      .select()
+      .from(attachmentResponses)
+      .where(eq(attachmentResponses.requestId, requestId));
+
+    const templatePath = path.join(__dirname, 'views', 'claimsRequestDetail.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__CLAIMS_DETAIL__*/',
+      `window.__CLAIMS_DETAIL__ = ${JSON.stringify({
+        request,
+        patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
+        responses,
+      })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Sign request
+app.post('/claims/:id/sign', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const requestId = parseInt(idParam, 10);
+    const { providerName, providerNpi } = req.body;
+
+    if (!providerName || !providerNpi) {
+      return res.status(400).json({ error: 'Provider name and NPI required' });
+    }
+
+    await signRequest(requestId, providerName, providerNpi);
+
+    res.json({ success: true, message: 'Request signed successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Send response (275)
+app.post('/claims/:id/send', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const requestId = parseInt(idParam, 10);
+
+    const filePath = await sendResponse(requestId);
+
+    res.json({ success: true, message: 'Response sent', filePath });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Error handler
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error('[Server] Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });

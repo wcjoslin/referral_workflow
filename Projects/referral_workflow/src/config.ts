@@ -53,4 +53,8 @@ export const config = {
   server: {
     port: parseInt(optionalEnv('PORT', '3000'), 10),
   },
+  claims: {
+    watchDir: optionalEnv('CLAIMS_WATCH_DIR', './claims-inbox'),
+    outboundDir: optionalEnv('CLAIMS_OUTBOUND_DIR', './claims-outbox'),
+  },
 } as const;

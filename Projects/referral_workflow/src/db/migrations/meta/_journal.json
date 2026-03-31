@@ -36,6 +36,13 @@
       "when": 1774465000000,
       "tag": "0004_add_skill_executions",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1774978448837,
+      "tag": "0005_add_claims_tables",
+      "breakpoints": true
     }
   ]
 }

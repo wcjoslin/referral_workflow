@@ -2,6 +2,7 @@ import { startInboxMonitor } from './modules/prd01/inboxMonitor';
 import { startServer } from './server';
 import { getSkillCatalog, startSkillWatcher } from './modules/prd09/skillLoader';
 import { checkPendingInfoTimeouts } from './modules/prd09/pendingInfoChecker';
+import { startEdiWatcher } from './modules/claims/intake/ediWatcher';
 import { config } from './config';
 
 // PRD-09: Initialize skill catalog and file watcher
@@ -20,6 +21,11 @@ startServer();
 startInboxMonitor().catch((err: Error) => {
   console.warn(`[InboxMonitor] Could not connect — ${err.message}`);
   console.warn('[InboxMonitor] Server is still running. Use scripts/seed-demo.ts to inject a referral manually.');
+});
+
+// Start EDI file watcher for X12N 277 claims requests
+startEdiWatcher().catch((err: Error) => {
+  console.warn(`[EdiWatcher] Could not start — ${err.message}`);
 });
 
 // PRD-09: Start pending info timeout checker

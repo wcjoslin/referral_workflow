@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claims Request Detail</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      background: #f5f5f5;
+      color: #333;
+    }
+    .container {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    h1, h2 {
+      color: #1a1a2e;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 24px;
+    }
+    h2 {
+      font-size: 1.3rem;
+      margin-top: 24px;
+    }
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    .field {
+      display: flex;
+      margin-bottom: 12px;
+    }
+    .label {
+      font-weight: 600;
+      width: 150px;
+      color: #666;
+    }
+    .value {
+      flex: 1;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 3px;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .badge.pending-signature {
+      background: #fce4ec;
+      color: #c2185b;
+    }
+    .document-list {
+      margin-top: 16px;
+    }
+    .document-item {
+      background: #f9f9f9;
+      padding: 12px;
+      margin-bottom: 12px;
+      border-radius: 3px;
+      border-left: 3px solid #1976d2;
+    }
+    .document-preview {
+      margin-top: 8px;
+      max-height: 300px;
+      overflow-y: auto;
+      background: #fff;
+      padding: 8px;
+      border-radius: 2px;
+      border: 1px solid #ddd;
+      font-size: 0.9rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: #333;
+    }
+    input[type="text"], input[type="email"] {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 3px;
+      font-size: 0.95rem;
+    }
+    input:focus {
+      outline: none;
+      border-color: #1976d2;
+      box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1);
+    }
+    button {
+      background: #1976d2;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+    button:hover {
+      background: #1565c0;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .status-bar {
+      padding: 12px;
+      border-radius: 3px;
+      margin-bottom: 16px;
+      display: none;
+    }
+    .status-bar.show {
+      display: block;
+    }
+    .status-bar.success {
+      background: #e8f5e9;
+      color: #2e7d32;
+      border-left: 3px solid #2e7d32;
+    }
+    .status-bar.error {
+      background: #ffebee;
+      color: #c62828;
+      border-left: 3px solid #c62828;
+    }
+  </style>
+</head>
+<body>
+  <!--__NAV__-->
+
+  <div class="container">
+    <h1>Claims Attachment Request</h1>
+
+    <div id="content"></div>
+  </div>
+
+  <script>/*__CLAIMS_DETAIL__*/</script>
+  <script>
+    const data = window.__CLAIMS_DETAIL__;
+
+    function renderDetail() {
+      const content = document.getElementById('content');
+      const req = data.request;
+      const loincCodes = JSON.parse(req.requestedLoincCodes);
+      const canSign = req.state === 'Processing' || req.state === 'Pending-Signature';
+
+      let html = `
+        <div class="card">
+          <h2>Request Information</h2>
+          <div class="field">
+            <div class="label">Patient:</div>
+            <div class="value">${req.subscriberName} (DOB: ${req.subscriberDob || 'N/A'})</div>
+          </div>
+          <div class="field">
+            <div class="label">Payer:</div>
+            <div class="value">${req.payerName}</div>
+          </div>
+          <div class="field">
+            <div class="label">Claim #:</div>
+            <div class="value">${req.claimNumber || 'N/A'}</div>
+          </div>
+          <div class="field">
+            <div class="label">State:</div>
+            <div class="value"><span class="badge pending-signature">${req.state}</span></div>
+          </div>
+          <div class="field">
+            <div class="label">Requested:</div>
+            <div class="value">${new Date(req.createdAt).toLocaleDateString()}</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Documents to Send (${loincCodes.length})</h2>
+          <div class="document-list">
+      `;
+
+      data.responses.forEach(resp => {
+        html += `
+          <div class="document-item">
+            <strong>${resp.ccdaDocumentType}</strong> (LOINC: ${resp.loincCode})
+            ${resp.signedByName ? `<br/>Signed by: ${resp.signedByName}` : ''}
+            ${resp.ccdaXml ? `<div class="document-preview">${escapeHtml(resp.ccdaXml.substring(0, 500))}...</div>` : '<em>Not built yet</em>'}
+          </div>
+        `;
+      });
+
+      html += `
+          </div>
+        </div>
+      `;
+
+      if (canSign && data.responses.length > 0 && !data.responses[0].signedByName) {
+        html += `
+          <div class="card">
+            <h2>Provider Signature</h2>
+            <div id="statusBar" class="status-bar"></div>
+            <div class="form-group">
+              <label>Provider Name:</label>
+              <input type="text" id="providerName" placeholder="First and Last Name">
+            </div>
+            <div class="form-group">
+              <label>NPI:</label>
+              <input type="text" id="providerNpi" placeholder="National Provider ID">
+            </div>
+            <button id="signBtn" onclick="handleSign()">Sign & Send to Signature State</button>
+          </div>
+        `;
+      }
+
+      // Show Send button if signed but not yet sent
+      if (req.state === 'Pending-Signature' && data.responses.length > 0 && data.responses[0].signedByName) {
+        html += `
+          <div class="card">
+            <h2>Send Response</h2>
+            <div id="sendStatusBar" class="status-bar"></div>
+            <p style="margin-bottom: 16px; color: #666;">
+              All documents are signed. Ready to send X12 275 response to payer.
+            </p>
+            <button id="sendBtn" onclick="handleSend()" style="background: #2e7d32;">Send X12 275 Response</button>
+          </div>
+        `;
+      }
+
+      content.innerHTML = html;
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function handleSign() {
+      const name = document.getElementById('providerName').value.trim();
+      const npi = document.getElementById('providerNpi').value.trim();
+
+      if (!name || !npi) {
+        showStatus('error', 'Please enter both provider name and NPI');
+        return;
+      }
+
+      const btn = document.getElementById('signBtn');
+      btn.disabled = true;
+      btn.textContent = 'Signing...';
+
+      fetch(`/claims/${data.request.id}/sign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerName: name, providerNpi: npi }),
+      })
+        .then(r => r.json())
+        .then(result => {
+          if (result.success) {
+            showStatus('success', 'Request signed successfully!');
+            setTimeout(() => {
+              location.reload();
+            }, 1500);
+          } else {
+            showStatus('error', result.error || 'Sign failed');
+            btn.disabled = false;
+            btn.textContent = 'Sign & Send to Signature State';
+          }
+        })
+        .catch(err => {
+          showStatus('error', err.message);
+          btn.disabled = false;
+          btn.textContent = 'Sign & Send to Signature State';
+        });
+    }
+
+    function showStatus(type, message) {
+      const bar = document.getElementById('statusBar');
+      bar.className = `status-bar show ${type}`;
+      bar.textContent = message;
+    }
+
+    function showSendStatus(type, message) {
+      const bar = document.getElementById('sendStatusBar');
+      if (bar) {
+        bar.className = `status-bar show ${type}`;
+        bar.textContent = message;
+      }
+    }
+
+    function handleSend() {
+      const btn = document.getElementById('sendBtn');
+      btn.disabled = true;
+      btn.textContent = 'Sending...';
+
+      fetch(`/claims/${data.request.id}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+        .then(r => r.json())
+        .then(result => {
+          if (result.success) {
+            showSendStatus('success', `Response sent! File: ${result.filePath}`);
+            setTimeout(() => {
+              location.reload();
+            }, 2000);
+          } else {
+            showSendStatus('error', result.error || 'Send failed');
+            btn.disabled = false;
+            btn.textContent = 'Send X12 275 Response';
+          }
+        })
+        .catch(err => {
+          showSendStatus('error', err.message);
+          btn.disabled = false;
+          btn.textContent = 'Send X12 275 Response';
+        });
+    }
+
+    renderDetail();
+  </script>
+</body>
+</html>
