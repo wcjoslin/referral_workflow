@@ -4,131 +4,191 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Referral Review</title>
+  <!-- Vendor stylesheets for ccdaview -->
+  <link rel="stylesheet" href="/static/bootstrap/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/static/dragula/dragula.min.css">
+  <link rel="stylesheet" href="/static/ccdaview/sialia.css">
+  <style>
+    :root {
+      --color-nav-bg: #0d2d3a;
+      --color-brand: #009aab;
+      --color-brand-hover: #007d8a;
+      --color-bg-page: #f0f2f5;
+      --color-text: #212529;
+      --color-text-muted: #6c757d;
+      --color-border: #dee2e6;
+      --color-card: #fff;
+      --color-table-header: #f0f2f4;
+      --color-badge-pending: #fff3cd;
+      --color-badge-pending-text: #664d03;
+      --color-badge-accepted: #d1e7dd;
+      --color-badge-accepted-text: #0a3622;
+      --color-badge-declined: #f8d7da;
+      --color-badge-declined-text: #58151c;
+      --color-priority: #dc3545;
+    }
+  </style>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #f4f6f8; color: #222; }
-    .container { max-width: 820px; margin: 32px auto; padding: 0 16px; }
-    h1 { font-size: 1.4rem; margin-bottom: 24px; color: #1a1a2e; }
-    .card { background: #fff; border-radius: 8px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: .06em; color: #666; margin-bottom: 14px; }
+    body { font-family: system-ui, sans-serif; background: var(--color-bg-page); color: var(--color-text); }
+    .review-grid { display: grid; grid-template-columns: 1fr 420px; gap: 24px; max-width: 1300px; margin: 32px auto; padding: 0 24px; }
+    .review-grid.no-ccda { grid-template-columns: 1fr; }
+    .review-left { min-width: 0; }
+    .review-right { position: sticky; top: 72px; height: calc(100vh - 96px); display: flex; flex-direction: column; border-radius: 8px; overflow: hidden; background: var(--color-card); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .review-grid.no-ccda .review-right { display: none; }
+    .ccda-panel-header { padding: 12px 16px; border-bottom: 1px solid var(--color-border); font-size: 0.85rem; text-transform: uppercase; letter-spacing: .06em; color: var(--color-text-muted); background: var(--color-table-header); }
+    .ccda-panel-header .muted-label { font-size: 0.75rem; font-weight: 400; color: #999; margin-left: 6px; }
+    #ccdaLoading { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 0.95rem; color: var(--color-text-muted); }
+    .ccda-panel-body { flex: 1; overflow-y: scroll; padding: 0; }
+    .ccda-panel-body sialia { display: block; width: 100%; }
+    .container { max-width: 820px; }
+    h1 { font-size: 1.4rem; margin-bottom: 24px; color: var(--color-text); }
+    .card { background: var(--color-card); border-radius: 8px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: .06em; color: var(--color-text-muted); margin-bottom: 14px; }
     .field { display: flex; gap: 8px; margin-bottom: 8px; font-size: 0.95rem; }
-    .field .label { color: #555; min-width: 160px; }
+    .field .label { color: var(--color-text-muted); min-width: 160px; }
     .field .value { font-weight: 500; }
     .list { padding-left: 18px; font-size: 0.92rem; line-height: 1.7; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; font-weight: 600; }
-    .badge-warn { background: #fff3cd; color: #856404; }
-    .badge-ok { background: #d1e7dd; color: #0a3622; }
-    .badge-risk { background: #f8d7da; color: #58151c; }
-    .missing-section { color: #856404; background: #fff3cd; padding: 4px 10px; border-radius: 4px; display: inline-block; margin: 3px 4px; font-size: 0.85rem; }
+    .badge-warn { background: var(--color-badge-pending); color: var(--color-badge-pending-text); }
+    .badge-ok { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+    .badge-risk { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
+    .missing-section { color: var(--color-badge-pending-text); background: var(--color-badge-pending); padding: 4px 10px; border-radius: 4px; display: inline-block; margin: 3px 4px; font-size: 0.85rem; }
     .badge-fhir { background: #cfe2ff; color: #084298; display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 0.72rem; font-weight: 600; margin-left: 6px; vertical-align: middle; }
     .fhir-detail { font-size: 0.8rem; color: #888; margin-left: 4px; }
     .fhir-summary { font-size: 0.82rem; color: #0d6efd; margin-bottom: 8px; }
     .assessment { border-left: 4px solid #0d6efd; padding-left: 14px; }
     .assessment p { margin-bottom: 8px; font-size: 0.95rem; }
-    .concern { color: #dc3545; font-size: 0.9rem; margin-bottom: 4px; }
+    .concern { color: var(--color-priority); font-size: 0.9rem; margin-bottom: 4px; }
     .actions { display: flex; gap: 12px; align-items: flex-start; }
     .btn { padding: 10px 28px; border: none; border-radius: 6px; font-size: 0.95rem; font-weight: 600; cursor: pointer; }
     .btn-accept { background: #198754; color: #fff; }
     .btn-accept:hover { background: #157347; }
-    .btn-decline { background: #dc3545; color: #fff; }
+    .btn-decline { background: var(--color-priority); color: #fff; }
     .btn-decline:hover { background: #b02a37; }
     .decline-form { display: none; margin-top: 14px; }
     .decline-form.visible { display: block; }
-    .decline-form label { font-size: 0.9rem; color: #555; display: block; margin-bottom: 6px; }
+    .decline-form label { font-size: 0.9rem; color: var(--color-text-muted); display: block; margin-bottom: 6px; }
     .decline-form select, .decline-form input[type="text"] {
-      width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.92rem; margin-bottom: 10px;
+      width: 100%; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 5px; font-size: 0.92rem; margin-bottom: 10px;
     }
     .clinician-field { margin-bottom: 16px; }
-    .clinician-field label { font-size: 0.9rem; color: #555; display: block; margin-bottom: 4px; }
-    .clinician-field input { padding: 7px 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.92rem; width: 260px; }
+    .clinician-field label { font-size: 0.9rem; color: var(--color-text-muted); display: block; margin-bottom: 4px; }
+    .clinician-field input { padding: 7px 10px; border: 1px solid var(--color-border); border-radius: 5px; font-size: 0.92rem; width: 260px; }
     .status-bar { padding: 10px 16px; border-radius: 6px; font-size: 0.92rem; margin-top: 12px; display: none; }
-    .status-bar.success { background: #d1e7dd; color: #0a3622; display: block; }
-    .status-bar.error { background: #f8d7da; color: #58151c; display: block; }
+    .status-bar.success { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); display: block; }
+    .status-bar.error { background: var(--color-badge-declined); color: var(--color-badge-declined-text); display: block; }
     .state-badge { font-size: 0.8rem; font-weight: 600; padding: 3px 10px; border-radius: 12px; background: #e0e7ff; color: #3730a3; margin-left: 10px; vertical-align: middle; }
 
     /* Timeline */
     .timeline { display: flex; align-items: flex-start; gap: 0; margin: 4px 0 0; overflow-x: auto; }
     .tl-step { display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 90px; position: relative; }
-    .tl-dot { width: 28px; height: 28px; border-radius: 50%; border: 3px solid #dee2e6; background: #fff; display: flex; align-items: center; justify-content: center; z-index: 1; font-size: 0.7rem; font-weight: 700; color: #adb5bd; }
+    .tl-dot { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--color-border); background: var(--color-card); display: flex; align-items: center; justify-content: center; z-index: 1; font-size: 0.7rem; font-weight: 700; color: #adb5bd; }
     .tl-dot.active { border-color: #198754; background: #198754; color: #fff; }
     .tl-dot.current { border-color: #0d6efd; background: #0d6efd; color: #fff; box-shadow: 0 0 0 4px rgba(13,110,253,.25); }
-    .tl-dot.declined { border-color: #dc3545; background: #dc3545; color: #fff; }
-    .tl-label { font-size: 0.72rem; font-weight: 600; color: #666; margin-top: 6px; text-align: center; }
+    .tl-dot.declined { border-color: var(--color-priority); background: var(--color-priority); color: #fff; }
+    .tl-label { font-size: 0.72rem; font-weight: 600; color: var(--color-text-muted); margin-top: 6px; text-align: center; }
     .tl-time { font-size: 0.65rem; color: #999; margin-top: 2px; text-align: center; }
-    .tl-connector { position: absolute; top: 14px; left: 50%; width: 100%; height: 3px; background: #dee2e6; z-index: 0; }
+    .tl-connector { position: absolute; top: 14px; left: 50%; width: 100%; height: 3px; background: var(--color-border); z-index: 0; }
     .tl-connector.active { background: #198754; }
     .tl-step:last-child .tl-connector { display: none; }
+
+    /* Sialia color overrides */
+    .sialia-nav, .sialia-header { background-color: var(--color-nav-bg) !important; }
+    .sialia-nav a, .sialia-header-title { color: #fff !important; }
+    .sialia-section-title { color: var(--color-brand) !important; border-bottom-color: var(--color-brand) !important; }
   </style>
 </head>
 <body>
 <!--__NAV__-->
 <script>/*__PAGE_DATA__*/</script>
-<div class="container">
-  <h1>Referral Review <span class="state-badge" id="stateBadge"></span> <a href="/messages" style="font-size:0.78rem;font-weight:400;color:#0d6efd;text-decoration:none;margin-left:12px;">Message History →</a></h1>
+<div class="review-grid">
+  <div class="review-left">
+    <h1>Referral Review <span class="state-badge" id="stateBadge"></span> <a href="/messages" style="font-size:0.78rem;font-weight:400;color:#0d6efd;text-decoration:none;margin-left:12px;">Message History →</a></h1>
 
-  <div class="card">
-    <h2>Referral Journey</h2>
-    <div class="timeline" id="timeline"></div>
-  </div>
+    <div class="card">
+      <h2>Referral Journey</h2>
+      <div class="timeline" id="timeline"></div>
+    </div>
 
-  <div class="card">
-    <h2>Patient Demographics</h2>
-    <div class="field"><span class="label">Name</span><span class="value" id="patientName"></span></div>
-    <div class="field"><span class="label">Date of Birth</span><span class="value" id="patientDob"></span></div>
-  </div>
+    <div class="card">
+      <h2>Patient Demographics</h2>
+      <div class="field"><span class="label">Name</span><span class="value" id="patientName"></span></div>
+      <div class="field"><span class="label">Date of Birth</span><span class="value" id="patientDob"></span></div>
+    </div>
 
-  <div class="card">
-    <h2>Referral Details</h2>
-    <div class="field"><span class="label">Reason for Referral</span><span class="value" id="referralReason"></span></div>
-    <div class="field" id="declineReasonField" style="display:none;"><span class="label" style="color:#dc3545;">Decline Reason</span><span class="value" style="color:#842029;font-weight:600;" id="declineReasonValue"></span></div>
-    <div class="field"><span class="label">Referring Provider</span><span class="value" id="referrerAddress"></span></div>
-    <div class="field"><span class="label">Payer</span><span class="value" id="payer"></span></div>
-    <div class="field"><span class="label">Received</span><span class="value" id="receivedAt"></span></div>
-  </div>
+    <div class="card">
+      <h2>Referral Details</h2>
+      <div class="field"><span class="label">Reason for Referral</span><span class="value" id="referralReason"></span></div>
+      <div class="field" id="declineReasonField" style="display:none;"><span class="label" style="color:var(--color-priority);">Decline Reason</span><span class="value" style="color:#842029;font-weight:600;" id="declineReasonValue"></span></div>
+      <div class="field"><span class="label">Referring Provider</span><span class="value" id="referrerAddress"></span></div>
+      <div class="field"><span class="label">Payer</span><span class="value" id="payer"></span></div>
+      <div class="field"><span class="label">Received</span><span class="value" id="receivedAt"></span></div>
+    </div>
 
-  <div class="card" id="clinicalCard">
-    <h2>Clinical Information</h2>
-    <div class="field"><span class="label">Problems</span><span class="value" id="problems"></span></div>
-    <div class="field"><span class="label">Allergies</span><span class="value" id="allergies"></span></div>
-    <div class="field"><span class="label">Medications</span><span class="value" id="medications"></span></div>
-    <div class="field"><span class="label">Diagnostic Results</span><span class="value" id="diagnosticResults"></span></div>
-    <div id="missingSections" style="margin-top: 10px;"></div>
-  </div>
+    <div class="card" id="clinicalCard">
+      <h2>Clinical Information</h2>
+      <div class="field"><span class="label">Problems</span><span class="value" id="problems"></span></div>
+      <div class="field"><span class="label">Allergies</span><span class="value" id="allergies"></span></div>
+      <div class="field"><span class="label">Medications</span><span class="value" id="medications"></span></div>
+      <div class="field"><span class="label">Diagnostic Results</span><span class="value" id="diagnosticResults"></span></div>
+      <div id="missingSections" style="margin-top: 10px;"></div>
+    </div>
 
-  <div class="card" id="assessmentCard">
-    <h2>AI Clinical Sufficiency Assessment <span style="font-size:0.75rem;color:#888;text-transform:none;letter-spacing:0">(advisory only)</span></h2>
-    <div class="assessment">
-      <p id="assessmentSummary">Loading...</p>
-      <div id="assessmentConcerns"></div>
+    <div class="card" id="assessmentCard">
+      <h2>AI Clinical Sufficiency Assessment <span style="font-size:0.75rem;color:#888;text-transform:none;letter-spacing:0">(advisory only)</span></h2>
+      <div class="assessment">
+        <p id="assessmentSummary">Loading...</p>
+        <div id="assessmentConcerns"></div>
+      </div>
+    </div>
+
+    <div class="card" id="actionCard">
+      <h2>Disposition Decision</h2>
+      <div class="clinician-field">
+        <label for="clinicianId">Clinician ID</label>
+        <input type="text" id="clinicianId" placeholder="e.g. dr-smith" />
+      </div>
+      <div class="actions">
+        <button class="btn btn-accept" onclick="submitAccept()">Accept Referral</button>
+        <button class="btn btn-decline" onclick="showDeclineForm()">Decline Referral</button>
+      </div>
+      <div class="decline-form" id="declineForm">
+        <label for="declineReasonSelect">Reason for Decline</label>
+        <select id="declineReasonSelect" onchange="syncDeclineReason()">
+          <option value="">— Select a reason —</option>
+          <option value="Out of Scope">Out of Scope</option>
+          <option value="Insufficient Clinical Information">Insufficient Clinical Information</option>
+          <option value="Patient Already Under Care">Patient Already Under Care</option>
+          <option value="Capacity Unavailable">Capacity Unavailable</option>
+          <option value="Other">Other (specify below)</option>
+        </select>
+        <input type="text" id="declineReasonText" placeholder="Additional details or custom reason" />
+        <button class="btn btn-decline" onclick="submitDecline()">Confirm Decline</button>
+      </div>
+      <div class="status-bar" id="statusBar"></div>
     </div>
   </div>
 
-  <div class="card" id="actionCard">
-    <h2>Disposition Decision</h2>
-    <div class="clinician-field">
-      <label for="clinicianId">Clinician ID</label>
-      <input type="text" id="clinicianId" placeholder="e.g. dr-smith" />
+  <aside class="review-right" id="ccdaPanel">
+    <div class="ccda-panel-header">
+      Original C-CDA Document <span class="muted-label">[C-CDA only]</span>
     </div>
-    <div class="actions">
-      <button class="btn btn-accept" onclick="submitAccept()">Accept Referral</button>
-      <button class="btn btn-decline" onclick="showDeclineForm()">Decline Referral</button>
+    <div id="ccdaLoading">Loading document...</div>
+    <div class="ccda-panel-body">
+      <sialia></sialia>
     </div>
-    <div class="decline-form" id="declineForm">
-      <label for="declineReason">Reason for Decline</label>
-      <select id="declineReasonSelect" onchange="syncDeclineReason()">
-        <option value="">— Select a reason —</option>
-        <option value="Out of Scope">Out of Scope</option>
-        <option value="Insufficient Clinical Information">Insufficient Clinical Information</option>
-        <option value="Patient Already Under Care">Patient Already Under Care</option>
-        <option value="Capacity Unavailable">Capacity Unavailable</option>
-        <option value="Other">Other (specify below)</option>
-      </select>
-      <input type="text" id="declineReasonText" placeholder="Additional details or custom reason" />
-      <button class="btn btn-decline" onclick="submitDecline()">Confirm Decline</button>
-    </div>
-    <div class="status-bar" id="statusBar"></div>
-  </div>
+  </aside>
 </div>
+
+<!-- Vendor scripts in correct order -->
+<script src="/static/jquery/jquery.min.js"></script>
+<script src="/static/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="/static/riot/riot.js"></script>
+<script src="/static/lodash/lodash.min.js"></script>
+<script>window.lodash = window._;</script>
+<script src="/static/dragula/dragula.min.js"></script>
+<script src="/static/ccdaview/sialia.js"></script>
 
 <script>
   const data = window.__PAGE_DATA__;
@@ -312,7 +372,7 @@
     // Show missing optional sections
     if (clinical.missingOptionalSections && clinical.missingOptionalSections.length > 0) {
       document.getElementById('missingSections').innerHTML =
-        '<span style="font-size:0.82rem;color:#666;">Missing optional sections: </span>' +
+        '<span style="font-size:0.82rem;color:var(--color-text-muted);">Missing optional sections: </span>' +
         clinical.missingOptionalSections.map(function(s) { return '<span class="missing-section">' + s + '</span>'; }).join('');
     }
   } else {
@@ -322,6 +382,39 @@
     document.getElementById('diagnosticResults').textContent = '—';
   }
   document.getElementById('payer').textContent = '—';
+
+  // ── Sialia C-CDA Viewer Integration ──────────────────────────────────
+  if (!data.hasCcda) {
+    // No raw XML stored — collapse right panel
+    document.querySelector('.review-grid').classList.add('no-ccda');
+  } else {
+    // Initialize Sialia viewer
+    let viewer;
+    try {
+      viewer = new sialia.Sialia();
+    } catch(e) {
+      console.warn('Sialia viewer failed to initialize:', e);
+    }
+
+    if (viewer) {
+      const loadingEl = document.getElementById('ccdaLoading');
+      loadingEl.style.display = 'flex';
+
+      try {
+        Promise.resolve(viewer.open({ name: 'referral', url: '/referrals/' + referralId + '/ccda.xml' }))
+          .then(() => {
+            loadingEl.style.display = 'none';
+          })
+          .catch(() => {
+            loadingEl.style.display = 'none';
+            console.warn('Sialia open failed');
+          });
+      } catch (e) {
+        loadingEl.style.display = 'none';
+        console.warn('Sialia open error:', e);
+      }
+    }
+  }
 
   function showDeclineForm() {
     document.getElementById('declineForm').classList.add('visible');

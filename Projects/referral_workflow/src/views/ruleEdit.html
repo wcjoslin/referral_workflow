@@ -9,11 +9,11 @@
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
     .container { max-width: 800px; margin: 0 auto; padding: 24px; }
     h1 { margin-bottom: 8px; }
-    .subtitle { color: #666; margin-bottom: 24px; }
+    .subtitle { color: var(--color-text-muted); margin-bottom: 24px; }
     .nav { margin-bottom: 16px; font-size: 14px; }
     .nav a { color: #0066cc; text-decoration: none; }
     .nav a:hover { text-decoration: underline; }
-    .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 16px; }
+    .card { background: var(--color-card); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 16px; }
     .card h2 { margin-bottom: 12px; font-size: 18px; }
     label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 14px; }
     .form-row { display: flex; gap: 16px; margin-bottom: 16px; }
@@ -25,7 +25,7 @@
     .slider-value { font-weight: 600; min-width: 40px; }
     input[type="number"] { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; width: 80px; }
     textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; font-family: monospace; resize: vertical; min-height: 200px; }
-    .btn { display: inline-block; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; text-decoration: none; color: #fff; }
+    .btn { display: inline-block; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; text-decoration: none; color: var(--color-card); }
     .btn-primary { background: #0066cc; }
     .btn-primary:hover { background: #0055aa; }
     .btn-danger { background: #dc3545; }
@@ -34,11 +34,11 @@
     .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
     .badge-trigger { background: #e8f0fe; color: #1a73e8; }
     .badge-action { background: #fce8e6; color: #c53929; }
-    pre { background: #f8f9fa; border: 1px solid #ddd; border-radius: 4px; padding: 12px; font-size: 13px; overflow-x: auto; white-space: pre-wrap; }
+    pre { background: var(--color-table-header); border: 1px solid #ddd; border-radius: 4px; padding: 12px; font-size: 13px; overflow-x: auto; white-space: pre-wrap; }
     .status { margin-top: 12px; padding: 8px 12px; border-radius: 4px; font-size: 14px; display: none; }
     .status-success { background: #e6f4ea; color: #1e7e34; }
     .status-error { background: #fce8e6; color: #c53929; }
-    .meta-info { font-size: 13px; color: #666; margin-bottom: 16px; }
+    .meta-info { font-size: 13px; color: var(--color-text-muted); margin-bottom: 16px; }
   </style>
 </head>
 <body>

@@ -21,7 +21,7 @@
       padding: 24px;
     }
     h1, h2 {
-      color: #1a1a2e;
+      color: var(--color-text);
       margin-bottom: 16px;
     }
     h1 {
@@ -46,7 +46,7 @@
     .label {
       font-weight: 600;
       width: 150px;
-      color: #666;
+      color: var(--color-text-muted);
     }
     .value {
       flex: 1;
@@ -76,7 +76,7 @@
       margin-top: 8px;
       max-height: 300px;
       overflow-y: auto;
-      background: #fff;
+      background: var(--color-card);
       padding: 8px;
       border-radius: 2px;
       border: 1px solid #ddd;
@@ -231,7 +231,7 @@
           <div class="card">
             <h2>Send Response</h2>
             <div id="sendStatusBar" class="status-bar"></div>
-            <p style="margin-bottom: 16px; color: #666;">
+            <p style="margin-bottom: 16px; color: var(--color-text-muted);">
               All documents are signed. Ready to send X12 275 response to payer.
             </p>
             <button id="sendBtn" onclick="handleSend()" style="background: #2e7d32;">Send X12 275 Response</button>

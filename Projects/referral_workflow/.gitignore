@@ -7,3 +7,6 @@ dist/
 coverage/
 .processed_messages.json
 .claude/
+Devault/.obsidian/
+claims-inbox/failed/
+claims-inbox/processed/

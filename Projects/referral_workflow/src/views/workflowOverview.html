@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Workflow Overview — 360X Referral</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--color-bg-page); color: var(--color-text); }
+    .container { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+    h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 8px; }
+    .subtitle { color: var(--color-text-muted); font-size: 0.9rem; margin-bottom: 28px; }
+    .card { background: var(--color-card); border-radius: 10px; padding: 24px 28px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .card h2 { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-muted); margin: 0 0 20px; }
+    .card h2 span { font-size: 0.95rem; font-weight: 600; color: var(--color-text); text-transform: none; letter-spacing: 0; margin-left: 8px; }
+    .mermaid { display: flex; justify-content: center; overflow-x: auto; }
+  </style>
+</head>
+<body>
+<!--__NAV__-->
+<div class="container">
+  <h1>Workflow Overview</h1>
+  <p class="subtitle">360X Closed Loop Referral — state lifecycle, data flow, and database schema</p>
+
+  <!-- ── State Machine ───────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2>Diagram 1 <span>Referral State Machine</span></h2>
+    <div class="mermaid">
+flowchart TD
+    RCV([Received])
+    ACK([Acknowledged])
+    ACC([Accepted])
+    DEC([Declined])
+    PIN([Pending-Information])
+    SCH([Scheduled])
+    ENC([Encounter])
+    CLO([Closed])
+    CON([Closed-Confirmed])
+
+    RCV -->|"MDN sent"| ACK
+    ACK -->|"Clinician accepts"| ACC
+    ACK -->|"Clinician declines\nor skill auto-declines"| DEC
+    ACK -->|"Info request sent"| PIN
+    PIN -->|"Info received"| ACK
+    PIN -->|"Timeout"| DEC
+    ACC -->|"Appointment booked"| SCH
+    SCH -->|"Patient arrives"| ENC
+    ENC -->|"Consult note sent"| CLO
+    CLO -->|"Referrer ACKs"| CON
+
+    style DEC fill:#f8d7da,stroke:#dc3545,color:#58151c
+    style CON fill:#d1e7dd,stroke:#198754,color:#0a3622
+    style PIN fill:var(--color-card)3cd,stroke:#ffc107,color:#664d03
+    </div>
+  </div>
+
+  <!-- ── Data Flow ────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2>Diagram 2 <span>Data Flow Across Modules</span></h2>
+    <div class="mermaid">
+flowchart LR
+    EMAIL["📧 Inbound DSM Email\n(C-CDA attachment)"]
+
+    subgraph PRD01["PRD-01 · Receive & Acknowledge"]
+        P1A["Parse email\n+ C-CDA"]
+        P1B["Send MDN\n(RFC 3798)"]
+    end
+
+    subgraph ENRICH["Enrichment & Rules"]
+        P08["PRD-08\nFHIR Lookup\n(clinicalData)"]
+        P09["PRD-09\nSkills Engine\n(skill_executions)"]
+        P02A["PRD-02\nAI Sufficiency\nAssessment"]
+    end
+
+    subgraph PRD02["PRD-02 · Disposition"]
+        P02B{"Clinician\nDecision"}
+    end
+
+    subgraph ACCEPT["Accepted Path"]
+        P03["PRD-03\nSchedule\n→ SIU out"]
+        P05["PRD-05\nEncounter\n← ADT in"]
+        P04["PRD-04\nConsult Note\n→ C-CDA out"]
+    end
+
+    DEC_OUT["📧 RRI · Declined\n(to referrer)"]
+    ACC_OUT["📧 RRI · Accepted\n(to referrer)"]
+    CLOSE["PRD-06\nACK received\n→ Closed-Confirmed"]
+
+    EMAIL --> P1A
+    P1A --> P1B
+    P1A -->|"patients + referrals\ncreated"| P08
+    P08 -->|"clinicalData enriched"| P09
+    P09 -->|"skill_executions logged"| P02A
+    P02A -->|"aiAssessment stored"| P02B
+    P02B -->|"declineReason saved"| DEC_OUT
+    P02B -->|"outbound_messages\n(RRI)"| ACC_OUT
+    ACC_OUT --> P03
+    P03 -->|"appointment fields\n+ outbound_messages\n(SIU)"| P05
+    P05 -->|"state → Encounter\n→ Closed"| P04
+    P04 -->|"outbound_messages\n(ConsultNote)"| CLOSE
+
+    style DEC_OUT fill:#f8d7da,stroke:#dc3545
+    style CLOSE fill:#d1e7dd,stroke:#198754
+    </div>
+  </div>
+
+  <!-- ── Data Model ────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2>Diagram 3 <span>Database Schema (Primary & Foreign Keys)</span></h2>
+    <div class="mermaid">
+erDiagram
+    patients {
+        int id PK
+        string first_name
+        string last_name
+        string date_of_birth
+    }
+    referrals {
+        int id PK
+        int patient_id FK
+        string source_message_id UK
+        string referrer_address
+        string reason_for_referral
+        string state
+        string decline_reason
+        string clinician_id
+        string appointment_date
+        string appointment_location
+        string scheduled_provider
+        string ai_assessment
+        string clinical_data
+        bool priority_flag
+    }
+    outbound_messages {
+        int id PK
+        int referral_id FK
+        string message_control_id UK
+        string message_type
+        string status
+        datetime sent_at
+        datetime acknowledged_at
+    }
+    skill_executions {
+        int id PK
+        int referral_id FK
+        string skill_name
+        string trigger_point
+        bool matched
+        string confidence
+        string action_taken
+        bool was_overridden
+        string overridden_by
+        datetime executed_at
+    }
+
+    patients ||--o{ referrals : "patient_id"
+    referrals ||--o{ outbound_messages : "referral_id"
+    referrals ||--o{ skill_executions : "referral_id"
+    </div>
+  </div>
+</div>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'neutral',
+    flowchart: { curve: 'basis', padding: 20 },
+    er: { diagramPadding: 20 },
+  });
+</script>
+</body>
+</html>

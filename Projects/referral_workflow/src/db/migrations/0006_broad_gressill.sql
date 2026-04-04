@@ -1,0 +1,1 @@
+ALTER TABLE `referrals` ADD `raw_ccda_xml` text;

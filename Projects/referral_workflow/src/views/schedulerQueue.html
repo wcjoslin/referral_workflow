@@ -6,15 +6,15 @@
   <title>Scheduler Queue</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #f4f6f8; color: #222; }
+    body { font-family: system-ui, sans-serif; background: var(--color-bg-page); color: var(--color-text); }
     .container { max-width: 900px; margin: 32px auto; padding: 0 16px; }
-    h1 { font-size: 1.4rem; margin-bottom: 24px; color: #1a1a2e; }
-    .card { background: #fff; border-radius: 8px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    h1 { font-size: 1.4rem; margin-bottom: 24px; color: var(--color-text); }
+    .card { background: var(--color-card); border-radius: 8px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
     table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
-    th { text-align: left; padding: 10px 8px; border-bottom: 2px solid #e5e7eb; color: #555; font-weight: 600; text-transform: uppercase; font-size: 0.78rem; letter-spacing: 0.04em; }
-    td { padding: 10px 8px; border-bottom: 1px solid #f0f0f0; }
+    th { text-align: left; padding: 10px 8px; border-bottom: 2px solid #e5e7eb; color: var(--color-text-muted); font-weight: 600; text-transform: uppercase; font-size: 0.78rem; letter-spacing: 0.04em; }
+    td { padding: 10px 8px; border-bottom: 1px solid var(--color-bg-page); }
     tr:last-child td { border-bottom: none; }
-    .btn { padding: 6px 16px; border: none; border-radius: 5px; font-size: 0.85rem; font-weight: 600; cursor: pointer; text-decoration: none; color: #fff; background: #0d6efd; display: inline-block; }
+    .btn { padding: 6px 16px; border: none; border-radius: 5px; font-size: 0.85rem; font-weight: 600; cursor: pointer; text-decoration: none; color: var(--color-card); background: #0d6efd; display: inline-block; }
     .btn:hover { background: #0b5ed7; }
     .empty { color: #888; font-size: 0.95rem; padding: 20px 0; text-align: center; }
     .state-badge { font-size: 0.78rem; font-weight: 600; padding: 2px 8px; border-radius: 4px; background: #e0e7ff; color: #3730a3; }

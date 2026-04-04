@@ -44,9 +44,38 @@ import { desc, and } from 'drizzle-orm';
 export const app = express();
 app.use(express.json());
 
+// ── Vendor static assets (for @kno2/ccdaview on demo pages) ──────────────────
+const nodeModulesDir = path.join(__dirname, '..', 'node_modules');
+app.use('/static/ccdaview', express.static(path.join(nodeModulesDir, '@kno2', 'ccdaview', 'dist')));
+app.use('/static/bootstrap', express.static(path.join(nodeModulesDir, 'bootstrap', 'dist')));
+app.use('/static/jquery',    express.static(path.join(nodeModulesDir, 'jquery', 'dist')));
+app.use('/static/riot',      express.static(path.join(nodeModulesDir, 'riot')));
+app.use('/static/lodash',    express.static(path.join(nodeModulesDir, 'lodash')));
+app.use('/static/dragula',   express.static(path.join(nodeModulesDir, 'dragula', 'dist')));
+
 // ── Navigation ────────────────────────────────────────────────────────────────
 
-const NAV_HTML = `<nav style="background:#1a1a2e;padding:12px 24px;display:flex;gap:24px;align-items:center;position:sticky;top:0;z-index:100;box-shadow:0 2px 4px rgba(0,0,0,0.4);">
+const NAV_HTML = `<style>
+:root {
+  --color-nav-bg: #0d2d3a;
+  --color-brand: #009aab;
+  --color-brand-hover: #007d8a;
+  --color-bg-page: #f0f2f5;
+  --color-text: #212529;
+  --color-text-muted: #6c757d;
+  --color-border: #dee2e6;
+  --color-card: #fff;
+  --color-table-header: #f0f2f4;
+  --color-badge-pending: #fff3cd;
+  --color-badge-pending-text: #664d03;
+  --color-badge-accepted: #d1e7dd;
+  --color-badge-accepted-text: #0a3622;
+  --color-badge-declined: #f8d7da;
+  --color-badge-declined-text: #58151c;
+  --color-priority: #dc3545;
+}
+</style>
+<nav style="background:var(--color-nav-bg);padding:12px 24px;display:flex;gap:24px;align-items:center;position:sticky;top:0;z-index:100;box-shadow:0 2px 4px rgba(0,0,0,0.4);">
   <span style="color:#fff;font-weight:700;font-size:0.95rem;letter-spacing:0.02em;">360X Referral</span>
   <a href="/" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;margin-left:8px;">Home</a>
   <a href="/messages" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Inbox</a>
@@ -54,7 +83,21 @@ const NAV_HTML = `<nav style="background:#1a1a2e;padding:12px 24px;display:flex;
   <a href="/claims" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Claims</a>
   <a href="/rules/admin" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Skills</a>
   <a href="/demo" style="color:#ffc107;text-decoration:none;font-size:0.88rem;font-weight:600;">Demo Launcher</a>
-</nav>`;
+</nav>
+<script>
+(function() {
+  const path = location.pathname;
+  const navLinks = document.querySelectorAll('nav a');
+  navLinks.forEach((link) => {
+    const href = link.getAttribute('href');
+    if ((path === href) || (path.startsWith(href + '/') && href !== '/')) {
+      link.style.fontWeight = 'bold';
+      link.style.color = '#fff';
+      link.style.textDecoration = 'underline';
+    }
+  });
+})();
+</script>`;
 
 function injectNav(html: string): string {
   return html.replace('<!--__NAV__-->', NAV_HTML);
@@ -150,16 +193,46 @@ app.get('/referrals/:id/review', async (req: Request, res: Response, next: NextF
       referral,
       assessment: assessment ?? null,
       outboundMessages: messages,
+      hasCcda: !!referral.rawCcdaXml,
     };
 
     // Inject data as a JSON block the page script can read
+    const jsonString = JSON.stringify(pageData);
+    console.log(`[ReferralReview] Referral #${referralId} hasCcda=${pageData.hasCcda}, JSON length=${jsonString.length}`);
     const html = template.replace(
       '/*__PAGE_DATA__*/',
-      `window.__PAGE_DATA__ = ${JSON.stringify(pageData)};`,
+      `window.__PAGE_DATA__ = ${jsonString};`,
     );
 
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get raw C-CDA XML for ccdaview integration
+app.get('/referrals/:id/ccda.xml', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(404).send('Not found');
+      return;
+    }
+
+    const [referral] = await db
+      .select({ rawCcdaXml: referrals.rawCcdaXml })
+      .from(referrals)
+      .where(eq(referrals.id, referralId));
+
+    if (!referral?.rawCcdaXml) {
+      res.status(404).send('No CCDA document available');
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(referral.rawCcdaXml);
   } catch (err) {
     next(err);
   }
@@ -882,6 +955,20 @@ app.post('/demo/launch', async (req: Request, res: Response, next: NextFunction)
     res.json({ referralId });
   } catch (err) {
     next(err);
+  }
+});
+
+app.get('/demo/fixture/:scenario', (req: Request, res: Response) => {
+  const VALID_SCENARIOS = ['full-workflow', 'incomplete-info', 'fhir-enriched', 'payer-rejection'];
+  const scenario = Array.isArray(req.params.scenario) ? req.params.scenario[0] : req.params.scenario;
+  if (!VALID_SCENARIOS.includes(scenario)) { res.status(404).end(); return; }
+  const fixturePath = path.join(__dirname, '..', 'tests', 'fixtures', `demo-${scenario}.xml`);
+  try {
+    const xml = fs.readFileSync(fixturePath, 'utf-8');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(xml);
+  } catch {
+    res.status(404).end();
   }
 });
 

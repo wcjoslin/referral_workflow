@@ -89,6 +89,7 @@ export async function ingestReferral(processed: ProcessedMessage): Promise<numbe
       referrerAddress: processed.referrerAddress,
       reasonForReferral: extended.reasonForReferral,
       clinicalData: JSON.stringify(enriched),
+      rawCcdaXml: rawCdaXml,
       state: ReferralState.RECEIVED,
       createdAt: now,
       updatedAt: now,

@@ -5,35 +5,55 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Message History</title>
   <style>
+    :root {
+      --color-nav-bg: #0d2d3a;
+      --color-brand: #009aab;
+      --color-brand-hover: #007d8a;
+      --color-bg-page: #f0f2f5;
+      --color-text: #212529;
+      --color-text-muted: #6c757d;
+      --color-border: #dee2e6;
+      --color-card: #fff;
+      --color-table-header: #f0f2f4;
+      --color-badge-pending: #fff3cd;
+      --color-badge-pending-text: #664d03;
+      --color-badge-accepted: #d1e7dd;
+      --color-badge-accepted-text: #0a3622;
+      --color-badge-declined: #f8d7da;
+      --color-badge-declined-text: #58151c;
+      --color-priority: #dc3545;
+    }
+  </style>
+  <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #f4f6f8; color: #222; }
+    body { font-family: system-ui, sans-serif; background: var(--color-bg-page); color: var(--color-text); }
     .container { max-width: 960px; margin: 32px auto; padding: 0 16px; }
-    h1 { font-size: 1.4rem; margin-bottom: 8px; color: #1a1a2e; }
-    .subtitle { font-size: 0.88rem; color: #666; margin-bottom: 24px; }
-    .card { background: #fff; border-radius: 8px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: .06em; color: #666; margin-bottom: 14px; }
+    h1 { font-size: 1.4rem; margin-bottom: 8px; color: var(--color-text); }
+    .subtitle { font-size: 0.88rem; color: var(--color-text-muted); margin-bottom: 24px; }
+    .card { background: var(--color-card); border-radius: 8px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: .06em; color: var(--color-text-muted); margin-bottom: 14px; }
     table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-    th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #dee2e6; color: #555; font-size: 0.78rem; text-transform: uppercase; letter-spacing: .04em; }
-    td { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; }
+    th { text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--color-border); color: var(--color-text-muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: .04em; }
+    td { padding: 8px 10px; border-bottom: 1px solid var(--color-bg-page); }
     tr:last-child td { border-bottom: none; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
-    .badge-ack { background: #d1e7dd; color: #0a3622; }
-    .badge-pending { background: #fff3cd; color: #856404; }
-    .badge-overdue { background: #f8d7da; color: #58151c; }
+    .badge-ack { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+    .badge-pending { background: var(--color-badge-pending); color: var(--color-badge-pending-text); }
+    .badge-overdue { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
     .type-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: #e0e7ff; color: #3730a3; }
     .ref-link { color: #0d6efd; text-decoration: none; font-weight: 500; }
     .ref-link:hover { text-decoration: underline; }
     .stats { display: flex; gap: 16px; margin-bottom: 20px; }
-    .stat-card { flex: 1; background: #fff; border-radius: 8px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); text-align: center; }
+    .stat-card { flex: 1; background: var(--color-card); border-radius: 8px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); text-align: center; }
     .stat-value { font-size: 1.8rem; font-weight: 700; }
-    .stat-label { font-size: 0.78rem; color: #666; margin-top: 4px; }
+    .stat-label { font-size: 0.78rem; color: var(--color-text-muted); margin-top: 4px; }
     .stat-ack .stat-value { color: #198754; }
-    .stat-pending .stat-value { color: #856404; }
-    .stat-overdue .stat-value { color: #dc3545; }
-    .empty { color: #999; font-style: italic; padding: 20px 0; text-align: center; }
+    .stat-pending .stat-value { color: var(--color-badge-pending-text); }
+    .stat-overdue .stat-value { color: var(--color-priority); }
+    .empty { color: var(--color-text-muted); font-style: italic; padding: 20px 0; text-align: center; }
     .filter-bar { margin-bottom: 16px; display: flex; gap: 10px; align-items: center; }
-    .filter-bar select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.88rem; }
-    .filter-bar label { font-size: 0.85rem; color: #555; }
+    .filter-bar select { padding: 6px 10px; border: 1px solid var(--color-border); border-radius: 5px; font-size: 0.88rem; }
+    .filter-bar label { font-size: 0.85rem; color: var(--color-text-muted); }
   </style>
 </head>
 <body>

@@ -43,6 +43,13 @@
       "when": 1774978448837,
       "tag": "0005_add_claims_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1775258988224,
+      "tag": "0006_broad_gressill",
+      "breakpoints": true
     }
   ]
 }

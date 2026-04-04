@@ -5,32 +5,52 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>360X Referral Dashboard</title>
   <style>
+    :root {
+      --color-nav-bg: #0d2d3a;
+      --color-brand: #009aab;
+      --color-brand-hover: #007d8a;
+      --color-bg-page: #f0f2f5;
+      --color-text: #212529;
+      --color-text-muted: #6c757d;
+      --color-border: #dee2e6;
+      --color-card: #fff;
+      --color-table-header: #f0f2f4;
+      --color-badge-pending: #fff3cd;
+      --color-badge-pending-text: #664d03;
+      --color-badge-accepted: #d1e7dd;
+      --color-badge-accepted-text: #0a3622;
+      --color-badge-declined: #f8d7da;
+      --color-badge-declined-text: #58151c;
+      --color-priority: #dc3545;
+    }
+  </style>
+  <style>
     *, *::before, *::after { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #212529; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--color-bg-page); color: var(--color-text); }
     .container { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
     h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 24px; }
     .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 28px; }
-    .stat-card { background: #fff; border-radius: 8px; padding: 14px 20px; min-width: 110px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .stat-card { background: var(--color-card); border-radius: 8px; padding: 14px 20px; min-width: 110px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
     .stat-card .num { font-size: 1.6rem; font-weight: 700; line-height: 1; }
-    .stat-card .label { font-size: 0.75rem; color: #6c757d; margin-top: 4px; }
-    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-    thead th { background: #f8f9fa; font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #495057; padding: 12px 16px; text-align: left; border-bottom: 1px solid #dee2e6; }
-    tbody tr { border-bottom: 1px solid #f0f2f5; transition: background 0.1s; cursor: pointer; }
-    tbody tr:hover { background: #f8f9fa; }
+    .stat-card .label { font-size: 0.75rem; color: var(--color-text-muted); margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; background: var(--color-card); border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    thead th { background: var(--color-table-header); font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--color-border); }
+    tbody tr { border-bottom: 1px solid var(--color-bg-page); transition: background 0.1s; cursor: pointer; }
+    tbody tr:hover { background: var(--color-table-header); }
     tbody tr:last-child { border-bottom: none; }
     td { padding: 12px 16px; font-size: 0.9rem; vertical-align: middle; }
     .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
     .badge-received    { background: #e9ecef; color: #495057; }
     .badge-acknowledged { background: #cff4fc; color: #055160; }
-    .badge-accepted    { background: #d1e7dd; color: #0a3622; }
-    .badge-pending     { background: #fff3cd; color: #664d03; }
-    .badge-declined    { background: #f8d7da; color: #58151c; }
+    .badge-accepted    { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+    .badge-pending     { background: var(--color-badge-pending); color: var(--color-badge-pending-text); }
+    .badge-declined    { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
     .badge-scheduled   { background: #d0efff; color: #0c63e4; }
     .badge-encounter   { background: #e2d9f3; color: #3d0a91; }
-    .badge-closed      { background: #d1e7dd; color: #0a3622; }
+    .badge-closed      { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
     .badge-confirmed   { background: #badbcc; color: #0a3622; font-style: italic; }
-    .priority-flag { color: #dc3545; font-weight: 700; font-size: 0.85rem; }
-    .empty { text-align: center; padding: 48px 24px; color: #6c757d; }
+    .priority-flag { color: var(--color-priority); font-weight: 700; font-size: 0.85rem; }
+    .empty { text-align: center; padding: 48px 24px; color: var(--color-text-muted); }
     .empty a { color: #ffc107; font-weight: 600; text-decoration: none; }
     .empty a:hover { text-decoration: underline; }
   </style>
