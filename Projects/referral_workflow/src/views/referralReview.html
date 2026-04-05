@@ -31,7 +31,7 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: var(--color-bg-page); color: var(--color-text); }
-    .review-grid { display: grid; grid-template-columns: 1fr 420px; gap: 24px; max-width: 1300px; margin: 32px auto; padding: 0 24px; }
+    .review-grid { display: grid; grid-template-columns: 1fr 840px; gap: 24px; max-width: 1500px; margin: 32px auto; padding: 0 24px; }
     .review-grid.no-ccda { grid-template-columns: 1fr; }
     .review-left { min-width: 0; }
     .review-right { position: sticky; top: 72px; height: calc(100vh - 96px); display: flex; flex-direction: column; border-radius: 8px; overflow: hidden; background: var(--color-card); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
@@ -92,6 +92,14 @@
     .tl-connector { position: absolute; top: 14px; left: 50%; width: 100%; height: 3px; background: var(--color-border); z-index: 0; }
     .tl-connector.active { background: #198754; }
     .tl-step:last-child .tl-connector { display: none; }
+    .tl-dot.noshown { border-color: #fd7e14; background: #fd7e14; color: #fff; }
+
+    /* PRD-11 action buttons */
+    .btn-noshown { background: #fd7e14; color: #fff; }
+    .btn-noshown:hover { background: #e36209; }
+    .btn-secondary-action { background: #6c757d; color: #fff; }
+    .btn-secondary-action:hover { background: #5c636a; }
+    .consult-description { font-size: 0.92rem; color: var(--color-text-muted); margin-bottom: 16px; line-height: 1.5; }
 
     /* Sialia color overrides */
     .sialia-nav, .sialia-header { background-color: var(--color-nav-bg) !important; }
@@ -168,6 +176,49 @@
       </div>
       <div class="status-bar" id="statusBar"></div>
     </div>
+
+    <!-- PRD-11: Shown when state is Scheduled — lets clinician record a no-show -->
+    <div class="card" id="noShowCard" style="display:none;">
+      <h2>Appointment Actions</h2>
+      <p class="consult-description">If the patient did not appear for their scheduled visit, record the no-show. The referring physician will be notified and prompted to follow up.</p>
+      <div class="actions">
+        <button class="btn btn-noshown" onclick="submitNoShow()">Mark No-Show</button>
+      </div>
+      <div class="status-bar" id="noShowStatus"></div>
+    </div>
+
+    <!-- PRD-11: Shown when state is No-Show — lets clinician book a replacement appointment -->
+    <div class="card" id="rescheduleCard" style="display:none;">
+      <h2>Reschedule Appointment</h2>
+      <p class="consult-description">The patient did not attend their scheduled visit. The original referral remains active — use it to book a new appointment.</p>
+      <div class="actions">
+        <a class="btn btn-accept" id="rescheduleLink" href="#">Schedule New Appointment</a>
+      </div>
+    </div>
+
+    <!-- PRD-11: Shown when state is Encounter — lets specialist flag a consultation need -->
+    <div class="card" id="consultRequestCard" style="display:none;">
+      <h2>Post-Encounter Actions</h2>
+      <p class="consult-description">If further consultation with the referring provider is required before closing this referral, request a consultation below.</p>
+      <div class="actions">
+        <button class="btn btn-secondary-action" onclick="submitConsultRequest()">Request Consultation</button>
+      </div>
+      <div class="status-bar" id="consultRequestStatus"></div>
+    </div>
+
+    <!-- PRD-11: Shown when state is Consult — referring clinician confirms to proceed to Closed -->
+    <div class="card" id="consultConfirmCard" style="display:none;">
+      <h2>Confirm Consultation</h2>
+      <p class="consult-description">The specialist has requested further consultation before this referral can be closed. Review the referral details and confirm to proceed.</p>
+      <div class="clinician-field">
+        <label for="consultClinicianId">Clinician ID</label>
+        <input type="text" id="consultClinicianId" placeholder="e.g. dr-smith" />
+      </div>
+      <div class="actions">
+        <button class="btn btn-accept" onclick="submitConsultResolve()">Confirm Consultation</button>
+      </div>
+      <div class="status-bar" id="consultConfirmStatus"></div>
+    </div>
   </div>
 
   <aside class="review-right" id="ccdaPanel">
@@ -193,19 +244,10 @@
 <script>
   const data = window.__PAGE_DATA__;
   const referralId = data.referralId;
+  const currentState = data.referral.state;
 
   // ── Referral Journey Timeline ────────────────────────────────────────────
   (function buildTimeline() {
-    const STEPS = [
-      { state: 'Received',    label: 'Received',  icon: '1' },
-      { state: 'Acknowledged',label: 'Ack\'d',    icon: '2' },
-      { state: 'Accepted',    label: 'Accepted',  icon: '3', alt: 'Declined' },
-      { state: 'Scheduled',   label: 'Scheduled', icon: '4' },
-      { state: 'Encounter',   label: 'Encounter', icon: '5' },
-      { state: 'Closed',      label: 'Closed',    icon: '6' },
-      { state: 'Closed-Confirmed', label: 'Confirmed', icon: '7' },
-    ];
-
     // Build a map of state → timestamp from available data
     const stateTimestamps = {};
 
@@ -222,35 +264,70 @@
     for (const m of msgs) {
       const ts = typeof m.sentAt === 'number' ? new Date(m.sentAt * 1000) : new Date(m.sentAt);
       if (m.messageType === 'RRI') {
-        // RRI sent on Accept or Decline
         const isDeclined = data.referral.state === 'Declined' ||
           (data.referral.declineReason && !stateTimestamps['Accepted']);
         stateTimestamps[isDeclined ? 'Declined' : 'Accepted'] = ts;
       }
       if (m.messageType === 'SIU') stateTimestamps['Scheduled'] = ts;
+      if (m.messageType === 'NoShowNotification') stateTimestamps['No-Show'] = ts;
       if (m.messageType === 'InterimUpdate') stateTimestamps['Encounter'] = ts;
+      if (m.messageType === 'ConsultRequest') stateTimestamps['Consult'] = ts;
       if (m.messageType === 'ConsultNote') stateTimestamps['Closed'] = ts;
     }
 
-    // Determine which states have been reached
-    const stateOrder = ['Received','Acknowledged','Accepted','Scheduled','Encounter','Closed','Closed-Confirmed'];
-    const declinedOrder = ['Received','Acknowledged','Declined'];
-    const isDeclined = data.referral.state === 'Declined';
-    const activeOrder = isDeclined ? declinedOrder : stateOrder;
-    const currentState = data.referral.state;
-    const currentIdx = activeOrder.indexOf(currentState);
+    // Ensure current state always has a timestamp for display
+    if (!(currentState in stateTimestamps) && data.referral.updatedAt) {
+      stateTimestamps[currentState] = typeof data.referral.updatedAt === 'number'
+        ? new Date(data.referral.updatedAt * 1000)
+        : new Date(data.referral.updatedAt);
+    }
+
+    // Detect optional states
+    const isDeclined = currentState === 'Declined';
+    const hasNoShow = currentState === 'No-Show' || ('No-Show' in stateTimestamps);
+    const hasConsult = currentState === 'Consult' || ('Consult' in stateTimestamps);
+
+    // Build display steps dynamically
+    let displaySteps;
+    if (isDeclined) {
+      displaySteps = [
+        { state: 'Received',     label: 'Received', icon: '1' },
+        { state: 'Acknowledged', label: 'Ack\'d',   icon: '2' },
+        { state: 'Declined',     label: 'Declined', icon: '✕' },
+      ];
+    } else {
+      displaySteps = [
+        { state: 'Received',     label: 'Received',  icon: '1' },
+        { state: 'Acknowledged', label: 'Ack\'d',    icon: '2' },
+        { state: 'Accepted',     label: 'Accepted',  icon: '3' },
+        { state: 'Scheduled',    label: 'Scheduled', icon: '4' },
+      ];
+      if (hasNoShow) displaySteps.push({ state: 'No-Show', label: 'No-Show', icon: '!' });
+      displaySteps.push({ state: 'Encounter', label: 'Encounter', icon: String(displaySteps.length + 1) });
+      if (hasConsult) displaySteps.push({ state: 'Consult', label: 'Consult', icon: '?' });
+      displaySteps.push(
+        { state: 'Closed',           label: 'Closed',    icon: String(displaySteps.length + 1) },
+        { state: 'Closed-Confirmed', label: 'Confirmed', icon: String(displaySteps.length + 2) },
+      );
+    }
+
+    // Build the ordered state sequence for determining active (completed) steps
+    const orderedStates = ['Received', 'Acknowledged', 'Accepted', 'Scheduled'];
+    if (hasNoShow) orderedStates.push('No-Show');
+    orderedStates.push('Encounter');
+    if (hasConsult) orderedStates.push('Consult');
+    orderedStates.push('Closed', 'Closed-Confirmed');
+
+    const currentStateIdx = orderedStates.indexOf(currentState);
 
     const container = document.getElementById('timeline');
 
-    const displaySteps = isDeclined
-      ? [STEPS[0], STEPS[1], { state: 'Declined', label: 'Declined', icon: '✕' }]
-      : STEPS;
-
     displaySteps.forEach(function(step, i) {
-      const stepIdx = activeOrder.indexOf(step.state);
-      const isActive = stepIdx >= 0 && stepIdx < currentIdx;
+      const stepOrderIdx = orderedStates.indexOf(step.state);
+      const isActive = stepOrderIdx >= 0 && stepOrderIdx < currentStateIdx;
       const isCurrent = step.state === currentState;
       const isDeclinedStep = step.state === 'Declined';
+      const isNoShowStep = step.state === 'No-Show';
 
       const el = document.createElement('div');
       el.className = 'tl-step';
@@ -265,10 +342,12 @@
       const dot = document.createElement('div');
       dot.className = 'tl-dot';
       if (isDeclinedStep && isCurrent) dot.className += ' declined';
+      else if (isNoShowStep && isCurrent) dot.className += ' noshown';
+      else if (isNoShowStep && isActive) dot.className += ' active';
       else if (isCurrent) dot.className += ' current';
       else if (isActive) dot.className += ' active';
-      dot.textContent = isActive || isCurrent ? '✓' : step.icon;
-      if (isCurrent && !isActive) dot.textContent = isDeclinedStep ? '✕' : step.icon;
+      dot.textContent = isActive ? '✓' : step.icon;
+      if (isCurrent && !isActive) dot.textContent = (isDeclinedStep || isNoShowStep) ? '✕' : step.icon;
       el.appendChild(dot);
 
       const label = document.createElement('div');
@@ -307,10 +386,28 @@
     document.getElementById('declineReasonField').style.display = '';
   }
 
-  // Hide action card if referral is already decided
-  const terminalStates = ['Accepted', 'Declined', 'Scheduled', 'Encounter', 'Closed', 'Closed-Confirmed'];
-  if (terminalStates.includes(data.referral.state)) {
+  // Show the correct action card based on current state
+  // Disposition decision (Accept/Decline) — only for Acknowledged / Pending-Information
+  const dispositionStates = ['Acknowledged', 'Pending-Information'];
+  if (!dispositionStates.includes(currentState)) {
     document.getElementById('actionCard').style.display = 'none';
+  }
+  // No-Show action — shown when appointment is scheduled but patient hasn't been seen
+  if (currentState === 'Scheduled') {
+    document.getElementById('noShowCard').style.display = '';
+  }
+  // Reschedule — shown after a no-show is recorded
+  if (currentState === 'No-Show') {
+    document.getElementById('rescheduleCard').style.display = '';
+    document.getElementById('rescheduleLink').href = '/referrals/' + referralId + '/schedule';
+  }
+  // Consultation request — shown when encounter is complete but referral not yet closed
+  if (currentState === 'Encounter') {
+    document.getElementById('consultRequestCard').style.display = '';
+  }
+  // Consultation confirmation — shown when specialist has flagged a consult
+  if (currentState === 'Consult') {
+    document.getElementById('consultConfirmCard').style.display = '';
   }
 
   // Populate AI assessment
@@ -463,6 +560,77 @@
 
   function showStatus(message, type) {
     const bar = document.getElementById('statusBar');
+    bar.textContent = message;
+    bar.className = `status-bar ${type}`;
+  }
+
+  // ── PRD-11: No-Show & Consult handlers ───────────────────────────────────
+
+  async function submitNoShow() {
+    try {
+      const res = await fetch(`/referrals/${referralId}/no-show`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const json = await res.json();
+      if (res.ok) {
+        showStatusFor('noShowStatus', 'No-show recorded. The referring physician has been notified.', 'success');
+        document.getElementById('noShowCard').querySelector('button').disabled = true;
+        document.getElementById('stateBadge').textContent = 'No-Show';
+      } else {
+        showStatusFor('noShowStatus', json.error || 'An error occurred.', 'error');
+      }
+    } catch {
+      showStatusFor('noShowStatus', 'Network error — please try again.', 'error');
+    }
+  }
+
+  async function submitConsultRequest() {
+    try {
+      const res = await fetch(`/referrals/${referralId}/consult`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const json = await res.json();
+      if (res.ok) {
+        showStatusFor('consultRequestStatus', 'Consultation requested. The referring provider has been notified.', 'success');
+        document.getElementById('consultRequestCard').querySelector('button').disabled = true;
+        document.getElementById('stateBadge').textContent = 'Consult';
+      } else {
+        showStatusFor('consultRequestStatus', json.error || 'An error occurred.', 'error');
+      }
+    } catch {
+      showStatusFor('consultRequestStatus', 'Network error — please try again.', 'error');
+    }
+  }
+
+  async function submitConsultResolve() {
+    const clinicianId = document.getElementById('consultClinicianId').value.trim();
+    if (!clinicianId) {
+      showStatusFor('consultConfirmStatus', 'Please enter your Clinician ID.', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`/referrals/${referralId}/consult/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clinicianId }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        showStatusFor('consultConfirmStatus', 'Consultation confirmed. Referral is now Closed.', 'success');
+        document.getElementById('consultConfirmCard').querySelector('button').disabled = true;
+        document.getElementById('stateBadge').textContent = 'Closed';
+      } else {
+        showStatusFor('consultConfirmStatus', json.error || 'An error occurred.', 'error');
+      }
+    } catch {
+      showStatusFor('consultConfirmStatus', 'Network error — please try again.', 'error');
+    }
+  }
+
+  function showStatusFor(elementId, message, type) {
+    const bar = document.getElementById(elementId);
     bar.textContent = message;
     bar.className = `status-bar ${type}`;
   }
