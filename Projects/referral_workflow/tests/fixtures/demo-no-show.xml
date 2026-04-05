@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- DEMO SCENARIO: No-Show — complete C-CDA for Jordan Davis; referral lands at Scheduled state -->
+<!-- Clinician marks no-show, then reschedules via the existing scheduling form -->
+<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <realmCode code="US"/>
+  <typeId root="2.16.840.1.113883.1.3" extension="POCD_HD000040"/>
+  <templateId root="2.16.840.1.113883.10.20.22.1.1"/>
+  <templateId root="2.16.840.1.113883.10.20.22.1.14"/>
+  <id root="2.16.840.1.113883.3.9999" extension="DEMO-NOSHOW-001"/>
+  <code code="57133-1" codeSystem="2.16.840.1.113883.6.1" displayName="Referral Note"/>
+  <title>Referral Note</title>
+  <effectiveTime value="20260320120000+0000"/>
+  <confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>
+  <languageCode code="en-US"/>
+
+  <recordTarget>
+    <patientRole>
+      <id root="2.16.840.1.113883.3.9999" extension="PAT-DEMO-NOSHOW"/>
+      <addr use="HP">
+        <streetAddressLine>412 Birchwood Lane</streetAddressLine>
+        <city>Naperville</city>
+        <state>IL</state>
+        <postalCode>60540</postalCode>
+        <country>US</country>
+      </addr>
+      <telecom use="HP" value="tel:+1-555-321-9876"/>
+      <patient>
+        <name use="L">
+          <given>Jordan</given>
+          <family>Davis</family>
+        </name>
+        <administrativeGenderCode code="M" codeSystem="2.16.840.1.113883.5.1" displayName="Male"/>
+        <birthTime value="19880314"/>
+        <languageCommunication>
+          <languageCode code="en"/>
+          <preferenceInd value="true"/>
+        </languageCommunication>
+      </patient>
+    </patientRole>
+  </recordTarget>
+
+  <author>
+    <time value="20260320120000+0000"/>
+    <assignedAuthor>
+      <id root="2.16.840.1.113883.3.9999" extension="PROV-DR-NGUYEN"/>
+      <assignedPerson>
+        <name>
+          <given>Linh</given>
+          <family>Nguyen</family>
+          <prefix>Dr.</prefix>
+        </name>
+      </assignedPerson>
+      <representedOrganization>
+        <name>Naperville Primary Care Associates</name>
+        <telecom use="WP" value="tel:+1-555-456-7890"/>
+        <addr>
+          <streetAddressLine>200 West Jefferson Avenue</streetAddressLine>
+          <city>Naperville</city>
+          <state>IL</state>
+          <postalCode>60540</postalCode>
+        </addr>
+      </representedOrganization>
+    </assignedAuthor>
+  </author>
+
+  <custodian>
+    <assignedCustodian>
+      <representedCustodianOrganization>
+        <id root="2.16.840.1.113883.3.9999" extension="ORG-NPCA"/>
+        <name>Naperville Primary Care Associates</name>
+      </representedCustodianOrganization>
+    </assignedCustodian>
+  </custodian>
+
+  <component>
+    <structuredBody>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.13"/>
+          <code code="46239-0" codeSystem="2.16.840.1.113883.6.1"
+                displayName="Chief Complaint and Reason for Visit"/>
+          <title>Chief Complaint / Reason for Referral</title>
+          <text>Patient referred for orthopedic evaluation of chronic right knee pain with progressive loss of range of motion over the past 8 months. MRI findings consistent with medial compartment osteoarthritis and a partial medial meniscus tear. Patient has failed conservative management including NSAIDs and physical therapy (6 weeks). Requesting evaluation for arthroscopic intervention vs. total knee arthroplasty candidacy.</text>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.5.1"/>
+          <code code="11450-4" codeSystem="2.16.840.1.113883.6.1" displayName="Problem List"/>
+          <title>Problems</title>
+          <text>
+            <list>
+              <item>Right knee osteoarthritis, medial compartment — ICD-10: M17.11</item>
+              <item>Partial tear, medial meniscus, right knee — ICD-10: M23.201</item>
+              <item>Chronic knee pain — ICD-10: M25.561</item>
+              <item>Essential hypertension — ICD-10: I10</item>
+              <item>Obesity, Class I — ICD-10: E66.01</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <code code="64572001" codeSystem="2.16.840.1.113883.6.96" displayName="Condition"/>
+                  <value xsi:type="CD" code="57773001" codeSystem="2.16.840.1.113883.6.96"
+                         displayName="Osteoarthritis of knee"/>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <code code="64572001" codeSystem="2.16.840.1.113883.6.96" displayName="Condition"/>
+                  <value xsi:type="CD" code="38341003" codeSystem="2.16.840.1.113883.6.96"
+                         displayName="Essential hypertension"/>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.1.1"/>
+          <code code="10160-0" codeSystem="2.16.840.1.113883.6.1" displayName="Medications"/>
+          <title>Medications</title>
+          <text>
+            <list>
+              <item>Ibuprofen 600 mg PO three times daily with food (as needed for pain)</item>
+              <item>Lisinopril 10 mg PO daily</item>
+              <item>Acetaminophen 500 mg PO as needed (max 3g/day)</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <substanceAdministration classCode="SBADM" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+              <consumable>
+                <manufacturedProduct classCode="MANU">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                  <manufacturedMaterial>
+                    <code code="153010" codeSystem="2.16.840.1.113883.6.88" displayName="Ibuprofen 600 mg"/>
+                  </manufacturedMaterial>
+                </manufacturedProduct>
+              </consumable>
+            </substanceAdministration>
+          </entry>
+          <entry typeCode="DRIV">
+            <substanceAdministration classCode="SBADM" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.16"/>
+              <consumable>
+                <manufacturedProduct classCode="MANU">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.23"/>
+                  <manufacturedMaterial>
+                    <code code="314076" codeSystem="2.16.840.1.113883.6.88" displayName="Lisinopril 10 mg"/>
+                  </manufacturedMaterial>
+                </manufacturedProduct>
+              </consumable>
+            </substanceAdministration>
+          </entry>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.6.1"/>
+          <code code="48765-2" codeSystem="2.16.840.1.113883.6.1" displayName="Allergies"/>
+          <title>Allergies and Adverse Reactions</title>
+          <text>
+            <list>
+              <item>Sulfa drugs — urticaria (moderate)</item>
+              <item>No known food allergies</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.30"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.7"/>
+                  <participant typeCode="CSM">
+                    <participantRole classCode="MANU">
+                      <playingEntity classCode="MMAT">
+                        <code code="392235006" codeSystem="2.16.840.1.113883.6.96" displayName="Sulfonamide"/>
+                      </playingEntity>
+                    </participantRole>
+                  </participant>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.3.1"/>
+          <code code="30954-2" codeSystem="2.16.840.1.113883.6.1" displayName="Results"/>
+          <title>Diagnostic Results</title>
+          <text>
+            <list>
+              <item>Right knee MRI (2026-03-05): Medial compartment osteoarthritis, grade III chondral loss; partial medial meniscus tear, posterior horn</item>
+              <item>Right knee X-ray (2026-02-20): Moderate joint space narrowing medial compartment, osteophyte formation</item>
+              <item>BMI (2026-03-15): 31.2</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <organizer classCode="BATTERY" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.1"/>
+              <code code="36643-5" codeSystem="2.16.840.1.113883.6.1" displayName="Knee MRI"/>
+              <statusCode code="completed"/>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.2"/>
+                  <code code="36643-5" codeSystem="2.16.840.1.113883.6.1" displayName="Knee MRI findings"/>
+                  <effectiveTime value="20260305"/>
+                  <value xsi:type="ST">Medial compartment OA grade III, partial medial meniscus tear</value>
+                </observation>
+              </component>
+            </organizer>
+          </entry>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.4.1"/>
+          <code code="8716-3" codeSystem="2.16.840.1.113883.6.1" displayName="Vital Signs"/>
+          <title>Vital Signs</title>
+          <text>
+            <list>
+              <item>Blood Pressure: 128/82 mmHg</item>
+              <item>Heart Rate: 72 bpm</item>
+              <item>Weight: 214 lbs, Height: 5'11", BMI: 31.2</item>
+            </list>
+          </text>
+        </section>
+      </component>
+
+    </structuredBody>
+  </component>
+</ClinicalDocument>

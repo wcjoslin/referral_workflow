@@ -24,6 +24,7 @@ import { evaluateSkills } from './modules/prd09/skillEvaluator';
 import { executeSkillAction } from './modules/prd09/skillActions';
 import { db } from './db';
 import { referrals } from './db/schema';
+import { ReferralState } from './state/referralStateMachine';
 
 const FIXTURES_DIR = path.resolve(__dirname, '../tests/fixtures');
 
@@ -186,5 +187,111 @@ export async function launchPayerRejection(): Promise<number> {
     console.warn(`[Demo] Payer rejection scenario — no matching skill action fired for referral #${referralId}. Check that payer-network-check skill is active and not in test-mode.`);
   }
 
+  return referralId;
+}
+
+// ── Scenario 5: No-Show ───────────────────────────────────────────────────────
+
+/**
+ * Injects a complete C-CDA (Jordan Davis) and advances the referral directly to
+ * Scheduled state with a past appointment date, bypassing the mock cascade.
+ *
+ * This is necessary because schedulingService.scheduleReferral() non-blockingly
+ * fires mockEncounter, which would skip past Scheduled before the user can
+ * interact with the No-Show UI.
+ *
+ * Expected demo flow:
+ *   1. Referral lands at Scheduled state (appointment 2 days ago)
+ *   2. Clinician clicks "Mark No-Show" → state = No-Show
+ *   3. Clinician clicks "Schedule New Appointment" → /referrals/:id/schedule form
+ *   4. Submits new appointment → state = Scheduled
+ */
+export async function launchNoShow(): Promise<number> {
+  const cda = readFixture('demo-no-show.xml');
+  const referralId = await ingest(cda, {
+    fromName: 'Dr. Linh Nguyen',
+    fromAddress: 'referrer@hospital.direct',
+    messageIdSuffix: `no-show-${Date.now()}`,
+  });
+
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+
+  await db
+    .update(referrals)
+    .set({
+      state: ReferralState.SCHEDULED,
+      clinicianId: 'demo-clinician',
+      appointmentDate: twoDaysAgo.toISOString(),
+      appointmentLocation: 'Exam Room 2',
+      scheduledProvider: 'Dr. Sarah Chen',
+      updatedAt: new Date(),
+    })
+    .where(eq(referrals.id, referralId));
+
+  console.log(
+    `[Demo] No-show scenario launched — Referral #${referralId} (Jordan Davis) at Scheduled state. Click "Mark No-Show" to continue.`,
+  );
+  return referralId;
+}
+
+// ── Scenario 6: Consult ───────────────────────────────────────────────────────
+
+/**
+ * Injects a C-CDA for Michael Kihn (FHIR ID 123836453) that intentionally omits
+ * the medications section, then advances directly to Consult state with a
+ * specialist note requesting medication history.
+ *
+ * Bypasses the mock cascade (same reason as launchNoShow) and avoids SMTP
+ * dependency by setting state directly in DB.
+ *
+ * Expected demo flow:
+ *   1. Referral lands at Consult state with specialist note visible
+ *   2. Clinician fetches medications via FHIR (Michael Kihn is in HAPI sandbox)
+ *      OR enters medications manually
+ *   3. Clinician confirms consultation → state = Closed
+ */
+export async function launchConsult(): Promise<number> {
+  const cda = readFixture('demo-consult.xml');
+  const referralId = await ingest(cda, {
+    fromName: 'Dr. Anita Patel',
+    fromAddress: 'referrer@hospital.direct',
+    messageIdSuffix: `consult-${Date.now()}`,
+  });
+
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  await db
+    .update(referrals)
+    .set({
+      state: ReferralState.CONSULT,
+      clinicianId: 'demo-clinician',
+      appointmentDate: yesterday.toISOString(),
+      appointmentLocation: 'Exam Room 3',
+      scheduledProvider: 'Dr. Sarah Chen',
+      updatedAt: new Date(),
+    })
+    .where(eq(referrals.id, referralId));
+
+  // Append consultation request note to clinicalData
+  const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+  let clinicalData: Record<string, unknown> = {};
+  if (referral?.clinicalData) {
+    try {
+      clinicalData = JSON.parse(referral.clinicalData) as Record<string, unknown>;
+    } catch {
+      // leave empty if malformed
+    }
+  }
+  clinicalData.consultRequest =
+    'Specialist requires a complete medication reconciliation — including drug names, dosages, and frequency — before finalizing diabetes management recommendations. Please provide or verify the full current medication list.';
+
+  await db
+    .update(referrals)
+    .set({ clinicalData: JSON.stringify(clinicalData), updatedAt: new Date() })
+    .where(eq(referrals.id, referralId));
+
+  console.log(
+    `[Demo] Consult scenario launched — Referral #${referralId} (Michael Kihn) at Consult state. Fetch medications from FHIR or enter manually to proceed.`,
+  );
   return referralId;
 }

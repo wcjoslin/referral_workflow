@@ -2,7 +2,7 @@
 title: PRD Index - All Product Requirements
 tags: [prd, features, index]
 up: "[[🎯 PROJECT OVERVIEW]]"
-down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]"]
+down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]", "[[Feature - No-Show & Consult Demo Scenarios]]"]
 ---
 
 # 📋 PRD Index
@@ -110,6 +110,20 @@ The logical order for PRD development:
 
 ---
 
+### 8. **[[PRD-11 - No-Show & Consult States|PRD-11: No-Show & Consult States]]** 🔧
+**Fills missing lifecycle gaps** for appointments and post-encounter consultation.
+
+- Mark a scheduled appointment as no-show; notify referring physician
+- Allow rescheduling from No-Show state using existing referral document
+- Allow specialist to flag post-encounter consultation need
+- Reintroduce clinician confirmation step before loop closure
+- **Prerequisite:** PRD-03 (Scheduled), PRD-05 (Encounter)
+
+**Status:** 🔧 In Progress  
+**Module:** `prd11/`
+
+---
+
 ## Quick Reference
 
 | PRD | Name | Status | Key Action | Module |
@@ -121,6 +135,7 @@ The logical order for PRD development:
 | [[PRD-05 - Patient Encounter|05]] | Patient Encounter | ✅ | Send ADT, update state | `prd05/` |
 | [[PRD-06 - Close Loop|06]] | Close Loop | ✅ | Acknowledge final report | `prd06/` |
 | [[PRD-07 - Ack Tracking|07]] | Ack Tracking | ✅ | Monitor & retry messages | `prd07/` |
+| [[PRD-11 - No-Show & Consult States|11]] | No-Show & Consult States | 🔧 | No-show notify + consult confirmation | `prd11/` |
 
 ---
 
@@ -139,6 +154,17 @@ PRD-03 (Schedule)
 
 PRD-07 (Ack Tracking) ← Horizontal feature, monitors all outbound messages
 ```
+
+---
+
+## Features
+
+| Feature | Description | Status |
+|---------|-------------|--------|
+| [[Feature - Human-Readable Email Summaries]] | Plain-text summaries in outbound emails | ✅ Complete |
+| [[Feature - Human-Readable Message Type Labels]] | Friendly labels for message types in UI | ✅ Complete |
+| [[Feature - Demo Launcher Message Preview]] | C-CDA viewer + envelope preview on demo launcher | ✅ Complete |
+| [[Feature - No-Show & Consult Demo Scenarios]] | Demo scenarios for No-Show and Consult state paths | 🔧 Ready for Dev |
 
 ---
 
