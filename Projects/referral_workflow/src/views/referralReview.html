@@ -105,6 +105,17 @@
     .sialia-nav, .sialia-header { background-color: var(--color-nav-bg) !important; }
     .sialia-nav a, .sialia-header-title { color: #fff !important; }
     .sialia-section-title { color: var(--color-brand) !important; border-bottom-color: var(--color-brand) !important; }
+
+    /* Consult medication enrichment */
+    .consult-request-note { background: #fff3cd; border-left: 4px solid #e6a817; padding: 12px 14px; border-radius: 0 6px 6px 0; margin-bottom: 18px; font-size: 0.93rem; line-height: 1.5; }
+    .consult-request-note strong { display: block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: .05em; color: #664d03; margin-bottom: 4px; }
+    .med-enrich-section { border: 1px solid var(--color-border); border-radius: 6px; padding: 14px 16px; margin-bottom: 14px; }
+    .med-enrich-section h4 { font-size: 0.82rem; text-transform: uppercase; letter-spacing: .05em; color: var(--color-text-muted); margin-bottom: 10px; }
+    .fhir-med-list { list-style: none; padding: 0; margin: 10px 0; font-size: 0.92rem; }
+    .fhir-med-list li { padding: 4px 0; border-bottom: 1px solid var(--color-border); }
+    .fhir-med-list li:last-child { border-bottom: none; }
+    .manual-meds-input { width: 100%; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 5px; font-size: 0.92rem; font-family: inherit; resize: vertical; margin-bottom: 8px; }
+    .enrich-divider { text-align: center; font-size: 0.82rem; color: var(--color-text-muted); margin: 6px 0; }
   </style>
 </head>
 <body>
@@ -210,7 +221,40 @@
     <div class="card" id="consultConfirmCard" style="display:none;">
       <h2>Confirm Consultation</h2>
       <p class="consult-description">The specialist has requested further consultation before this referral can be closed. Review the referral details and confirm to proceed.</p>
-      <div class="clinician-field">
+
+      <!-- Specialist consultation request note (populated from clinicalData.consultRequest) -->
+      <div class="consult-request-note" id="consultRequestNote" style="display:none;">
+        <strong>Specialist Note</strong>
+        <span id="consultRequestText"></span>
+      </div>
+
+      <!-- Option 1: Fetch medications from FHIR -->
+      <div class="med-enrich-section">
+        <h4>Option 1 — Fetch Medications from FHIR</h4>
+        <div class="actions" style="margin-bottom:0;">
+          <button class="btn btn-secondary-action" id="fhirFetchBtn" onclick="fetchFhirMeds()">Query FHIR Record</button>
+        </div>
+        <div id="fhirMedResults" style="display:none;margin-top:12px;">
+          <ul class="fhir-med-list" id="fhirMedList"></ul>
+          <button class="btn btn-accept" onclick="saveFhirMeds()" style="margin-top:6px;">Save FHIR Medications</button>
+        </div>
+        <div class="status-bar" id="fhirMedStatus"></div>
+      </div>
+
+      <div class="enrich-divider">— or —</div>
+
+      <!-- Option 2: Manual medication entry -->
+      <div class="med-enrich-section">
+        <h4>Option 2 — Enter Medications Manually</h4>
+        <textarea class="manual-meds-input" id="manualMeds" rows="4"
+          placeholder="One medication per line&#10;e.g. Metformin 500mg twice daily&#10;e.g. Lisinopril 10mg once daily"></textarea>
+        <div class="actions">
+          <button class="btn btn-secondary-action" onclick="saveManualMeds()">Save Manual Medications</button>
+        </div>
+        <div class="status-bar" id="manualMedStatus"></div>
+      </div>
+
+      <div class="clinician-field" style="margin-top:4px;">
         <label for="consultClinicianId">Clinician ID</label>
         <input type="text" id="consultClinicianId" placeholder="e.g. dr-smith" />
       </div>
@@ -408,6 +452,13 @@
   // Consultation confirmation — shown when specialist has flagged a consult
   if (currentState === 'Consult') {
     document.getElementById('consultConfirmCard').style.display = '';
+  }
+
+  // Show consultation request note if present in clinicalData
+  var consultClinical = data.referral.clinicalData ? JSON.parse(data.referral.clinicalData) : null;
+  if (consultClinical && consultClinical.consultRequest) {
+    document.getElementById('consultRequestNote').style.display = '';
+    document.getElementById('consultRequestText').textContent = consultClinical.consultRequest;
   }
 
   // Populate AI assessment
@@ -619,7 +670,7 @@
       const json = await res.json();
       if (res.ok) {
         showStatusFor('consultConfirmStatus', 'Consultation confirmed. Referral is now Closed.', 'success');
-        document.getElementById('consultConfirmCard').querySelector('button').disabled = true;
+        document.querySelectorAll('#consultConfirmCard button').forEach(function(b) { b.disabled = true; });
         document.getElementById('stateBadge').textContent = 'Closed';
       } else {
         showStatusFor('consultConfirmStatus', json.error || 'An error occurred.', 'error');
@@ -633,6 +684,93 @@
     const bar = document.getElementById(elementId);
     bar.textContent = message;
     bar.className = `status-bar ${type}`;
+  }
+
+  // ── Consult demo: FHIR medication fetch & manual entry ────────────────────
+
+  var _fhirMedications = []; // cache for saveFhirMeds()
+
+  async function fetchFhirMeds() {
+    const btn = document.getElementById('fhirFetchBtn');
+    btn.disabled = true;
+    btn.textContent = 'Querying FHIR…';
+    showStatusFor('fhirMedStatus', '', '');
+    try {
+      const res = await fetch(`/referrals/${referralId}/fhir-medications`);
+      const json = await res.json();
+      if (!res.ok) {
+        showStatusFor('fhirMedStatus', json.error || 'FHIR lookup failed.', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Query FHIR Record';
+        return;
+      }
+      if (!json.fhirPatientId || json.medications.length === 0) {
+        showStatusFor('fhirMedStatus', 'No FHIR patient match found — please enter medications manually below.', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Query FHIR Record';
+        return;
+      }
+      _fhirMedications = json.medications;
+      const list = document.getElementById('fhirMedList');
+      list.innerHTML = json.medications.map(function(m) {
+        const detail = m.dosage ? ' — ' + m.dosage : '';
+        return '<li><span class="badge-fhir">FHIR</span> ' + m.name + detail + '</li>';
+      }).join('');
+      document.getElementById('fhirMedResults').style.display = '';
+      showStatusFor('fhirMedStatus', 'Found ' + json.medications.length + ' medication(s) from FHIR (Patient/' + json.fhirPatientId + ').', 'success');
+      btn.textContent = 'Query FHIR Record';
+      btn.disabled = false;
+    } catch {
+      showStatusFor('fhirMedStatus', 'Network error — please try again.', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Query FHIR Record';
+    }
+  }
+
+  async function saveFhirMeds() {
+    if (!_fhirMedications.length) return;
+    const names = _fhirMedications.map(function(m) {
+      return m.dosage ? m.name + ' — ' + m.dosage : m.name;
+    });
+    try {
+      const res = await fetch(`/referrals/${referralId}/medications`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ medications: names, source: 'fhir' }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        showStatusFor('fhirMedStatus', 'FHIR medications saved to referral record.', 'success');
+      } else {
+        showStatusFor('fhirMedStatus', json.error || 'Failed to save medications.', 'error');
+      }
+    } catch {
+      showStatusFor('fhirMedStatus', 'Network error — please try again.', 'error');
+    }
+  }
+
+  async function saveManualMeds() {
+    const raw = document.getElementById('manualMeds').value.trim();
+    if (!raw) {
+      showStatusFor('manualMedStatus', 'Please enter at least one medication.', 'error');
+      return;
+    }
+    const medications = raw.split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+    try {
+      const res = await fetch(`/referrals/${referralId}/medications`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ medications, source: 'manual' }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        showStatusFor('manualMedStatus', medications.length + ' medication(s) saved to referral record.', 'success');
+      } else {
+        showStatusFor('manualMedStatus', json.error || 'Failed to save medications.', 'error');
+      }
+    } catch {
+      showStatusFor('manualMedStatus', 'Network error — please try again.', 'error');
+    }
   }
 </script>
 </body>

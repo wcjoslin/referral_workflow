@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- DEMO SCENARIO: Consult — Michael Kihn (FHIR ID 123836453), medications section intentionally omitted -->
+<!-- Referral lands at Consult state. Specialist requests medication history. -->
+<!-- Clinician resolves by fetching meds from FHIR or entering manually, then confirms consultation. -->
+<ClinicalDocument xmlns="urn:hl7-org:v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <realmCode code="US"/>
+  <typeId root="2.16.840.1.113883.1.3" extension="POCD_HD000040"/>
+  <templateId root="2.16.840.1.113883.10.20.22.1.1"/>
+  <templateId root="2.16.840.1.113883.10.20.22.1.14"/>
+  <id root="2.16.840.1.113883.3.9999" extension="DEMO-CONSULT-001"/>
+  <code code="57133-1" codeSystem="2.16.840.1.113883.6.1" displayName="Referral Note"/>
+  <title>Referral Note</title>
+  <effectiveTime value="20260321090000+0000"/>
+  <confidentialityCode code="N" codeSystem="2.16.840.1.113883.5.25"/>
+  <languageCode code="en-US"/>
+
+  <!-- Patient: Michael Kihn — matches HAPI FHIR sandbox patient ID 123836453 -->
+  <recordTarget>
+    <patientRole>
+      <id root="2.16.840.1.113883.3.9999" extension="PAT-DEMO-CONSULT"/>
+      <addr use="HP">
+        <streetAddressLine>123 Oak Street</streetAddressLine>
+        <city>Springfield</city>
+        <state>IL</state>
+        <postalCode>62704</postalCode>
+        <country>US</country>
+      </addr>
+      <telecom use="HP" value="tel:+1-555-867-5309"/>
+      <patient>
+        <name use="L">
+          <given>Michael</given>
+          <family>Kihn</family>
+        </name>
+        <administrativeGenderCode code="M" codeSystem="2.16.840.1.113883.5.1" displayName="Male"/>
+        <birthTime value="19740625"/>
+        <languageCommunication>
+          <languageCode code="en"/>
+          <preferenceInd value="true"/>
+        </languageCommunication>
+      </patient>
+    </patientRole>
+  </recordTarget>
+
+  <author>
+    <time value="20260321090000+0000"/>
+    <assignedAuthor>
+      <id root="2.16.840.1.113883.3.9999" extension="PROV-DR-PATEL"/>
+      <assignedPerson>
+        <name>
+          <given>Anita</given>
+          <family>Patel</family>
+          <prefix>Dr.</prefix>
+        </name>
+      </assignedPerson>
+      <representedOrganization>
+        <name>Springfield Family Medicine</name>
+        <telecom use="WP" value="tel:+1-555-234-5678"/>
+        <addr>
+          <streetAddressLine>456 Main Street</streetAddressLine>
+          <city>Springfield</city>
+          <state>IL</state>
+          <postalCode>62701</postalCode>
+        </addr>
+      </representedOrganization>
+    </assignedAuthor>
+  </author>
+
+  <custodian>
+    <assignedCustodian>
+      <representedCustodianOrganization>
+        <id root="2.16.840.1.113883.3.9999" extension="ORG-SFM"/>
+        <name>Springfield Family Medicine</name>
+      </representedCustodianOrganization>
+    </assignedCustodian>
+  </custodian>
+
+  <component>
+    <structuredBody>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.13"/>
+          <code code="46239-0" codeSystem="2.16.840.1.113883.6.1"
+                displayName="Chief Complaint and Reason for Visit"/>
+          <title>Chief Complaint / Reason for Referral</title>
+          <text>Patient referred to Endocrinology for complex Type 2 diabetes management. HbA1c remains poorly controlled at 9.1% despite primary care optimization. Patient reports recurrent hypoglycemic episodes and difficulty with glucose self-monitoring. Co-morbid hypertension adds complexity to pharmacological management. Medication reconciliation and specialist adjustment of diabetes regimen requested.</text>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.5.1"/>
+          <code code="11450-4" codeSystem="2.16.840.1.113883.6.1" displayName="Problem List"/>
+          <title>Problems</title>
+          <text>
+            <list>
+              <item>Type 2 diabetes mellitus, poorly controlled — ICD-10: E11.65</item>
+              <item>Essential hypertension — ICD-10: I10</item>
+              <item>Hypoglycemia, recurrent — ICD-10: E11.649</item>
+              <item>Overweight — ICD-10: E66.3</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <code code="64572001" codeSystem="2.16.840.1.113883.6.96" displayName="Condition"/>
+                  <value xsi:type="CD" code="44054006" codeSystem="2.16.840.1.113883.6.96"
+                         displayName="Type 2 diabetes mellitus"/>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.3"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.4"/>
+                  <code code="64572001" codeSystem="2.16.840.1.113883.6.96" displayName="Condition"/>
+                  <value xsi:type="CD" code="38341003" codeSystem="2.16.840.1.113883.6.96"
+                         displayName="Essential hypertension"/>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+        </section>
+      </component>
+
+      <!-- Medications section intentionally omitted — specialist will request this via Consult state -->
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.6.1"/>
+          <code code="48765-2" codeSystem="2.16.840.1.113883.6.1" displayName="Allergies"/>
+          <title>Allergies and Adverse Reactions</title>
+          <text>
+            <list>
+              <item>Penicillin — anaphylaxis (severe, documented 2005)</item>
+              <item>Sulfonamides — rash (moderate, documented 2012)</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <act classCode="ACT" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.30"/>
+              <entryRelationship typeCode="SUBJ">
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.7"/>
+                  <participant typeCode="CSM">
+                    <participantRole classCode="MANU">
+                      <playingEntity classCode="MMAT">
+                        <code code="70618" codeSystem="2.16.840.1.113883.6.88" displayName="Penicillin"/>
+                      </playingEntity>
+                    </participantRole>
+                  </participant>
+                </observation>
+              </entryRelationship>
+            </act>
+          </entry>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.3.1"/>
+          <code code="30954-2" codeSystem="2.16.840.1.113883.6.1" displayName="Results"/>
+          <title>Diagnostic Results</title>
+          <text>
+            <list>
+              <item>HbA1c (2026-03-01): 9.1% (poorly controlled, target &lt; 7.0%)</item>
+              <item>Fasting glucose (2026-03-01): 198 mg/dL</item>
+              <item>Comprehensive metabolic panel (2026-03-01): BUN 18, Creatinine 1.1, eGFR 72 mL/min</item>
+              <item>Urine microalbumin/creatinine ratio (2026-03-01): 42 mg/g (mildly elevated)</item>
+            </list>
+          </text>
+          <entry typeCode="DRIV">
+            <organizer classCode="BATTERY" moodCode="EVN">
+              <templateId root="2.16.840.1.113883.10.20.22.4.1"/>
+              <code code="43396-1" codeSystem="2.16.840.1.113883.6.1" displayName="Hemoglobin A1c panel"/>
+              <statusCode code="completed"/>
+              <component>
+                <observation classCode="OBS" moodCode="EVN">
+                  <templateId root="2.16.840.1.113883.10.20.22.4.2"/>
+                  <code code="4548-4" codeSystem="2.16.840.1.113883.6.1" displayName="HbA1c"/>
+                  <effectiveTime value="20260301"/>
+                  <value xsi:type="PQ" value="9.1" unit="%"/>
+                </observation>
+              </component>
+            </organizer>
+          </entry>
+        </section>
+      </component>
+
+      <component>
+        <section>
+          <templateId root="2.16.840.1.113883.10.20.22.2.4.1"/>
+          <code code="8716-3" codeSystem="2.16.840.1.113883.6.1" displayName="Vital Signs"/>
+          <title>Vital Signs</title>
+          <text>
+            <list>
+              <item>Blood Pressure: 142/90 mmHg</item>
+              <item>Heart Rate: 80 bpm</item>
+              <item>Weight: 198 lbs, Height: 5'10", BMI: 28.4</item>
+            </list>
+          </text>
+        </section>
+      </component>
+
+    </structuredBody>
+  </component>
+</ClinicalDocument>

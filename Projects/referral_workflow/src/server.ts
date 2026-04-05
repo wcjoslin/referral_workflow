@@ -8,8 +8,11 @@
  *   GET  /scheduler/queue               — scheduling queue page (PRD-03)
  *   GET  /referrals/:id/schedule        — scheduling form page (PRD-03)
  *   POST /referrals/:id/schedule        — submit appointment (PRD-03)
- *   GET  /referrals/:id/encounter       — encounter status page (PRD-05)
- *   POST /referrals/:id/encounter       — mark encounter complete (PRD-05)
+ *   GET  /referrals/:id/encounter        — encounter status page (PRD-05)
+ *   POST /referrals/:id/encounter        — mark encounter complete (PRD-05)
+ *   POST /referrals/:id/no-show          — mark no-show and notify referrer (PRD-11)
+ *   POST /referrals/:id/consult          — enter Consult state (PRD-11)
+ *   POST /referrals/:id/consult/resolve  — resolve consult and move to Closed (PRD-11)
  *   GET  /referrals/:id/consult-note    — consult note form (PRD-04)
  *   POST /referrals/:id/consult-note    — generate and send consult note (PRD-04)
  *   GET  /messages                      — message history dashboard (PRD-07)
@@ -31,6 +34,8 @@ import { scheduleReferral, ReferralNotFoundError, SchedulingConflictError } from
 import { getResources } from './modules/prd03/resourceCalendar';
 import { markEncounterComplete, ReferralNotFoundError as EncounterNotFoundError } from './modules/prd05/encounterService';
 import { generateAndSend, ReferralNotFoundError as ConsultNotFoundError } from './modules/prd04/consultNoteService';
+import { markNoShow, ReferralNotFoundError as NoShowNotFoundError } from './modules/prd11/noShowService';
+import { markConsult, resolveConsult, ReferralNotFoundError as ConsultStateNotFoundError } from './modules/prd11/consultService';
 import { InvalidStateTransitionError } from './state/referralStateMachine';
 import { InvalidClaimsStateTransitionError } from './state/claimsStateMachine';
 import { config } from './config';
@@ -465,6 +470,83 @@ app.post('/referrals/:id/encounter', async (req: Request, res: Response, next: N
   }
 });
 
+// ── PRD-11: No-Show & Consult routes ─────────────────────────────────────────
+
+// Mark no-show — transitions Scheduled → No-Show, notifies referring physician
+app.post('/referrals/:id/no-show', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    await markNoShow(referralId);
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof NoShowNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof InvalidStateTransitionError) {
+      res.status(409).json({ error: err.message });
+    } else {
+      next(err);
+    }
+  }
+});
+
+// Enter Consult state — transitions Encounter → Consult, notifies referring provider
+app.post('/referrals/:id/consult', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    await markConsult(referralId);
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof ConsultStateNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof InvalidStateTransitionError) {
+      res.status(409).json({ error: err.message });
+    } else {
+      next(err);
+    }
+  }
+});
+
+// Resolve consultation — transitions Consult → Closed
+app.post('/referrals/:id/consult/resolve', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    const { clinicianId } = req.body as { clinicianId?: string };
+    if (!clinicianId || clinicianId.trim() === '') {
+      res.status(400).json({ error: 'clinicianId is required' });
+      return;
+    }
+
+    await resolveConsult(referralId, clinicianId.trim());
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof ConsultStateNotFoundError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof InvalidStateTransitionError) {
+      res.status(409).json({ error: err.message });
+    } else {
+      next(err);
+    }
+  }
+});
+
 // ── PRD-04: Consult Note routes ───────────────────────────────────────────────
 
 // Consult note form page
@@ -529,6 +611,97 @@ app.post('/referrals/:id/consult-note', async (req: Request, res: Response, next
     } else {
       next(err);
     }
+  }
+});
+
+// ── PRD-08 / Consult Demo: FHIR medication lookup & medication save ───────────
+
+// Fetch patient medications from FHIR by name + DOB stored in DB
+app.get('/referrals/:id/fhir-medications', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+    if (!referral) {
+      res.status(404).json({ error: 'Referral not found' });
+      return;
+    }
+
+    const [patient] = await db.select().from(patients).where(eq(patients.id, referral.patientId));
+    if (!patient) {
+      res.json({ fhirPatientId: null, medications: [] });
+      return;
+    }
+
+    const { searchPatient, getMedications } = await import('./modules/prd08/fhirClient');
+    const match = await searchPatient(patient.firstName, patient.lastName, patient.dateOfBirth);
+    if (!match) {
+      res.json({ fhirPatientId: null, medications: [] });
+      return;
+    }
+
+    const medications = await getMedications(match.id);
+    res.json({ fhirPatientId: match.id, medications });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Save medications (from FHIR or manual entry) to referral clinicalData
+app.post('/referrals/:id/medications', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    const { medications, source } = req.body as {
+      medications?: string[];
+      source?: 'fhir' | 'manual';
+    };
+
+    if (!medications || !Array.isArray(medications) || medications.length === 0) {
+      res.status(400).json({ error: 'medications must be a non-empty array of strings' });
+      return;
+    }
+    if (source !== 'fhir' && source !== 'manual') {
+      res.status(400).json({ error: 'source must be "fhir" or "manual"' });
+      return;
+    }
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+    if (!referral) {
+      res.status(404).json({ error: 'Referral not found' });
+      return;
+    }
+
+    let clinicalData: Record<string, unknown> = {};
+    if (referral.clinicalData) {
+      try {
+        clinicalData = JSON.parse(referral.clinicalData) as Record<string, unknown>;
+      } catch {
+        // leave empty
+      }
+    }
+
+    // Store as EnrichedClinicalItem-shaped objects (consistent with PRD-08 schema)
+    clinicalData.medications = medications.map((name) => ({ name, source }));
+
+    await db
+      .update(referrals)
+      .set({ clinicalData: JSON.stringify(clinicalData), updatedAt: new Date() })
+      .where(eq(referrals.id, referralId));
+
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -937,19 +1110,21 @@ app.get('/demo', (_req: Request, res: Response, next: NextFunction) => {
 app.post('/demo/launch', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { scenario } = req.body as { scenario?: string };
-    const validScenarios = ['full-workflow', 'incomplete-info', 'fhir-enriched', 'payer-rejection'] as const;
+    const validScenarios = ['full-workflow', 'incomplete-info', 'fhir-enriched', 'payer-rejection', 'no-show', 'consult'] as const;
     type Scenario = typeof validScenarios[number];
     if (!scenario || !validScenarios.includes(scenario as Scenario)) {
       res.status(400).json({ error: `scenario must be one of: ${validScenarios.join(', ')}` });
       return;
     }
-    const { launchFullWorkflow, launchIncompleteInfo, launchFhirEnriched, launchPayerRejection } =
+    const { launchFullWorkflow, launchIncompleteInfo, launchFhirEnriched, launchPayerRejection, launchNoShow, launchConsult } =
       await import('./demoScenarios');
     const scenarioFns: Record<Scenario, () => Promise<number>> = {
       'full-workflow':   launchFullWorkflow,
       'incomplete-info': launchIncompleteInfo,
       'fhir-enriched':   launchFhirEnriched,
       'payer-rejection': launchPayerRejection,
+      'no-show':         launchNoShow,
+      'consult':         launchConsult,
     };
     const referralId = await scenarioFns[scenario as Scenario]();
     res.json({ referralId });
@@ -959,7 +1134,7 @@ app.post('/demo/launch', async (req: Request, res: Response, next: NextFunction)
 });
 
 app.get('/demo/fixture/:scenario', (req: Request, res: Response) => {
-  const VALID_SCENARIOS = ['full-workflow', 'incomplete-info', 'fhir-enriched', 'payer-rejection'];
+  const VALID_SCENARIOS = ['full-workflow', 'incomplete-info', 'fhir-enriched', 'payer-rejection', 'no-show', 'consult'];
   const scenario = Array.isArray(req.params.scenario) ? req.params.scenario[0] : req.params.scenario;
   if (!VALID_SCENARIOS.includes(scenario)) { res.status(404).end(); return; }
   const fixturePath = path.join(__dirname, '..', 'tests', 'fixtures', `demo-${scenario}.xml`);
