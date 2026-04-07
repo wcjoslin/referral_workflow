@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Demo Walkthrough — 360X Referral</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--color-bg-page); color: var(--color-text); }
+
+    /* ── Layout ─────────────────────────────────────────────── */
+    .page-wrap { max-width: 980px; margin: 0 auto; padding: 28px 24px 64px; }
+    .page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; gap: 16px; }
+    .page-title { font-size: 1.5rem; font-weight: 700; margin: 0 0 4px; }
+    .page-subtitle { color: var(--color-text-muted); font-size: 0.88rem; margin: 0 0 22px; line-height: 1.5; max-width: 680px; }
+
+    .btn-reset {
+      padding: 8px 18px; background: var(--color-nav-bg); color: #fff; border: none;
+      border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    }
+    .btn-reset:hover:not(:disabled) { filter: brightness(1.3); }
+    .btn-reset:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── Seed banner ─────────────────────────────────────────── */
+    .seed-banner { display: none; padding: 11px 18px; border-radius: 8px; margin-bottom: 20px; font-size: 0.84rem; }
+    .seed-banner.loading { display: flex; align-items: center; gap: 10px; background: #cff4fc; color: #055160; }
+    .seed-banner.done  { display: block; background: #d1e7dd; color: #0a3622; }
+    .seed-banner.error { display: block; background: #f8d7da; color: #58151c; }
+    .spinner { width: 15px; height: 15px; border: 2px solid #bee5eb; border-top-color: #055160; border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Path cards ──────────────────────────────────────────── */
+    .path-card {
+      background: var(--color-card); border-radius: 10px;
+      border-left: 5px solid var(--color-border);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.07); margin-bottom: 14px; overflow: hidden;
+    }
+    .color-a { border-left-color: #198754; }
+    .color-b { border-left-color: #dc3545; }
+    .color-c { border-left-color: #fd7e14; }
+    .color-d { border-left-color: #6f42c1; }
+    .color-e { border-left-color: #e6a817; }
+    .color-f { border-left-color: #0d6efd; }
+    .color-g { border-left-color: #20c997; }
+
+    .path-header {
+      padding: 13px 20px; display: flex; align-items: center; gap: 11px;
+      cursor: pointer; user-select: none;
+    }
+    .path-header:hover { background: rgba(0,0,0,0.02); }
+    .path-label {
+      font-size: 0.7rem; font-weight: 800; background: #e9ecef;
+      border-radius: 50%; width: 24px; height: 24px;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--color-text);
+    }
+    .path-title { font-size: 0.95rem; font-weight: 700; flex: 1; margin: 0; }
+    .path-badge {
+      font-size: 0.7rem; font-weight: 600; padding: 2px 9px; border-radius: 20px;
+      background: #e9ecef; color: #495057; white-space: nowrap;
+    }
+    .path-badge.state-active   { background: #d1e7dd; color: #0a3622; }
+    .path-badge.state-complete { background: #badbcc; color: #0a3622; font-style: italic; }
+    .path-badge.state-pending  { background: #fff3cd; color: #664d03; }
+    .path-badge.state-declined { background: #f8d7da; color: #58151c; }
+
+    .path-chevron { font-size: 0.72rem; color: var(--color-text-muted); transition: transform 0.2s; flex-shrink: 0; }
+    .path-card.collapsed .path-chevron { transform: rotate(-90deg); }
+
+    .path-body { border-top: 1px solid var(--color-border); padding: 0 20px 16px; }
+    .path-card.collapsed .path-body { display: none; }
+    .path-desc { font-size: 0.82rem; color: var(--color-text-muted); margin: 12px 0 10px; line-height: 1.55; }
+
+    /* ── Steps ───────────────────────────────────────────────── */
+    .step-list { list-style: none; margin: 0; padding: 0; }
+    .step {
+      display: flex; align-items: flex-start; gap: 13px;
+      padding: 9px 0; border-bottom: 1px solid #f0f2f5;
+    }
+    .step:last-child { border-bottom: none; padding-bottom: 0; }
+
+    .step-icon {
+      width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--color-border);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; margin-top: 1px;
+      font-size: 0.7rem; font-weight: 700; color: var(--color-text-muted);
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .step-icon::after { content: attr(data-num); }
+    .step-icon.done { background: #198754; border-color: #198754; color: #fff; }
+    .step-icon.done::after { content: '✓'; font-size: 0.75rem; }
+
+    .step-body { flex: 1; min-width: 0; }
+    .step-desc { font-size: 0.88rem; font-weight: 600; margin: 0 0 3px; line-height: 1.3; }
+    .step.done .step-desc { color: var(--color-text-muted); }
+    .step-hint { font-size: 0.79rem; color: var(--color-text-muted); margin: 0 0 7px; line-height: 1.45; }
+
+    .step-action {
+      display: inline-block; padding: 4px 13px; border-radius: 5px; border: none;
+      font-size: 0.79rem; font-weight: 600; cursor: pointer; text-decoration: none;
+      color: #fff; background: var(--color-brand);
+    }
+    .step-action:hover:not(:disabled):not(.disabled) { filter: brightness(1.1); }
+    .step-action.disabled, a.step-action[href="#"] { background: #adb5bd; pointer-events: none; }
+    .step-action:disabled { background: #adb5bd; cursor: not-allowed; }
+
+    .btn-trig-purple { background: #5c6bc0; }
+    .btn-trig-red    { background: #dc3545; }
+    .btn-trig-yellow { background: #e6a817; color: #333; }
+    .btn-trig-teal   { background: #20c997; color: #fff; }
+
+    .step-done-msg { font-size: 0.76rem; color: #198754; font-style: italic; margin-top: 4px; display: none; }
+    .step.done .step-done-msg { display: block; }
+  </style>
+</head>
+<body>
+<!--__NAV__-->
+<div class="page-wrap">
+
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Demo Walkthrough</h1>
+    </div>
+    <button class="btn-reset" id="btnReset" onclick="seedDemo()">↺ Reset &amp; Seed Data</button>
+  </div>
+  <p class="page-subtitle">
+    Step through every UI interaction and state transition across 7 workflow paths.
+    Click <strong>Reset &amp; Seed Data</strong> to create fresh test patients, then follow each path in order.
+    Step icons turn green automatically when the expected state is reached.
+  </p>
+
+  <div class="seed-banner" id="seedBanner"></div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       Path A — PA + Full Happy Path
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="path-card color-a" id="card-a">
+    <div class="path-header" onclick="toggleCard('a')">
+      <div class="path-label">A</div>
+      <h2 class="path-title">PA + Full Happy Path</h2>
+      <span class="path-badge" id="badge-a">Not seeded</span>
+      <span class="path-chevron">▾</span>
+    </div>
+    <div class="path-body">
+      <p class="path-desc">The complete end-to-end workflow: prior authorization → referral acceptance → scheduling → patient encounter → consult note → referrer ACK. Covers 7 state transitions across all major pages.</p>
+      <ol class="step-list">
+        <li class="step" id="step-a1">
+          <div class="step-icon" data-num="1"></div>
+          <div class="step-body">
+            <div class="step-desc">Submit Prior Authorization</div>
+            <div class="step-hint">Open the PA form pre-populated from the referral. Use service code <strong>99213</strong> (ends in 3 → immediate approve). Fill in insurer details and click Submit.</div>
+            <a class="step-action disabled" id="link-a-pa" href="#">Open PA Form →</a>
+          </div>
+        </li>
+        <li class="step" id="step-a2">
+          <div class="step-icon" data-num="2"></div>
+          <div class="step-body">
+            <div class="step-desc">PA Approved — Proceed with Referral</div>
+            <div class="step-hint">The PA detail page shows <em>Approved</em> and an auth number. Click <strong>"Proceed with Referral"</strong> to navigate back to the referral review.</div>
+            <a class="step-action disabled" id="link-a-referral" href="#">Open Referral Review →</a>
+          </div>
+        </li>
+        <li class="step" id="step-a3" data-complete-state="Accepted">
+          <div class="step-icon" data-num="3"></div>
+          <div class="step-body">
+            <div class="step-desc">Accept the Referral</div>
+            <div class="step-hint">Review the AI clinical assessment, FHIR-sourced problem list, and sufficiency score. Enter your clinician ID and click <strong>Accept</strong>.</div>
+            <a class="step-action disabled" id="link-a-review" href="#">Review &amp; Accept →</a>
+            <div class="step-done-msg">Referral accepted ✓</div>
+          </div>
+        </li>
+        <li class="step" id="step-a4" data-complete-state="Scheduled">
+          <div class="step-icon" data-num="4"></div>
+          <div class="step-body">
+            <div class="step-desc">Schedule Appointment</div>
+            <div class="step-hint">Pick an available provider, date/time, and exam room from the scheduling form. Click <strong>Schedule</strong>.</div>
+            <a class="step-action disabled" id="link-a-schedule" href="#">Schedule Appointment →</a>
+            <div class="step-done-msg">Appointment scheduled ✓</div>
+          </div>
+        </li>
+        <li class="step" id="step-a5" data-complete-state="Encounter">
+          <div class="step-icon" data-num="5"></div>
+          <div class="step-body">
+            <div class="step-desc">Mark Encounter Complete</div>
+            <div class="step-hint">Simulate the patient appointment completing. Check <em>Send interim update to referring provider</em> and click <strong>Mark Encounter Complete</strong>.</div>
+            <a class="step-action disabled" id="link-a-encounter" href="#">Encounter Page →</a>
+            <div class="step-done-msg">Encounter recorded ✓</div>
+          </div>
+        </li>
+        <li class="step" id="step-a6" data-complete-state="Closed">
+          <div class="step-icon" data-num="6"></div>
+          <div class="step-body">
+            <div class="step-desc">Generate &amp; Send Consult Note</div>
+            <div class="step-hint">Review the AI-generated consult note (editable). Click <strong>Send Consult Note</strong> to transmit it back to the referring provider. Referral moves to Closed.</div>
+            <a class="step-action disabled" id="link-a-consult" href="#">Consult Note →</a>
+            <div class="step-done-msg">Consult note sent — referral closed ✓</div>
+          </div>
+        </li>
+        <li class="step" id="step-a7" data-complete-state="Closed-Confirmed">
+          <div class="step-icon" data-num="7"></div>
+          <div class="step-body">
+            <div class="step-desc">Simulate Referrer Acknowledgment (ACK)</div>
+            <div class="step-hint">In production the referring provider's system auto-sends an MDN acknowledgment. Click to simulate it and confirm loop closure.</div>
+            <button class="step-action btn-trig-purple" id="btn-a-ack" onclick="simulateAck()" disabled>Simulate Referrer ACK</button>
+            <div class="step-done-msg">ACK received — Closed-Confirmed ✓</div>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       Path B — PA Denied → Resubmit
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="path-card color-b" id="card-b">
+    <div class="path-header" onclick="toggleCard('b')">
+      <div class="path-label">B</div>
+      <h2 class="path-title">PA Denied → Resubmit → Approve</h2>
+      <span class="path-badge" id="badge-b">Standalone PA</span>
+      <span class="path-chevron">▾</span>
+    </div>
+    <div class="path-body">
+      <p class="path-desc">Submit a PA that triggers an immediate denial. Observe the denial reason from the mock payer, then resubmit with a different code to get approval. Shows the denial → resubmit cycle on the PA detail page.</p>
+      <ol class="step-list">
+        <li class="step" id="step-b1">
+          <div class="step-icon" data-num="1"></div>
+          <div class="step-body">
+            <div class="step-desc">Submit PA — Triggers Denial</div>
+            <div class="step-hint">Open a new PA form. Use service code <strong>27447</strong> (ends in 7 → immediate deny with "Out of network"). Fill in patient and provider details, then submit.</div>
+            <a class="step-action" href="/prior-auth/new">Open PA Form →</a>
+          </div>
+        </li>
+        <li class="step" id="step-b2">
+          <div class="step-icon" data-num="2"></div>
+          <div class="step-body">
+            <div class="step-desc">Review Denial &amp; Click Resubmit</div>
+            <div class="step-hint">The PA detail page shows <em>Denied</em> and the payer's denial reason. Click <strong>"Resubmit with Changes"</strong> to open the form pre-filled with the previous data.</div>
+            <a class="step-action" href="/prior-auth">PA Queue →</a>
+          </div>
+        </li>
+        <li class="step" id="step-b3">
+          <div class="step-icon" data-num="3"></div>
+          <div class="step-body">
+            <div class="step-desc">Resubmit — Triggers Approval</div>
+            <div class="step-hint">On the resubmit form, change the service code to <strong>99213</strong> (ends in 3 → immediate approve) and submit. The new PA request shows <em>Approved</em> with an auth number.</div>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       Path C — PA Pended → Async Subscription Approval
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="path-card color-c" id="card-c">
+    <div class="path-header" onclick="toggleCard('c')">
+      <div class="path-label">C</div>
+      <h2 class="path-title">PA Pended → Async Subscription Approval</h2>
+      <span class="path-badge" id="badge-c">Standalone PA</span>
+      <span class="path-chevron">▾</span>
+    </div>
+    <div class="path-body">
+      <p class="path-desc">Submit a PA that the mock payer places in a <em>Pended for review</em> state. The mock payer registers a FHIR rest-hook subscription and fires a resolution notification asynchronously (~5 seconds). Watch the PA detail page auto-poll and flip to Approved.</p>
+      <ol class="step-list">
+        <li class="step" id="step-c1">
+          <div class="step-icon" data-num="1"></div>
+          <div class="step-body">
+            <div class="step-desc">Submit PA — Triggers Pend</div>
+            <div class="step-hint">Open a new PA form. Use service code <strong>70559</strong> (ends in 9 → pend + subscription resolution). Submit — you'll see the <em>Pended</em> state immediately.</div>
+            <a class="step-action" href="/prior-auth/new">Open PA Form →</a>
+          </div>
+        </li>
+        <li class="step" id="step-c2">
+          <div class="step-icon" data-num="2"></div>
+          <div class="step-body">
+            <div class="step-desc">Watch Async Resolution on PA Detail Page</div>
+            <div class="step-hint">Stay on the PA detail page. It polls every 3 seconds. Watch the state badge change from <em>Pended</em> to <em>Approved</em> when the subscription notification arrives (~5 seconds). The page shows the auth number when resolved.</div>
+            <a class="step-action" href="/prior-auth">PA Queue →</a>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       Path D — Referral Declined
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="path-card color-d" id="card-d">
+    <div class="path-header" onclick="toggleCard('d')">
+      <div class="path-label">D</div>
+      <h2 class="path-title">Referral Declined</h2>
+      <span class="path-badge" id="badge-d">Not seeded</span>
+      <span class="path-chevron">▾</span>
+    </div>
+    <div class="path-body">
+      <p class="path-desc">A referral arrives in Acknowledged state. The specialist clinician reviews it and declines with a reason. The referral enters the terminal Declined state and a reply message is sent to the referring provider.</p>
+      <ol class="step-list">
+        <li class="step" id="step-d1">
+          <div class="step-icon" data-num="1"></div>
+          <div class="step-body">
+            <div class="step-desc">Review the Referral</div>
+            <div class="step-hint">Open the pre-seeded referral (Walk-D Patient, orthopedic knee evaluation). It is in the <em>Acknowledged</em> state awaiting clinician decision.</div>
+            <a class="step-action disabled" id="link-d-review" href="#">Open Referral →</a>
+          </div>
+        </li>
+        <li class="step" id="step-d2" data-complete-state="Declined">
+          <div class="step-icon" data-num="2"></div>
+          <div class="step-body">
+            <div class="step-desc">Decline the Referral</div>
+            <div class="step-hint">Click <strong>Decline</strong> on the review page. Select a decline reason (e.g., "Outside scope of practice" or enter a custom reason), then confirm. The referral reaches the terminal <em>Declined</em> state.</div>
+            <div class="step-done-msg">Referral declined ✓ — terminal state reached</div>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       Path E — Pending Information → Resolved → Accept
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="path-card color-e" id="card-e">
+    <div class="path-header" onclick="toggleCard('e')">
+      <div class="path-label">E</div>
+      <h2 class="path-title">Pending Information → Resolved → Accept</h2>
+      <span class="path-badge" id="badge-e">Not seeded</span>
+      <span class="path-chevron">▾</span>
+    </div>
+    <div class="path-body">
+      <p class="path-desc">A referral is pre-seeded in the Pending-Information state (an info request for ICD-10 codes was already sent). Simulate the referring provider replying with the missing information, which transitions the referral back to Acknowledged. Then accept it.</p>
+      <ol class="step-list">
+        <li class="step" id="step-e1">
+          <div class="step-icon" data-num="1"></div>
+          <div class="step-body">
+            <div class="step-desc">View the Pending-Information Referral</div>
+            <div class="step-hint">Open Walk-E Patient's referral (GI evaluation). It is in <em>Pending-Information</em> state — an info request for ICD-10 codes was sent to the referring provider.</div>
+            <a class="step-action disabled" id="link-e-view" href="#">Open Referral →</a>
+          </div>
+        </li>
+        <li class="step" id="step-e2" data-complete-state="Acknowledged">
+          <div class="step-icon" data-num="2"></div>
+          <div class="step-body">
+            <div class="step-desc">Simulate Info Reply from Referring Provider</div>
+            <div class="step-hint">In production, the referring provider emails back with the missing diagnosis codes. Click to simulate this reply — the referral transitions back to <em>Acknowledged</em>.</div>
+            <button class="step-action btn-trig-yellow" id="btn-e-info" onclick="simulateInfoReply()" disabled>Simulate Info Reply</button>
+            <div class="step-done-msg">Info received — back to Acknowledged ✓</div>
+          </div>
+        </li>
+        <li class="step" id="step-e3" data-complete-state="Accepted">
+          <div class="step-icon" data-num="3"></div>
+          <div class="step-body">
+            <div class="step-desc">Accept the Referral</div>
+            <div class="step-hint">With info received, navigate to the review page and accept the referral.</div>
+            <a class="step-action disabled" id="link-e-accept" href="#">Review &amp; Accept →</a>
+            <div class="step-done-msg">Referral accepted ✓</div>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       Path F — No-Show & Reschedule
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="path-card color-f" id="card-f">
+    <div class="path-header" onclick="toggleCard('f')">
+      <div class="path-label">F</div>
+      <h2 class="path-title">No-Show &amp; Reschedule</h2>
+      <span class="path-badge" id="badge-f">Not seeded</span>
+      <span class="path-chevron">▾</span>
+    </div>
+    <div class="path-body">
+      <p class="path-desc">A referral is pre-seeded in the Scheduled state with a past appointment date. Mark the patient as a no-show on the review page, then book a replacement appointment. Shows the Scheduled → No-Show → Scheduled cycle.</p>
+      <ol class="step-list">
+        <li class="step" id="step-f1">
+          <div class="step-icon" data-num="1"></div>
+          <div class="step-body">
+            <div class="step-desc">View Scheduled Referral (Past Appointment)</div>
+            <div class="step-hint">Open Walk-F Patient's referral (physical therapy, lower back pain). It is in <em>Scheduled</em> state with a past appointment from 2 days ago.</div>
+            <a class="step-action disabled" id="link-f-review" href="#">Open Referral →</a>
+          </div>
+        </li>
+        <li class="step" id="step-f2" data-complete-state="No-Show">
+          <div class="step-icon" data-num="2"></div>
+          <div class="step-body">
+            <div class="step-desc">Mark as No-Show</div>
+            <div class="step-hint">On the referral review page, scroll to the appointment section and click <strong>No Show</strong>. The referral transitions to <em>No-Show</em> state and the referring provider is notified.</div>
+            <div class="step-done-msg">Marked as no-show ✓</div>
+          </div>
+        </li>
+        <li class="step" id="step-f3">
+          <div class="step-icon" data-num="3"></div>
+          <div class="step-body">
+            <div class="step-desc">Schedule a New Appointment</div>
+            <div class="step-hint">Open the scheduling form for this referral. Pick a new date, provider, and location, then click <strong>Schedule</strong>. The referral returns to <em>Scheduled</em> state.</div>
+            <a class="step-action disabled" id="link-f-schedule" href="#">Schedule Appointment →</a>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       Path G — Claims Attachment (X12N 277/275)
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="path-card color-g" id="card-g">
+    <div class="path-header" onclick="toggleCard('g')">
+      <div class="path-label">G</div>
+      <h2 class="path-title">Claims Attachment (X12N 277/275)</h2>
+      <span class="path-badge" id="badge-g">Not started</span>
+      <span class="path-chevron">▾</span>
+    </div>
+    <div class="path-body">
+      <p class="path-desc">Simulate a payer sending an X12N 277 claims attachment request. Inject it into the system, review the auto-generated C-CDA documents matched to the LOINC codes, and send the X12N 275 response back to the payer.</p>
+      <ol class="step-list">
+        <li class="step" id="step-g1">
+          <div class="step-icon" data-num="1"></div>
+          <div class="step-body">
+            <div class="step-desc">Inject 277 Attachment Request</div>
+            <div class="step-hint">In production, a 277 EDI file arrives in the claims-inbox directory via file watcher. Click to inject a demo request directly into the database for Walk-G Patient (Aetna, requesting H&amp;P and Progress Note).</div>
+            <button class="step-action btn-trig-teal" id="btn-g-277" onclick="inject277()" disabled>Inject 277 Request</button>
+            <div class="step-done-msg">277 request injected ✓</div>
+          </div>
+        </li>
+        <li class="step" id="step-g2">
+          <div class="step-icon" data-num="2"></div>
+          <div class="step-body">
+            <div class="step-desc">View in Claims Queue</div>
+            <div class="step-hint">Navigate to the claims queue. The new request for Walk-G Patient appears with status <em>Received</em>. Click into the request to open the detail page.</div>
+            <a class="step-action disabled" id="link-g-queue" href="#">Claims Queue →</a>
+          </div>
+        </li>
+        <li class="step" id="step-g3">
+          <div class="step-icon" data-num="3"></div>
+          <div class="step-body">
+            <div class="step-desc">Review Patient Match &amp; C-CDA Documents</div>
+            <div class="step-hint">The detail page shows the matched patient, requested LOINC codes, and auto-generated C-CDA documents. Review each document and sign with your NPI.</div>
+            <a class="step-action disabled" id="link-g-detail" href="#">Claims Detail →</a>
+          </div>
+        </li>
+        <li class="step" id="step-g4">
+          <div class="step-icon" data-num="4"></div>
+          <div class="step-body">
+            <div class="step-desc">Send 275 Response</div>
+            <div class="step-hint">Click <strong>Send 275 Response</strong> on the detail page to build the X12N 275 attachment bundle and deliver it to the payer output directory. The request transitions to <em>Sent</em>.</div>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </div>
+
+</div><!-- /page-wrap -->
+
+<script>
+  let seedData = null;
+  let claimsIdG = null;
+  let pollingInterval = null;
+
+  // ── Session restore from localStorage ────────────────────────────────────────
+  (function restoreSession() {
+    const saved = localStorage.getItem('wt_seed_v1');
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved);
+      seedData = parsed;
+      claimsIdG = parsed.claimsIdG || null;
+      // defer until DOM is ready
+      window.addEventListener('DOMContentLoaded', function() {
+        updateLinks();
+        startPolling();
+        showBanner('done', 'Session restored — polling live state. Click ↺ Reset & Seed Data to start fresh.');
+      });
+    } catch (e) { localStorage.removeItem('wt_seed_v1'); }
+  })();
+
+  // Linear order for referral state completion checks (main path + branch states)
+  const STATE_ORDER = [
+    'Received', 'Acknowledged', 'Pending-Information',
+    'Accepted', 'Scheduled', 'No-Show',
+    'Encounter', 'Consult', 'Closed', 'Closed-Confirmed',
+  ];
+
+  function stateIndex(s) {
+    return STATE_ORDER.indexOf(s);
+  }
+
+  function stateReached(current, target) {
+    if (current === target) return true;
+    if (target === 'Declined') return current === 'Declined';
+    const ci = stateIndex(current);
+    const ti = stateIndex(target);
+    if (ci === -1 || ti === -1) return false;
+    // Special case: No-Show is an intermediate state; treat it as before Encounter
+    return ci >= ti;
+  }
+
+  function toggleCard(id) {
+    document.getElementById('card-' + id).classList.toggle('collapsed');
+  }
+
+  function showBanner(type, msg) {
+    const b = document.getElementById('seedBanner');
+    b.className = 'seed-banner ' + type;
+    b.innerHTML = type === 'loading'
+      ? `<div class="spinner"></div>${msg}`
+      : msg;
+  }
+
+  // ── Seed ──────────────────────────────────────────────────
+
+  async function seedDemo() {
+    const btn = document.getElementById('btnReset');
+    btn.disabled = true;
+    btn.textContent = '↺ Seeding…';
+    showBanner('loading', 'Creating fresh demo patients and referrals…');
+
+    localStorage.removeItem('wt_seed_v1');
+    if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
+    claimsIdG = null;
+
+    try {
+      const res = await fetch('/walkthrough/seed', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Seed failed');
+
+      seedData = data;
+      localStorage.setItem('wt_seed_v1', JSON.stringify(seedData));
+      updateLinks();
+      startPolling();
+      showBanner('done',
+        `Ready. Referrals seeded: A=#${data.pathA.referralId}, ` +
+        `D=#${data.pathD.referralId}, ` +
+        `E=#${data.pathE.referralId}, ` +
+        `F=#${data.pathF.referralId}. ` +
+        `Paths B, C, G are activated. Follow each path from the top.`
+      );
+    } catch (err) {
+      showBanner('error', 'Seed failed: ' + String(err && err.message ? err.message : err));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '↺ Reset & Seed Data';
+    }
+  }
+
+  // ── Link enablement ───────────────────────────────────────
+
+  function updateLinks() {
+    if (!seedData) return;
+    const { pathA, pathD, pathE, pathF, pathG } = seedData;
+
+    // Path A
+    setLink('link-a-pa',       `/prior-auth/new?referralId=${pathA.referralId}`);
+    setLink('link-a-referral', `/referrals/${pathA.referralId}/review`);
+    setLink('link-a-review',   `/referrals/${pathA.referralId}/review`);
+    setLink('link-a-schedule', `/referrals/${pathA.referralId}/schedule`);
+    setLink('link-a-encounter',`/referrals/${pathA.referralId}/encounter`);
+    setLink('link-a-consult',  `/referrals/${pathA.referralId}/consult-note`);
+    enableBtn('btn-a-ack');
+    setBadgeReferral('badge-a', pathA.referralId);
+
+    // Path D
+    setLink('link-d-review', `/referrals/${pathD.referralId}/review`);
+    setBadgeReferral('badge-d', pathD.referralId);
+
+    // Path E
+    setLink('link-e-view',   `/referrals/${pathE.referralId}/review`);
+    setLink('link-e-accept', `/referrals/${pathE.referralId}/review`);
+    enableBtn('btn-e-info');
+    setBadgeReferral('badge-e', pathE.referralId);
+
+    // Path F
+    setLink('link-f-review',   `/referrals/${pathF.referralId}/review`);
+    setLink('link-f-schedule', `/referrals/${pathF.referralId}/schedule`);
+    setBadgeReferral('badge-f', pathF.referralId);
+
+    // Path G — seed provides patient but no claims yet
+    const btn = document.getElementById('btn-g-277');
+    if (btn) {
+      btn.disabled = false;
+      btn.dataset.patientId = pathG.patientId;
+    }
+  }
+
+  function setLink(id, href) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.setAttribute('href', href);
+    el.classList.remove('disabled');
+  }
+
+  function enableBtn(id) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = false;
+  }
+
+  function setBadgeReferral(badgeId, referralId) {
+    const badge = document.getElementById(badgeId);
+    if (badge) badge.dataset.referral = referralId;
+  }
+
+  // ── Polling ───────────────────────────────────────────────
+
+  function startPolling() {
+    if (pollingInterval) clearInterval(pollingInterval);
+    void poll();
+    pollingInterval = setInterval(function() { void poll(); }, 3000);
+  }
+
+  async function poll() {
+    if (!seedData) return;
+
+    const rIds = [
+      seedData.pathA.referralId,
+      seedData.pathD.referralId,
+      seedData.pathE.referralId,
+      seedData.pathF.referralId,
+    ].join(',');
+
+    const claimsParam = claimsIdG ? '&claimsIds=' + claimsIdG : '';
+
+    try {
+      const res = await fetch('/walkthrough/status?referralIds=' + rIds + claimsParam);
+      if (!res.ok) return;
+      const states = await res.json();
+
+      applyState('a', states['referral_' + seedData.pathA.referralId]);
+      applyState('d', states['referral_' + seedData.pathD.referralId]);
+      applyState('e', states['referral_' + seedData.pathE.referralId]);
+      applyState('f', states['referral_' + seedData.pathF.referralId]);
+
+      if (claimsIdG && states['claims_' + claimsIdG]) {
+        updateBadge('badge-g', states['claims_' + claimsIdG]);
+      }
+    } catch { /* ignore poll errors */ }
+  }
+
+  function applyState(path, state) {
+    if (!state) return;
+    updateBadge('badge-' + path, state);
+
+    const card = document.getElementById('card-' + path);
+    if (!card) return;
+    card.querySelectorAll('.step[data-complete-state]').forEach(function(step) {
+      const target = step.getAttribute('data-complete-state');
+      if (stateReached(state, target)) markStepDone(step);
+    });
+  }
+
+  function markStepDone(stepEl) {
+    if (stepEl.classList.contains('done')) return;
+    stepEl.classList.add('done');
+    const icon = stepEl.querySelector('.step-icon');
+    if (icon) { icon.classList.add('done'); icon.removeAttribute('data-num'); }
+  }
+
+  function updateBadge(id, state) {
+    const badge = document.getElementById(id);
+    if (!badge) return;
+    badge.textContent = state;
+    badge.className = 'path-badge';
+    if (['Closed-Confirmed', 'Declined', 'Sent'].includes(state)) {
+      badge.classList.add('state-complete');
+    } else if (['Pended', 'Pending-Information'].includes(state)) {
+      badge.classList.add('state-pending');
+    } else if (!['Not seeded', 'Not started', 'Standalone PA'].includes(state)) {
+      badge.classList.add('state-active');
+    }
+  }
+
+  // ── Trigger actions ───────────────────────────────────────
+
+  async function simulateAck() {
+    if (!seedData) return;
+    const referralId = seedData.pathA.referralId;
+    const btn = document.getElementById('btn-a-ack');
+    btn.disabled = true;
+    btn.textContent = 'Sending ACK…';
+    try {
+      const res = await fetch('/walkthrough/ack/' + referralId, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ACK failed');
+      btn.textContent = 'ACK Sent ✓';
+      void poll();
+    } catch (err) {
+      btn.textContent = 'Failed — try again';
+      btn.disabled = false;
+    }
+  }
+
+  async function simulateInfoReply() {
+    if (!seedData) return;
+    const referralId = seedData.pathE.referralId;
+    const btn = document.getElementById('btn-e-info');
+    btn.disabled = true;
+    btn.textContent = 'Sending reply…';
+    try {
+      const res = await fetch('/walkthrough/info-reply/' + referralId, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      btn.textContent = 'Reply Sent ✓';
+      void poll();
+    } catch (err) {
+      btn.textContent = 'Failed — try again';
+      btn.disabled = false;
+    }
+  }
+
+  async function inject277() {
+    if (!seedData) return;
+    const patientId = parseInt(document.getElementById('btn-g-277').dataset.patientId || '0', 10);
+    const btn = document.getElementById('btn-g-277');
+    btn.disabled = true;
+    btn.textContent = 'Injecting…';
+    try {
+      const res = await fetch('/walkthrough/inject-277', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patientId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+
+      claimsIdG = data.claimsId;
+      if (seedData) {
+        seedData.claimsIdG = claimsIdG;
+        localStorage.setItem('wt_seed_v1', JSON.stringify(seedData));
+      }
+      btn.textContent = '277 Injected ✓';
+
+      setLink('link-g-queue',  '/claims');
+      setLink('link-g-detail', '/claims/' + data.claimsId);
+      updateBadge('badge-g', 'Received');
+
+      const step1 = document.getElementById('step-g1');
+      if (step1) markStepDone(step1);
+
+      void poll();
+    } catch (err) {
+      btn.textContent = 'Failed — try again';
+      btn.disabled = false;
+    }
+  }
+</script>
+</body>
+</html>

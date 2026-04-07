@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prior Authorization Queue</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; background: #f5f5f5; color: #333; }
+    .container { max-width: 1000px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 1.8rem; margin-bottom: 8px; color: var(--color-text); }
+    .subtitle { color: var(--color-text-muted); margin-bottom: 24px; font-size: 0.95rem; }
+    .actions { margin-bottom: 16px; }
+    .btn { display: inline-block; padding: 8px 16px; border-radius: 4px; text-decoration: none; font-size: 0.9rem; font-weight: 600; cursor: pointer; border: none; }
+    .btn-primary { background: var(--color-brand); color: #fff; }
+    .btn-primary:hover { background: var(--color-brand-hover); }
+    table { width: 100%; border-collapse: collapse; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 4px; overflow: hidden; }
+    th { background: var(--color-bg-page); padding: 12px 16px; text-align: left; font-weight: 600; border-bottom: 1px solid #ddd; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    td { padding: 12px 16px; border-bottom: 1px solid #eee; font-size: 0.95rem; }
+    tr:hover { background: #f9f9f9; }
+    a { color: var(--color-brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.82rem; font-weight: 600; }
+    .badge-draft { background: #e9ecef; color: #495057; }
+    .badge-submitted { background: #cfe2ff; color: #084298; }
+    .badge-approved { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+    .badge-denied { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
+    .badge-pended { background: var(--color-badge-pending); color: var(--color-badge-pending-text); }
+    .badge-expired { background: #e9ecef; color: #495057; }
+    .badge-error { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
+    .empty { text-align: center; padding: 48px 24px; color: var(--color-text-muted); }
+  </style>
+</head>
+<body>
+<!--__NAV__-->
+<div class="container">
+  <h1>Prior Authorization Queue</h1>
+  <p class="subtitle">CMS-0057-F &middot; Da Vinci PAS FHIR-based prior authorization requests</p>
+  <div class="actions">
+    <a href="/prior-auth/new" class="btn btn-primary">+ New PA Request</a>
+  </div>
+  <table id="queue">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Patient</th>
+        <th>Service</th>
+        <th>Insurer</th>
+        <th>State</th>
+        <th>Submitted</th>
+        <th>Auth #</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div id="empty" class="empty" style="display:none;">No prior authorization requests yet.</div>
+</div>
+<script>
+/*__PA_QUEUE_DATA__*/
+(function() {
+  const data = window.__PA_QUEUE_DATA__ || { items: [] };
+  const tbody = document.getElementById('tbody');
+  const empty = document.getElementById('empty');
+
+  if (data.items.length === 0) {
+    document.getElementById('queue').style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+
+  data.items.forEach(function(item) {
+    const r = item.request;
+    const p = item.patient;
+    const tr = document.createElement('tr');
+    const state = r.state || 'Draft';
+    const badgeClass = 'badge-' + state.toLowerCase().replace(/[^a-z]/g, '');
+    const submitted = r.submittedAt ? new Date(r.submittedAt).toLocaleString() : '—';
+
+    // Find auth number from latest response
+    const authNumber = item.latestAuthNumber || '—';
+
+    tr.innerHTML =
+      '<td><a href="/prior-auth/' + r.id + '">' + r.id + '</a></td>' +
+      '<td>' + p.firstName + ' ' + p.lastName + '</td>' +
+      '<td>' + r.serviceCode + (r.serviceDisplay ? ' — ' + r.serviceDisplay : '') + '</td>' +
+      '<td>' + r.insurerName + '</td>' +
+      '<td><span class="badge ' + badgeClass + '">' + state + '</span></td>' +
+      '<td>' + submitted + '</td>' +
+      '<td>' + authNumber + '</td>';
+    tbody.appendChild(tr);
+  });
+})();
+</script>
+</body>
+</html>

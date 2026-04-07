@@ -25,9 +25,9 @@
 import express, { Request, Response, NextFunction } from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { db } from './db';
-import { referrals, patients, outboundMessages, attachmentRequests, attachmentResponses } from './db/schema';
+import { referrals, patients, outboundMessages, attachmentRequests, attachmentResponses, priorAuthRequests } from './db/schema';
 import { accept, decline, ReferralNotFoundError as DispositionNotFoundError } from './modules/prd02/dispositionService';
 import { getCachedAssessment } from './modules/prd02/referralService';
 import { scheduleReferral, ReferralNotFoundError, SchedulingConflictError } from './modules/prd03/schedulingService';
@@ -36,8 +36,20 @@ import { markEncounterComplete, ReferralNotFoundError as EncounterNotFoundError 
 import { generateAndSend, ReferralNotFoundError as ConsultNotFoundError } from './modules/prd04/consultNoteService';
 import { markNoShow, ReferralNotFoundError as NoShowNotFoundError } from './modules/prd11/noShowService';
 import { markConsult, resolveConsult, ReferralNotFoundError as ConsultStateNotFoundError } from './modules/prd11/consultService';
-import { InvalidStateTransitionError } from './state/referralStateMachine';
+import { InvalidStateTransitionError, ReferralState, transition as referralTransition } from './state/referralStateMachine';
 import { InvalidClaimsStateTransitionError } from './state/claimsStateMachine';
+import { InvalidPriorAuthStateTransitionError } from './state/priorAuthStateMachine';
+import { handleMockSubmit, handleMockInquiry, handleMockSubscription } from './modules/prd12/mockPayerServer';
+import {
+  submitPriorAuth,
+  getStatus as getPriorAuthStatus,
+  handlePayerNotification,
+  inquirePriorAuth,
+  listPriorAuthRequests,
+  getPriorAuthDetail,
+  getReferralFormData,
+  PriorAuthNotFoundError,
+} from './modules/prd12/priorAuthService';
 import { config } from './config';
 import { skillExecutions } from './db/schema';
 import { getSkillCatalog, loadSkillBody, loadSkillAssets, loadSkillReferences, parseSkillMd } from './modules/prd09/skillLoader';
@@ -47,7 +59,7 @@ import { sendResponse } from './modules/claims/response/responseService';
 import { desc, and } from 'drizzle-orm';
 
 export const app = express();
-app.use(express.json());
+app.use(express.json({ type: ['application/json', 'application/fhir+json'] }));
 
 // ── Vendor static assets (for @kno2/ccdaview on demo pages) ──────────────────
 const nodeModulesDir = path.join(__dirname, '..', 'node_modules');
@@ -86,7 +98,9 @@ const NAV_HTML = `<style>
   <a href="/messages" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Inbox</a>
   <a href="/overview" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Overview</a>
   <a href="/claims" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Claims</a>
+  <a href="/prior-auth" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Prior Auth</a>
   <a href="/rules/admin" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Skills</a>
+  <a href="/walkthrough" style="color:#20c997;text-decoration:none;font-size:0.88rem;font-weight:600;">Walkthrough</a>
   <a href="/demo" style="color:#ffc107;text-decoration:none;font-size:0.88rem;font-weight:600;">Demo Launcher</a>
 </nav>
 <script>
@@ -189,6 +203,19 @@ app.get('/referrals/:id/review', async (req: Request, res: Response, next: NextF
       .from(outboundMessages)
       .where(eq(outboundMessages.referralId, referralId));
 
+    // Fetch linked prior auth requests
+    const paRequests = await db
+      .select({
+        id: priorAuthRequests.id,
+        state: priorAuthRequests.state,
+        insurerName: priorAuthRequests.insurerName,
+        serviceCode: priorAuthRequests.serviceCode,
+        createdAt: priorAuthRequests.createdAt,
+      })
+      .from(priorAuthRequests)
+      .where(eq(priorAuthRequests.referralId, referralId))
+      .orderBy(desc(priorAuthRequests.createdAt));
+
     const templatePath = path.join(__dirname, 'views', 'referralReview.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
 
@@ -199,11 +226,12 @@ app.get('/referrals/:id/review', async (req: Request, res: Response, next: NextF
       assessment: assessment ?? null,
       outboundMessages: messages,
       hasCcda: !!referral.rawCcdaXml,
+      priorAuth: paRequests,
     };
 
     // Inject data as a JSON block the page script can read
     const jsonString = JSON.stringify(pageData);
-    console.log(`[ReferralReview] Referral #${referralId} hasCcda=${pageData.hasCcda}, JSON length=${jsonString.length}`);
+    console.log(`[ReferralReview] Referral #${referralId} hasCcda=${pageData.hasCcda}, priorAuth=${paRequests.length} records, JSON length=${jsonString.length}`);
     const html = template.replace(
       '/*__PAGE_DATA__*/',
       `window.__PAGE_DATA__ = ${jsonString};`,
@@ -294,13 +322,13 @@ app.post('/referrals/:id/disposition', async (req: Request, res: Response, next:
 
 // ── PRD-03: Scheduler routes ──────────────────────────────────────────────────
 
-// Scheduler queue — lists all Accepted referrals
+// Scheduler queue — lists all Accepted and No-Show referrals awaiting scheduling
 app.get('/scheduler/queue', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const rows = await db
       .select()
       .from(referrals)
-      .where(eq(referrals.state, 'Accepted'));
+      .where(inArray(referrals.state, ['Accepted', 'No-Show']));
 
     const items = await Promise.all(
       rows.map(async (r) => {
@@ -1110,7 +1138,7 @@ app.get('/demo', (_req: Request, res: Response, next: NextFunction) => {
 app.post('/demo/launch', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { scenario } = req.body as { scenario?: string };
-    const validScenarios = ['full-workflow', 'incomplete-info', 'fhir-enriched', 'payer-rejection', 'no-show', 'consult'] as const;
+    const validScenarios = ['full-workflow', 'incomplete-info', 'fhir-enriched', 'payer-rejection', 'no-show', 'consult', 'prior-auth'] as const;
     type Scenario = typeof validScenarios[number];
     if (!scenario || !validScenarios.includes(scenario as Scenario)) {
       res.status(400).json({ error: `scenario must be one of: ${validScenarios.join(', ')}` });
@@ -1118,6 +1146,7 @@ app.post('/demo/launch', async (req: Request, res: Response, next: NextFunction)
     }
     const { launchFullWorkflow, launchIncompleteInfo, launchFhirEnriched, launchPayerRejection, launchNoShow, launchConsult } =
       await import('./demoScenarios');
+    const { launchPriorAuth } = await import('./modules/prd12/mockPayerDemo');
     const scenarioFns: Record<Scenario, () => Promise<number>> = {
       'full-workflow':   launchFullWorkflow,
       'incomplete-info': launchIncompleteInfo,
@@ -1125,6 +1154,7 @@ app.post('/demo/launch', async (req: Request, res: Response, next: NextFunction)
       'payer-rejection': launchPayerRejection,
       'no-show':         launchNoShow,
       'consult':         launchConsult,
+      'prior-auth':      launchPriorAuth,
     };
     const referralId = await scenarioFns[scenario as Scenario]();
     res.json({ referralId });
@@ -1134,7 +1164,7 @@ app.post('/demo/launch', async (req: Request, res: Response, next: NextFunction)
 });
 
 app.get('/demo/fixture/:scenario', (req: Request, res: Response) => {
-  const VALID_SCENARIOS = ['full-workflow', 'incomplete-info', 'fhir-enriched', 'payer-rejection', 'no-show', 'consult'];
+  const VALID_SCENARIOS = ['full-workflow', 'incomplete-info', 'fhir-enriched', 'payer-rejection', 'no-show', 'consult', 'prior-auth'];
   const scenario = Array.isArray(req.params.scenario) ? req.params.scenario[0] : req.params.scenario;
   if (!VALID_SCENARIOS.includes(scenario)) { res.status(404).end(); return; }
   const fixturePath = path.join(__dirname, '..', 'tests', 'fixtures', `demo-${scenario}.xml`);
@@ -1273,6 +1303,435 @@ app.post('/claims/:id/send', async (req: Request, res: Response, next: NextFunct
     const filePath = await sendResponse(requestId);
 
     res.json({ success: true, message: 'Response sent', filePath });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── PRD-12: Mock Payer — individual routes to avoid Express 5 $ routing issues ─
+
+app.post(/^\/mock-payer\/Claim\/\$submit$/, handleMockSubmit);
+app.post(/^\/mock-payer\/Claim\/\$inquiry$/, handleMockInquiry);
+app.post('/mock-payer/Subscription', handleMockSubscription);
+
+// ─��� PRD-12: Prior Authorization routes ───────────────────────────────────────
+
+app.get('/prior-auth', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const items = await listPriorAuthRequests();
+    // Attach latest auth number for display
+    const enriched = await Promise.all(
+      items.map(async (item) => {
+        const detail = await getPriorAuthDetail(item.request.id);
+        const latestResp = detail.responses[0];
+        return { ...item, latestAuthNumber: latestResp?.authNumber ?? undefined };
+      }),
+    );
+    const templatePath = path.join(__dirname, 'views', 'priorAuthQueue.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__PA_QUEUE_DATA__*/',
+      `window.__PA_QUEUE_DATA__ = ${JSON.stringify({ items: enriched })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/prior-auth/new', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const referralIdParam = req.query.referralId as string | undefined;
+    let formData: Record<string, unknown> = {};
+
+    if (referralIdParam) {
+      const referralId = parseInt(referralIdParam, 10);
+      const data = await getReferralFormData(referralId);
+      if (data) {
+        formData = { patient: data.patient, referral: data.referral, diagnoses: data.diagnoses };
+      }
+    }
+
+    const templatePath = path.join(__dirname, 'views', 'priorAuthForm.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__PA_FORM_DATA__*/',
+      `window.__PA_FORM_DATA__ = ${JSON.stringify(formData)};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/prior-auth/submit', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = req.body as {
+      referralId?: unknown; patientId?: unknown; firstName?: unknown; lastName?: unknown;
+      dateOfBirth?: unknown; insurerName?: unknown; insurerId?: unknown;
+      subscriberId?: unknown; serviceCode?: unknown; serviceDisplay?: unknown;
+      providerNpi?: unknown; providerName?: unknown; diagnoses?: unknown;
+    };
+    const { referralId, patientId, firstName, lastName, dateOfBirth, insurerName, insurerId, subscriberId, serviceCode, serviceDisplay, providerNpi, providerName, diagnoses } = body;
+
+    if (!insurerName || !insurerId || !serviceCode || !providerNpi || !providerName) {
+      return res.status(400).json({ error: 'Missing required fields: insurerName, insurerId, serviceCode, providerNpi, providerName' });
+    }
+
+    let resolvedPatientId: number;
+    if (patientId) {
+      resolvedPatientId = parseInt(String(patientId), 10);
+    } else if (firstName && lastName && dateOfBirth) {
+      const [existing] = await db.select().from(patients).where(
+        eq(patients.firstName, String(firstName)),
+      );
+      if (existing && existing.lastName === String(lastName) && existing.dateOfBirth === String(dateOfBirth)) {
+        resolvedPatientId = existing.id;
+      } else {
+        const inserted = await db.insert(patients).values({
+          firstName: String(firstName),
+          lastName: String(lastName),
+          dateOfBirth: String(dateOfBirth),
+        }).returning({ id: patients.id });
+        resolvedPatientId = inserted[0].id;
+      }
+    } else {
+      return res.status(400).json({ error: 'Provide either patientId or firstName + lastName + dateOfBirth' });
+    }
+
+    console.log(`[PA Submit] referralId=${String(referralId)}, patientId=${resolvedPatientId}`);
+    const result = await submitPriorAuth({
+      referralId: referralId ? parseInt(String(referralId), 10) : undefined,
+      patientId: resolvedPatientId,
+      insurerName: String(insurerName),
+      insurerId: String(insurerId),
+      subscriberId: subscriberId ? String(subscriberId) : undefined,
+      serviceCode: String(serviceCode),
+      serviceDisplay: serviceDisplay ? String(serviceDisplay) : undefined,
+      providerNpi: String(providerNpi),
+      providerName: String(providerName),
+      diagnoses: diagnoses as Array<{ code: string; display: string }> | undefined,
+    });
+
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InvalidPriorAuthStateTransitionError) {
+      return res.status(409).json({ error: err.message });
+    }
+    next(err);
+  }
+});
+
+app.get('/prior-auth/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const requestId = parseInt(idParam, 10);
+
+    const detail = await getPriorAuthDetail(requestId);
+
+    const templatePath = path.join(__dirname, 'views', 'priorAuthDetail.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__PA_DETAIL_DATA__*/',
+      `window.__PA_DETAIL_DATA__ = ${JSON.stringify(detail)};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    if (err instanceof PriorAuthNotFoundError) {
+      return res.status(404).json({ error: err.message });
+    }
+    next(err);
+  }
+});
+
+app.get('/prior-auth/:id/status', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const requestId = parseInt(idParam, 10);
+    const status = await getPriorAuthStatus(requestId);
+    res.json(status);
+  } catch (err) {
+    if (err instanceof PriorAuthNotFoundError) {
+      return res.status(404).json({ error: err.message });
+    }
+    next(err);
+  }
+});
+
+app.post('/prior-auth/:id/inquire', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const requestId = parseInt(idParam, 10);
+    const status = await inquirePriorAuth(requestId);
+    res.json(status);
+  } catch (err) {
+    if (err instanceof PriorAuthNotFoundError) {
+      return res.status(404).json({ error: err.message });
+    }
+    next(err);
+  }
+});
+
+app.post('/prior-auth/webhook', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await handlePayerNotification(req.body as Record<string, unknown>);
+    if (!result) {
+      return res.status(404).json({ error: 'Could not match notification to a request' });
+    }
+    res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Demo Walkthrough helpers ─────────────────────────────────────────────────
+// Load sample C-CDA fixture once at startup for walkthrough Path A
+const WALKTHROUGH_CCDA_PATH = path.resolve(__dirname, '..', 'tests', 'fixtures', 'demo-full-workflow.xml');
+const WALKTHROUGH_CCDA_XML: string | null = (() => {
+  try { return fs.readFileSync(WALKTHROUGH_CCDA_PATH, 'utf-8'); } catch { return null; }
+})();
+
+async function walkthroughUpsertPatient(firstName: string, lastName: string, dob: string): Promise<number> {
+  const [existing] = await db
+    .select()
+    .from(patients)
+    .where(and(eq(patients.firstName, firstName), eq(patients.lastName, lastName)));
+  if (existing) return existing.id;
+  const [inserted] = await db
+    .insert(patients)
+    .values({ firstName, lastName, dateOfBirth: dob })
+    .returning();
+  return inserted.id;
+}
+
+async function walkthroughUpsertReferral(
+  patientId: number,
+  sourceMessageId: string,
+  state: string,
+  fields: Record<string, unknown>,
+  now: Date,
+): Promise<number> {
+  const [existing] = await db
+    .select()
+    .from(referrals)
+    .where(eq(referrals.sourceMessageId, sourceMessageId));
+  if (existing) {
+    const { rawCcdaXml: rawXml, clinicalData, appointmentDate, appointmentLocation, scheduledProvider, reasonForReferral } = fields as Record<string, string | undefined>;
+    await db
+      .update(referrals)
+      .set({
+        state, updatedAt: now,
+        ...(reasonForReferral !== undefined && { reasonForReferral }),
+        ...(clinicalData !== undefined && { clinicalData }),
+        ...(rawXml !== undefined && { rawCcdaXml: rawXml }),
+        ...(appointmentDate !== undefined && { appointmentDate }),
+        ...(appointmentLocation !== undefined && { appointmentLocation }),
+        ...(scheduledProvider !== undefined && { scheduledProvider }),
+      })
+      .where(eq(referrals.id, existing.id));
+    return existing.id;
+  }
+  const [inserted] = await db
+    .insert(referrals)
+    .values({
+      patientId,
+      sourceMessageId,
+      referrerAddress: 'referrer@hospital.direct',
+      reasonForReferral: (fields.reasonForReferral as string | undefined) ?? 'Demo referral',
+      state,
+      createdAt: now,
+      updatedAt: now,
+      clinicalData: (fields.clinicalData as string | undefined) ?? null,
+      rawCcdaXml: (fields.rawCcdaXml as string | undefined) ?? null,
+      appointmentDate: (fields.appointmentDate as string | undefined) ?? null,
+      appointmentLocation: (fields.appointmentLocation as string | undefined) ?? null,
+      scheduledProvider: (fields.scheduledProvider as string | undefined) ?? null,
+    })
+    .returning();
+  return inserted.id;
+}
+
+// ── Demo Walkthrough routes ──────────────────────────────────────────────────
+
+app.get('/walkthrough', (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const templatePath = path.join(__dirname, 'views', 'demoWalkthrough.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(template));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/walkthrough/seed', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const now = new Date();
+
+    // Path A: PA + Full Happy Path — full clinical data for PA pre-population
+    const patientAId = await walkthroughUpsertPatient('Walk-A', 'Patient', '1975-06-15');
+    const referralAId = await walkthroughUpsertReferral(patientAId, 'walkthrough-path-a', 'Acknowledged', {
+      reasonForReferral: 'Cardiology referral for chest pain evaluation. Patient reports intermittent chest discomfort with exertion.',
+      clinicalData: JSON.stringify({
+        problems: [
+          { name: 'Chest pain', code: 'R07.9' },
+          { name: 'Essential hypertension', code: 'I10' },
+        ],
+        medications: [],
+        allergies: [],
+        results: [],
+      }),
+      rawCcdaXml: WALKTHROUGH_CCDA_XML ?? undefined,
+    }, now);
+
+    // Path B/C: Standalone PA demo (patient only, no referral needed)
+    const patientBCId = await walkthroughUpsertPatient('Walk-BC', 'Patient', '1982-09-22');
+
+    // Path D: Referral to Decline
+    const patientDId = await walkthroughUpsertPatient('Walk-D', 'Patient', '1968-03-10');
+    const referralDId = await walkthroughUpsertReferral(patientDId, 'walkthrough-path-d', 'Acknowledged', {
+      reasonForReferral: 'Orthopedic evaluation for right knee pain. Patient requests surgical consult.',
+    }, now);
+
+    // Path E: Pending-Information → Resolved
+    const patientEId = await walkthroughUpsertPatient('Walk-E', 'Patient', '1990-11-05');
+    const referralEId = await walkthroughUpsertReferral(patientEId, 'walkthrough-path-e', 'Pending-Information', {
+      reasonForReferral: 'Gastroenterology referral — additional ICD-10 diagnosis codes requested.',
+    }, now);
+
+    // Path F: Scheduled with past appointment
+    const patientFId = await walkthroughUpsertPatient('Walk-F', 'Patient', '1955-07-28');
+    const pastDate = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+    const referralFId = await walkthroughUpsertReferral(patientFId, 'walkthrough-path-f', 'Scheduled', {
+      reasonForReferral: 'Physical therapy referral for chronic lower back pain.',
+      appointmentDate: pastDate.toISOString(),
+      appointmentLocation: 'PT Center, Room 12',
+      scheduledProvider: 'Dr. Martinez',
+    }, now);
+
+    // Path G: Claims attachment patient (277 injected separately)
+    const patientGId = await walkthroughUpsertPatient('Walk-G', 'Patient', '1945-12-01');
+
+    res.json({
+      pathA:  { referralId: referralAId, patientId: patientAId },
+      pathBC: { patientId: patientBCId },
+      pathD:  { referralId: referralDId, patientId: patientDId },
+      pathE:  { referralId: referralEId, patientId: patientEId },
+      pathF:  { referralId: referralFId, patientId: patientFId },
+      pathG:  { patientId: patientGId },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/walkthrough/status', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const referralIdsParam = req.query.referralIds as string | undefined;
+    const claimsIdsParam = req.query.claimsIds as string | undefined;
+    const result: Record<string, string> = {};
+
+    if (referralIdsParam) {
+      const ids = referralIdsParam.split(',').map((n) => parseInt(n, 10)).filter((n) => !isNaN(n));
+      for (const id of ids) {
+        const [r] = await db.select().from(referrals).where(eq(referrals.id, id));
+        if (r) result[`referral_${id}`] = r.state;
+      }
+    }
+
+    if (claimsIdsParam) {
+      const ids = claimsIdsParam.split(',').map((n) => parseInt(n, 10)).filter((n) => !isNaN(n));
+      for (const id of ids) {
+        const [r] = await db.select().from(attachmentRequests).where(eq(attachmentRequests.id, id));
+        if (r) result[`claims_${id}`] = r.state;
+      }
+    }
+
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/walkthrough/ack/:referralId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.referralId) ? req.params.referralId[0] : req.params.referralId;
+    const id = parseInt(idParam, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid referral ID' }); return; }
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, id));
+    if (!referral) { res.status(404).json({ error: 'Referral not found' }); return; }
+
+    const nextState = referralTransition(referral.state as ReferralState, ReferralState.CLOSED_CONFIRMED);
+    await db
+      .update(referrals)
+      .set({ state: nextState, updatedAt: new Date() })
+      .where(eq(referrals.id, id));
+
+    res.json({ success: true, state: nextState });
+  } catch (err) {
+    if (err instanceof InvalidStateTransitionError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+app.post('/walkthrough/info-reply/:referralId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam2 = Array.isArray(req.params.referralId) ? req.params.referralId[0] : req.params.referralId;
+    const id = parseInt(idParam2, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid referral ID' }); return; }
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, id));
+    if (!referral) { res.status(404).json({ error: 'Referral not found' }); return; }
+
+    const nextState = referralTransition(referral.state as ReferralState, ReferralState.ACKNOWLEDGED);
+    await db
+      .update(referrals)
+      .set({ state: nextState, updatedAt: new Date() })
+      .where(eq(referrals.id, id));
+
+    res.json({ success: true, state: nextState });
+  } catch (err) {
+    if (err instanceof InvalidStateTransitionError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+app.post('/walkthrough/inject-277', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { patientId } = req.body as { patientId?: number };
+    const now = new Date();
+    const controlNumber = `WLK-${Date.now()}`;
+
+    const [inserted] = await db
+      .insert(attachmentRequests)
+      .values({
+        patientId: patientId ?? null,
+        controlNumber,
+        claimNumber: `CLM-WLK-001`,
+        payerName: 'Aetna',
+        payerIdentifier: '60054',
+        subscriberName: 'Walk-G Patient',
+        subscriberId: 'WLK-SUB-001',
+        subscriberDob: '1945-12-01',
+        requestedLoincCodes: JSON.stringify(['34117-2', '51847-2']),
+        sourceFile: 'walkthrough-demo.edi',
+        state: 'Received',
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+
+    res.json({ success: true, claimsId: inserted.id });
   } catch (err) {
     next(err);
   }

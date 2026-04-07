@@ -7,6 +7,8 @@
  * Valid lifecycle:
  * Received → Acknowledged → Accepted | Declined | Pending-Information → Scheduled → Encounter → Closed → Closed-Confirmed
  * Pending-Information → Acknowledged (info received) | Declined (timeout)
+ * Scheduled → No-Show → Scheduled (reschedule after missed appointment)
+ * Encounter → Consult → Closed (specialist-initiated consultation before closure)
  */
 
 export const ReferralState = {
@@ -16,7 +18,9 @@ export const ReferralState = {
   ACCEPTED: 'Accepted',
   DECLINED: 'Declined',
   SCHEDULED: 'Scheduled',
+  NO_SHOW: 'No-Show',
   ENCOUNTER: 'Encounter',
+  CONSULT: 'Consult',
   CLOSED: 'Closed',
   CLOSED_CONFIRMED: 'Closed-Confirmed',
 } as const;
@@ -30,8 +34,10 @@ const VALID_TRANSITIONS: Record<ReferralState, ReferralState[]> = {
   [ReferralState.PENDING_INFORMATION]: [ReferralState.ACKNOWLEDGED, ReferralState.DECLINED],
   [ReferralState.ACCEPTED]: [ReferralState.SCHEDULED],
   [ReferralState.DECLINED]: [], // terminal
-  [ReferralState.SCHEDULED]: [ReferralState.ENCOUNTER],
-  [ReferralState.ENCOUNTER]: [ReferralState.CLOSED],
+  [ReferralState.SCHEDULED]: [ReferralState.ENCOUNTER, ReferralState.NO_SHOW],
+  [ReferralState.NO_SHOW]: [ReferralState.SCHEDULED],
+  [ReferralState.ENCOUNTER]: [ReferralState.CLOSED, ReferralState.CONSULT],
+  [ReferralState.CONSULT]: [ReferralState.CLOSED],
   [ReferralState.CLOSED]: [ReferralState.CLOSED_CONFIRMED],
   [ReferralState.CLOSED_CONFIRMED]: [], // terminal
 };

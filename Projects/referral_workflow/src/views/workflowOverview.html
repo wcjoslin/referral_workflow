@@ -15,17 +15,145 @@
     .card h2 { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-muted); margin: 0 0 20px; }
     .card h2 span { font-size: 0.95rem; font-weight: 600; color: var(--color-text); text-transform: none; letter-spacing: 0; margin-left: 8px; }
     .mermaid { display: flex; justify-content: center; overflow-x: auto; }
+    .card-desc { font-size: 0.88rem; color: var(--color-text-muted); margin: -8px 0 16px; line-height: 1.5; }
+    .roadmap-stages { display: flex; flex-direction: column; gap: 0; }
+    .stage-row { display: flex; align-items: flex-start; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--color-border, #dee2e6); }
+    .stage-row:last-child { border-bottom: none; }
+    .stage-label { font-size: 0.82rem; font-weight: 700; color: var(--color-text); min-width: 180px; flex-shrink: 0; padding-top: 4px; }
+    .stage-prds { display: flex; flex-wrap: wrap; gap: 6px; }
+    .prd-chip { background: var(--color-bg-page, #f8f9fa); border: 1px solid var(--color-border, #dee2e6); border-radius: 20px; padding: 3px 12px; font-size: 0.78rem; color: var(--color-text); white-space: nowrap; }
   </style>
 </head>
 <body>
 <!--__NAV__-->
 <div class="container">
   <h1>Workflow Overview</h1>
-  <p class="subtitle">360X Closed Loop Referral — state lifecycle, data flow, and database schema</p>
+  <p class="subtitle">360X Closed Loop Referral — end-to-end journey, product roadmap, state lifecycle, data flow, and database schema</p>
 
-  <!-- ── State Machine ───────────────────────────────────────────────────── -->
+  <!-- ── End-to-End Journey Map ──────────────────────────────────────────── -->
   <div class="card">
-    <h2>Diagram 1 <span>Referral State Machine</span></h2>
+    <h2>Diagram 1 <span>End-to-End Referral Journey</span></h2>
+    <p class="card-desc">The complete flow from prior authorization through referral receipt, scheduling, encounter, and loop closure. Claims attachment runs as a parallel administrative track triggered at the encounter stage.</p>
+    <div class="mermaid">
+flowchart LR
+    subgraph PA["Prior Auth (optional)"]
+        PA1([PA Draft]) --> PA2([Submitted])
+        PA2 --> PA3([Approved])
+        PA2 --> PA4([Pended]) --> PA3
+        PA2 --> PA5([Denied])
+    end
+
+    subgraph MAIN["Referral Lifecycle"]
+        RCV([Received]) --> ACK([Acknowledged])
+        ACK --> DEC([Declined])
+        ACK --> PIN([Pending-Info])
+        PIN --> ACK
+        PIN -->|timeout| DEC
+        ACK --> ACC([Accepted])
+        ACC --> SCH([Scheduled])
+        SCH -->|no-show| NSH([No-Show])
+        NSH -->|reschedule| SCH
+        SCH --> ENC([Encounter])
+        ENC -->|consult needed| CON([Consult])
+        CON --> CLO([Closed])
+        ENC --> CLO
+        CLO --> CFM([Closed-Confirmed])
+    end
+
+    subgraph CLAIMS["Claims Attachment (parallel)"]
+        CR([Received]) --> CP([Processing])
+        CP --> CPS([Pending-Signature])
+        CPS --> CST([Sent])
+    end
+
+    PA3 -.->|auth approved| RCV
+    ENC -.->|triggers 277/275| CR
+
+    style DEC fill:#f8d7da,stroke:#dc3545,color:#58151c
+    style PA5 fill:#f8d7da,stroke:#dc3545,color:#58151c
+    style CFM fill:#d1e7dd,stroke:#198754,color:#0a3622
+    style PA3 fill:#d1e7dd,stroke:#198754,color:#0a3622
+    style CST fill:#d1e7dd,stroke:#198754,color:#0a3622
+    style NSH fill:#fff3cd,stroke:#fd7e14,color:#664d03
+    style PIN fill:#fff3cd,stroke:#ffc107,color:#664d03
+    style CON fill:#e2d9f3,stroke:#6f42c1,color:#3d0a91
+    </div>
+  </div>
+
+  <!-- ── Product Roadmap ────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2>Diagram 2 <span>Product Roadmap</span></h2>
+    <p class="card-desc">Each workflow stage and the product features that implement it — showing how capabilities layer progressively from a minimal core loop to a fully automated, standards-compliant referral network.</p>
+    <div class="roadmap-stages">
+
+      <div class="stage-row">
+        <span class="stage-label">Prior Authorization</span>
+        <div class="stage-prds">
+          <span class="prd-chip">PRD-12 · Prior Auth (Da Vinci PAS)</span>
+        </div>
+      </div>
+
+      <div class="stage-row">
+        <span class="stage-label">Receive Referral</span>
+        <div class="stage-prds">
+          <span class="prd-chip">PRD-01 · Receive &amp; Acknowledge</span>
+        </div>
+      </div>
+
+      <div class="stage-row">
+        <span class="stage-label">Review &amp; Disposition</span>
+        <div class="stage-prds">
+          <span class="prd-chip">PRD-02 · Clinician Disposition</span>
+          <span class="prd-chip">PRD-08 · FHIR Data Enrichment</span>
+          <span class="prd-chip">PRD-09 · AI Rules Engine</span>
+          <span class="prd-chip">PRD-10 · UI &amp; C-CDA Viewer</span>
+        </div>
+      </div>
+
+      <div class="stage-row">
+        <span class="stage-label">Scheduling</span>
+        <div class="stage-prds">
+          <span class="prd-chip">PRD-03 · Schedule &amp; Notify Referrer</span>
+          <span class="prd-chip">PRD-11 · No-Show &amp; Reschedule</span>
+        </div>
+      </div>
+
+      <div class="stage-row">
+        <span class="stage-label">Encounter</span>
+        <div class="stage-prds">
+          <span class="prd-chip">PRD-05 · Encounter &amp; Interim Updates</span>
+          <span class="prd-chip">PRD-11 · Consult State</span>
+        </div>
+      </div>
+
+      <div class="stage-row">
+        <span class="stage-label">Consult Note</span>
+        <div class="stage-prds">
+          <span class="prd-chip">PRD-04 · Generate &amp; Send Note</span>
+        </div>
+      </div>
+
+      <div class="stage-row">
+        <span class="stage-label">Close Loop</span>
+        <div class="stage-prds">
+          <span class="prd-chip">PRD-06 · Acknowledge &amp; Close</span>
+          <span class="prd-chip">PRD-07 · Referrer-Side Ack Tracking</span>
+        </div>
+      </div>
+
+      <div class="stage-row">
+        <span class="stage-label">Claims Attachment</span>
+        <div class="stage-prds">
+          <span class="prd-chip">CMS-0053-F · X12N 277/275 Attachment</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Referral State Machine ──────────────────────────────────────────── -->
+  <div class="card">
+    <h2>Diagram 3 <span>Referral State Machine</span></h2>
     <div class="mermaid">
 flowchart TD
     RCV([Received])
@@ -34,7 +162,9 @@ flowchart TD
     DEC([Declined])
     PIN([Pending-Information])
     SCH([Scheduled])
+    NSH([No-Show])
     ENC([Encounter])
+    CST([Consult])
     CLO([Closed])
     CON([Closed-Confirmed])
 
@@ -45,22 +175,36 @@ flowchart TD
     PIN -->|"Info received"| ACK
     PIN -->|"Timeout"| DEC
     ACC -->|"Appointment booked"| SCH
+    SCH -->|"Patient no-shows"| NSH
+    NSH -->|"Reschedule"| SCH
     SCH -->|"Patient arrives"| ENC
-    ENC -->|"Consult note sent"| CLO
+    ENC -->|"Consult needed"| CST
+    CST -->|"Consultation resolved"| CLO
+    ENC -->|"Consult note sent\n(direct)"| CLO
     CLO -->|"Referrer ACKs"| CON
 
     style DEC fill:#f8d7da,stroke:#dc3545,color:#58151c
     style CON fill:#d1e7dd,stroke:#198754,color:#0a3622
-    style PIN fill:var(--color-card)3cd,stroke:#ffc107,color:#664d03
+    style PIN fill:#fff3cd,stroke:#ffc107,color:#664d03
+    style NSH fill:#fff3cd,stroke:#fd7e14,color:#664d03
+    style CST fill:#e2d9f3,stroke:#6f42c1,color:#3d0a91
     </div>
   </div>
 
   <!-- ── Data Flow ────────────────────────────────────────────────────────── -->
   <div class="card">
-    <h2>Diagram 2 <span>Data Flow Across Modules</span></h2>
+    <h2>Diagram 4 <span>Data Flow Across Modules</span></h2>
     <div class="mermaid">
 flowchart LR
-    EMAIL["📧 Inbound DSM Email\n(C-CDA attachment)"]
+    subgraph PA_SUB["Prior Auth (upstream, optional)"]
+        direction TB
+        PAFORM["PA Request\n(Da Vinci PAS)"] --> PARES{"Payer\nDecision"}
+        PARES -->|"Approved"| PAOK["Auth Granted"]
+        PARES -->|"Pended"| PAWAIT["Pending\nDecision"]
+        PARES -->|"Denied"| PADNY["Auth Denied"]
+    end
+
+    EMAIL["Inbound DSM Email\n(C-CDA attachment)"]
 
     subgraph PRD01["PRD-01 · Receive & Acknowledge"]
         P1A["Parse email\n+ C-CDA"]
@@ -77,16 +221,19 @@ flowchart LR
         P02B{"Clinician\nDecision"}
     end
 
-    subgraph ACCEPT["Accepted Path"]
+    subgraph ACCEPT["Accepted Path (PRD-03/05/11)"]
         P03["PRD-03\nSchedule\n→ SIU out"]
+        NSH2["PRD-11\nNo-Show\n→ Notify referrer"]
         P05["PRD-05\nEncounter\n← ADT in"]
+        CSTNODE["PRD-11\nConsult\n← referrer confirms"]
         P04["PRD-04\nConsult Note\n→ C-CDA out"]
     end
 
-    DEC_OUT["📧 RRI · Declined\n(to referrer)"]
-    ACC_OUT["📧 RRI · Accepted\n(to referrer)"]
+    DEC_OUT["RRI · Declined\n(to referrer)"]
+    ACC_OUT["RRI · Accepted\n(to referrer)"]
     CLOSE["PRD-06\nACK received\n→ Closed-Confirmed"]
 
+    PAOK -.->|"auth reference"| EMAIL
     EMAIL --> P1A
     P1A --> P1B
     P1A -->|"patients + referrals\ncreated"| P08
@@ -96,18 +243,26 @@ flowchart LR
     P02B -->|"declineReason saved"| DEC_OUT
     P02B -->|"outbound_messages\n(RRI)"| ACC_OUT
     ACC_OUT --> P03
+    P03 -->|"no-show recorded"| NSH2
+    NSH2 -->|"reschedule"| P03
     P03 -->|"appointment fields\n+ outbound_messages\n(SIU)"| P05
-    P05 -->|"state → Encounter\n→ Closed"| P04
+    P05 -->|"consult needed"| CSTNODE
+    CSTNODE -->|"consult resolved\n→ state Closed"| P04
+    P05 -->|"state → Encounter\n→ Closed (direct)"| P04
     P04 -->|"outbound_messages\n(ConsultNote)"| CLOSE
 
     style DEC_OUT fill:#f8d7da,stroke:#dc3545
+    style PADNY fill:#f8d7da,stroke:#dc3545
     style CLOSE fill:#d1e7dd,stroke:#198754
+    style PAOK fill:#d1e7dd,stroke:#198754
+    style NSH2 fill:#fff3cd,stroke:#fd7e14
+    style CSTNODE fill:#e2d9f3,stroke:#6f42c1
     </div>
   </div>
 
-  <!-- ── Data Model ────────────────────────────────────────────────────────── -->
+  <!-- ── Database Schema ──────────────────────────────────────────────────── -->
   <div class="card">
-    <h2>Diagram 3 <span>Database Schema (Primary & Foreign Keys)</span></h2>
+    <h2>Diagram 5 <span>Database Schema (Primary &amp; Foreign Keys)</span></h2>
     <div class="mermaid">
 erDiagram
     patients {
@@ -153,12 +308,45 @@ erDiagram
         string overridden_by
         datetime executed_at
     }
+    prior_auth_requests {
+        int id PK
+        int referral_id FK
+        string state
+        string service_code
+        string insurer_name
+        datetime submitted_at
+    }
+    prior_auth_responses {
+        int id PK
+        int request_id FK
+        string outcome
+        string auth_number
+        string denial_reason
+        datetime received_at
+    }
+    attachment_requests {
+        int id PK
+        int referral_id FK
+        string state
+        string payer_id
+        datetime received_at
+    }
+    attachment_responses {
+        int id PK
+        int request_id FK
+        string document_type
+        datetime sent_at
+    }
 
     patients ||--o{ referrals : "patient_id"
     referrals ||--o{ outbound_messages : "referral_id"
     referrals ||--o{ skill_executions : "referral_id"
+    referrals ||--o{ prior_auth_requests : "referral_id"
+    prior_auth_requests ||--o{ prior_auth_responses : "request_id"
+    attachment_requests ||--o{ attachment_responses : "request_id"
     </div>
   </div>
+
 </div>
 <script>
   mermaid.initialize({

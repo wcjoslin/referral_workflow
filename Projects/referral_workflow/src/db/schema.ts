@@ -92,3 +92,42 @@ export const attachmentResponses = sqliteTable('attachment_responses', {
   sentAt: integer('sent_at', { mode: 'timestamp' }),
   x12ControlNumber: text('x12_control_number'), // 275 ISA control number assigned at send time
 });
+
+// ── Prior Authorization (Da Vinci PAS) ──────────────────────────────────────
+
+export const priorAuthRequests = sqliteTable('prior_auth_requests', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  referralId: integer('referral_id').references(() => referrals.id),
+  patientId: integer('patient_id')
+    .references(() => patients.id)
+    .notNull(),
+  state: text('state').notNull().default('Draft'), // see PriorAuthState
+  claimJson: text('claim_json').notNull(), // serialized FHIR Claim resource
+  bundleJson: text('bundle_json'), // full PAS Bundle sent to payer
+  insurerName: text('insurer_name').notNull(),
+  insurerId: text('insurer_id').notNull(),
+  serviceCode: text('service_code').notNull(), // CPT/HCPCS code
+  serviceDisplay: text('service_display'), // human-readable service name
+  providerNpi: text('provider_npi').notNull(),
+  providerName: text('provider_name').notNull(),
+  subscriberId: text('subscriber_id'), // member/insurance ID
+  subscriptionId: text('subscription_id'), // payer-assigned subscription ID for rest-hook
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+  submittedAt: integer('submitted_at', { mode: 'timestamp' }),
+});
+
+export const priorAuthResponses = sqliteTable('prior_auth_responses', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  requestId: integer('request_id')
+    .references(() => priorAuthRequests.id)
+    .notNull(),
+  responseJson: text('response_json').notNull(), // full FHIR ClaimResponse
+  outcome: text('outcome').notNull(), // 'approved' | 'denied' | 'pended'
+  reviewAction: text('review_action'), // PAS reviewAction code
+  authNumber: text('auth_number'), // payer-assigned auth reference number
+  denialReason: text('denial_reason'), // human-readable reason if denied
+  itemAdjudications: text('item_adjudications'), // JSON array of item-level decisions
+  receivedVia: text('received_via').notNull(), // 'sync' | 'subscription' | 'inquire'
+  receivedAt: integer('received_at', { mode: 'timestamp' }).notNull(),
+});

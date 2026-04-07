@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>New Prior Authorization Request</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; background: #f5f5f5; color: #333; }
+    .container { max-width: 720px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 1.6rem; margin-bottom: 4px; color: var(--color-text); }
+    .subtitle { color: var(--color-text-muted); margin-bottom: 24px; font-size: 0.9rem; }
+    .card { background: var(--color-card); border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 20px; }
+    .card h2 { font-size: 1.1rem; margin-bottom: 16px; color: var(--color-text); border-bottom: 1px solid var(--color-border); padding-bottom: 8px; }
+    .form-row { display: flex; gap: 16px; margin-bottom: 14px; }
+    .form-group { flex: 1; }
+    .form-group label { display: block; font-weight: 600; font-size: 0.85rem; margin-bottom: 4px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .form-group input, .form-group select { width: 100%; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 4px; font-size: 0.95rem; }
+    .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--color-brand); box-shadow: 0 0 0 2px rgba(0,154,171,0.15); }
+    .form-group input[readonly] { background: #f0f2f5; color: var(--color-text-muted); }
+    .diagnoses-list { list-style: none; }
+    .diagnoses-list li { padding: 6px 0; display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
+    .diagnoses-list input[type="checkbox"] { width: 16px; height: 16px; }
+    .btn { padding: 10px 24px; border-radius: 4px; font-size: 0.95rem; font-weight: 600; cursor: pointer; border: none; }
+    .btn-primary { background: var(--color-brand); color: #fff; }
+    .btn-primary:hover { background: var(--color-brand-hover); }
+    .btn-primary:disabled { background: #adb5bd; cursor: not-allowed; }
+    .btn-secondary { background: #e9ecef; color: var(--color-text); }
+    .form-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; }
+    .alert { padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; font-size: 0.9rem; }
+    .alert-error { background: #f8d7da; color: #58151c; }
+    .alert-info { background: #cfe2ff; color: #084298; }
+  </style>
+</head>
+<body>
+<!--__NAV__-->
+<div class="container">
+  <h1>New Prior Authorization Request</h1>
+  <p class="subtitle">Da Vinci PAS &middot; FHIR Claim/$submit</p>
+
+  <div id="alert" style="display:none;" class="alert"></div>
+
+  <form id="paForm" onsubmit="return handleSubmit(event)">
+    <div class="card">
+      <h2>Patient Information</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>First Name</label>
+          <input type="text" id="patientFirstName" placeholder="e.g., Jane">
+        </div>
+        <div class="form-group">
+          <label>Last Name</label>
+          <input type="text" id="patientLastName" placeholder="e.g., Smith">
+        </div>
+        <div class="form-group">
+          <label>Date of Birth</label>
+          <input type="text" id="patientDob" placeholder="YYYY-MM-DD">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Insurance Information</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Insurer Name</label>
+          <input type="text" id="insurerName" required placeholder="e.g., Aetna">
+        </div>
+        <div class="form-group">
+          <label>Insurer ID</label>
+          <input type="text" id="insurerId" required placeholder="e.g., 60054">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Subscriber / Member ID</label>
+          <input type="text" id="subscriberId" placeholder="e.g., MEM123456">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Service Information</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>CPT/HCPCS Code</label>
+          <input type="text" id="serviceCode" required placeholder="e.g., 99213">
+        </div>
+        <div class="form-group">
+          <label>Service Description</label>
+          <input type="text" id="serviceDisplay" placeholder="e.g., Office visit, established patient">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Requesting Provider</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Provider Name</label>
+          <input type="text" id="providerName" required placeholder="e.g., Dr. Smith">
+        </div>
+        <div class="form-group">
+          <label>NPI</label>
+          <input type="text" id="providerNpi" required placeholder="e.g., 1234567890">
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="diagnosesCard" style="display:none;">
+      <h2>Supporting Diagnoses</h2>
+      <p style="font-size:0.85rem;color:var(--color-text-muted);margin-bottom:12px;">Select diagnoses to include as supporting information</p>
+      <ul class="diagnoses-list" id="diagnosesList"></ul>
+    </div>
+
+    <div class="form-actions">
+      <a href="/prior-auth" class="btn btn-secondary">Cancel</a>
+      <button type="submit" class="btn btn-primary" id="submitBtn">Submit Prior Authorization</button>
+    </div>
+  </form>
+</div>
+
+<script>
+/*__PA_FORM_DATA__*/
+(function() {
+  var data = window.__PA_FORM_DATA__ || {};
+  var patient = data.patient;
+  var referral = data.referral;
+  var diagnoses = data.diagnoses || [];
+
+  if (patient) {
+    document.getElementById('patientFirstName').value = patient.firstName || '';
+    document.getElementById('patientLastName').value = patient.lastName || '';
+    document.getElementById('patientDob').value = patient.dateOfBirth || '';
+  }
+
+  if (diagnoses.length > 0) {
+    document.getElementById('diagnosesCard').style.display = 'block';
+    var list = document.getElementById('diagnosesList');
+    diagnoses.forEach(function(dx, i) {
+      var li = document.createElement('li');
+      li.innerHTML = '<input type="checkbox" name="dx" value="' + i + '" checked> ' +
+        '<span><strong>' + (dx.code || '') + '</strong> — ' + (dx.display || '') + '</span>';
+      list.appendChild(li);
+    });
+  }
+})();
+
+function handleSubmit(e) {
+  e.preventDefault();
+  var btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+
+  var data = window.__PA_FORM_DATA__ || {};
+  var diagnoses = data.diagnoses || [];
+
+  // Gather selected diagnoses
+  var selectedDx = [];
+  var checkboxes = document.querySelectorAll('input[name="dx"]:checked');
+  checkboxes.forEach(function(cb) {
+    var idx = parseInt(cb.value, 10);
+    if (diagnoses[idx]) selectedDx.push(diagnoses[idx]);
+  });
+
+  var body = {
+    referralId: data.referral ? data.referral.id : undefined,
+    patientId: data.patient ? data.patient.id : undefined,
+    firstName: document.getElementById('patientFirstName').value || undefined,
+    lastName: document.getElementById('patientLastName').value || undefined,
+    dateOfBirth: document.getElementById('patientDob').value || undefined,
+    insurerName: document.getElementById('insurerName').value,
+    insurerId: document.getElementById('insurerId').value,
+    subscriberId: document.getElementById('subscriberId').value || undefined,
+    serviceCode: document.getElementById('serviceCode').value,
+    serviceDisplay: document.getElementById('serviceDisplay').value || undefined,
+    providerNpi: document.getElementById('providerNpi').value,
+    providerName: document.getElementById('providerName').value,
+    diagnoses: selectedDx.length > 0 ? selectedDx : undefined,
+  };
+
+  fetch('/prior-auth/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+    .then(function(res) { return res.json(); })
+    .then(function(result) {
+      if (result.error) {
+        showAlert('error', result.error);
+        btn.disabled = false;
+        btn.textContent = 'Submit Prior Authorization';
+        return;
+      }
+      window.location.href = '/prior-auth/' + result.id;
+    })
+    .catch(function(err) {
+      showAlert('error', 'Failed to submit: ' + err.message);
+      btn.disabled = false;
+      btn.textContent = 'Submit Prior Authorization';
+    });
+
+  return false;
+}
+
+function showAlert(type, msg) {
+  var el = document.getElementById('alert');
+  el.className = 'alert alert-' + type;
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+</script>
+</body>
+</html>

@@ -37,8 +37,30 @@ describe('referralStateMachine', () => {
       );
     });
 
+    it('Scheduled → No-Show', () => {
+      expect(transition(ReferralState.SCHEDULED, ReferralState.NO_SHOW)).toBe(
+        ReferralState.NO_SHOW,
+      );
+    });
+
+    it('No-Show → Scheduled', () => {
+      expect(transition(ReferralState.NO_SHOW, ReferralState.SCHEDULED)).toBe(
+        ReferralState.SCHEDULED,
+      );
+    });
+
     it('Encounter → Closed', () => {
       expect(transition(ReferralState.ENCOUNTER, ReferralState.CLOSED)).toBe(ReferralState.CLOSED);
+    });
+
+    it('Encounter → Consult', () => {
+      expect(transition(ReferralState.ENCOUNTER, ReferralState.CONSULT)).toBe(
+        ReferralState.CONSULT,
+      );
+    });
+
+    it('Consult → Closed', () => {
+      expect(transition(ReferralState.CONSULT, ReferralState.CLOSED)).toBe(ReferralState.CLOSED);
     });
 
     it('Closed → Closed-Confirmed', () => {
