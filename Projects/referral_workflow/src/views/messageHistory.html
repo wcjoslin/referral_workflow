@@ -84,10 +84,11 @@
       <label for="typeFilter">Filter by type:</label>
       <select id="typeFilter" onchange="applyFilter()">
         <option value="">All</option>
-        <option value="RRI">RRI</option>
-        <option value="SIU">SIU</option>
+        <option value="RRI">Referral Response</option>
+        <option value="SIU">Appointment Notification</option>
         <option value="InterimUpdate">Interim Update</option>
         <option value="ConsultNote">Consult Note</option>
+        <option value="InfoRequest">Information Request</option>
       </select>
       <label for="statusFilter">Status:</label>
       <select id="statusFilter" onchange="applyFilter()">
@@ -137,6 +138,17 @@
     return 'badge-pending';
   }
 
+  function formatMessageType(type) {
+    const labels = {
+      RRI: 'Referral Response',
+      SIU: 'Appointment Notification',
+      ConsultNote: 'Consult Note',
+      InterimUpdate: 'Interim Update',
+      InfoRequest: 'Information Request',
+    };
+    return labels[type] ?? type;
+  }
+
   function getStatusLabel(m) {
     if (m.status === 'Acknowledged') return 'Acknowledged';
     if (isOverdue(m)) return 'Overdue';
@@ -166,7 +178,7 @@
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td><a class="ref-link" href="/referrals/${m.referralId}/review">#${m.referralId}</a></td>
-        <td><span class="type-badge">${m.messageType}</span></td>
+        <td><span class="type-badge">${formatMessageType(m.messageType)}</span></td>
         <td><span class="badge ${getStatusClass(m)}">${getStatusLabel(m)}</span></td>
         <td>${fmtDate(m.sentAt)}</td>
         <td>${fmtDate(m.acknowledgedAt)}</td>

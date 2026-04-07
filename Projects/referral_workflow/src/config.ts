@@ -57,4 +57,10 @@ export const config = {
     watchDir: optionalEnv('CLAIMS_WATCH_DIR', './claims-inbox'),
     outboundDir: optionalEnv('CLAIMS_OUTBOUND_DIR', './claims-outbox'),
   },
+  priorAuth: {
+    mockPayerBaseUrl: optionalEnv('PA_MOCK_PAYER_URL', 'http://localhost:3000/mock-payer'),
+    pendTimeoutMs: parseInt(optionalEnv('PA_PEND_TIMEOUT_MS', '300000'), 10),
+    inquirePollIntervalMs: parseInt(optionalEnv('PA_INQUIRE_POLL_MS', '30000'), 10),
+    mockPayerDelayMs: parseInt(optionalEnv('PA_MOCK_DELAY_MS', '5000'), 10),
+  },
 } as const;

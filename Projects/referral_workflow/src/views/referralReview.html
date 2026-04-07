@@ -106,6 +106,20 @@
     .sialia-nav a, .sialia-header-title { color: #fff !important; }
     .sialia-section-title { color: var(--color-brand) !important; border-bottom-color: var(--color-brand) !important; }
 
+    /* Prior Authorization card */
+    .pa-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--color-border); font-size: 0.92rem; }
+    .pa-row:last-child { border-bottom: none; }
+    .pa-state { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 700; white-space: nowrap; }
+    .pa-state-approved { background: #d1e7dd; color: #0a3622; }
+    .pa-state-denied { background: #f8d7da; color: #58151c; }
+    .pa-state-pended { background: #fff3cd; color: #664d03; }
+    .pa-state-submitted { background: #cfe2ff; color: #084298; }
+    .pa-state-default { background: #e9ecef; color: #495057; }
+    .pa-meta { color: var(--color-text-muted); font-size: 0.82rem; flex: 1; }
+    .pa-link { margin-left: auto; font-size: 0.82rem; color: #0d6efd; text-decoration: none; white-space: nowrap; }
+    .pa-link:hover { text-decoration: underline; }
+    .pa-empty { font-size: 0.88rem; color: var(--color-text-muted); font-style: italic; }
+
     /* Consult medication enrichment */
     .consult-request-note { background: #fff3cd; border-left: 4px solid #e6a817; padding: 12px 14px; border-radius: 0 6px 6px 0; margin-bottom: 18px; font-size: 0.93rem; line-height: 1.5; }
     .consult-request-note strong { display: block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: .05em; color: #664d03; margin-bottom: 4px; }
@@ -134,6 +148,11 @@
       <h2>Patient Demographics</h2>
       <div class="field"><span class="label">Name</span><span class="value" id="patientName"></span></div>
       <div class="field"><span class="label">Date of Birth</span><span class="value" id="patientDob"></span></div>
+    </div>
+
+    <div class="card" id="paCard" style="display:none;">
+      <h2>Prior Authorization</h2>
+      <div id="paList"></div>
     </div>
 
     <div class="card">
@@ -416,6 +435,32 @@
   document.getElementById('patientName').textContent =
     `${data.patient.firstName} ${data.patient.lastName}`;
   document.getElementById('patientDob').textContent = data.patient.dateOfBirth || '—';
+
+  // Populate prior authorization card
+  (function renderPriorAuth() {
+    var paList = data.priorAuth || [];
+    var card = document.getElementById('paCard');
+    var container = document.getElementById('paList');
+    if (!card || !container) return;
+    card.style.display = 'block';
+    if (paList.length === 0) {
+      container.innerHTML = '<p class="pa-empty">No prior authorization on file.</p>';
+      return;
+    }
+    var stateClass = { Approved: 'pa-state-approved', Denied: 'pa-state-denied', Pended: 'pa-state-pended', Submitted: 'pa-state-submitted' };
+    paList.forEach(function(pa) {
+      var cls = stateClass[pa.state] || 'pa-state-default';
+      var date = pa.createdAt ? new Date(pa.createdAt).toLocaleDateString() : '';
+      var linkText = pa.state === 'Denied' ? 'View / Resubmit →' : 'View →';
+      var row = document.createElement('div');
+      row.className = 'pa-row';
+      row.innerHTML =
+        '<span class="pa-state ' + cls + '">' + pa.state + '</span>' +
+        '<span class="pa-meta">' + (pa.insurerName || '') + ' &middot; ' + (pa.serviceCode || '') + (date ? ' &middot; ' + date : '') + '</span>' +
+        '<a class="pa-link" href="/prior-auth/' + pa.id + '">' + linkText + '</a>';
+      container.appendChild(row);
+    });
+  })();
 
   // Populate referral details
   document.getElementById('referralReason').textContent = data.referral.reasonForReferral || '—';

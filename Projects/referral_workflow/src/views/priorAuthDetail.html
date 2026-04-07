@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prior Authorization Detail</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; background: #f5f5f5; color: #333; }
+    .container { max-width: 800px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 1.6rem; margin-bottom: 4px; color: var(--color-text); }
+    .subtitle { color: var(--color-text-muted); margin-bottom: 24px; font-size: 0.9rem; }
+    .card { background: var(--color-card); border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 20px; }
+    .card h2 { font-size: 1.1rem; margin-bottom: 16px; color: var(--color-text); border-bottom: 1px solid var(--color-border); padding-bottom: 8px; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; }
+    .detail-item label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
+    .detail-item .value { font-size: 0.95rem; }
+    .badge { display: inline-block; padding: 4px 14px; border-radius: 12px; font-size: 0.88rem; font-weight: 600; }
+    .badge-draft { background: #e9ecef; color: #495057; }
+    .badge-submitted { background: #cfe2ff; color: #084298; }
+    .badge-approved { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+    .badge-denied { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
+    .badge-pended { background: var(--color-badge-pending); color: var(--color-badge-pending-text); }
+    .badge-expired { background: #e9ecef; color: #495057; }
+    .badge-error { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
+    .btn { display: inline-block; padding: 8px 16px; border-radius: 4px; text-decoration: none; font-size: 0.9rem; font-weight: 600; cursor: pointer; border: none; }
+    .btn-primary { background: var(--color-brand); color: #fff; }
+    .btn-primary:hover { background: var(--color-brand-hover); }
+    .btn-secondary { background: #e9ecef; color: var(--color-text); }
+    .btn-success { background: #198754; color: #fff; }
+    .btn-success:hover { background: #157347; }
+    .actions { display: flex; gap: 12px; margin-top: 16px; }
+    .pend-notice { background: #fff3cd; border: 1px solid #ffecb5; border-radius: 4px; padding: 16px; margin-bottom: 20px; }
+    .pend-notice .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #664d03; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 6px; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .response-timeline { margin-top: 16px; }
+    .response-entry { padding: 10px 0; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+    .response-entry:last-child { border-bottom: none; }
+    .response-via { display: inline-block; background: #e9ecef; padding: 1px 8px; border-radius: 8px; font-size: 0.78rem; color: #495057; margin-left: 8px; }
+  </style>
+</head>
+<body>
+<!--__NAV__-->
+<div class="container">
+  <h1 id="title">Prior Authorization #—</h1>
+  <p class="subtitle">Da Vinci PAS &middot; CMS-0057-F</p>
+
+  <div id="pendNotice" class="pend-notice" style="display:none;">
+    <span class="spinner"></span>
+    <strong>Waiting for payer decision...</strong> The page will update automatically when a decision is received.
+    <div class="actions" style="margin-top:12px;">
+      <button class="btn btn-secondary" onclick="manualInquire()">Check Status ($inquire)</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Request Details</h2>
+    <div class="detail-grid">
+      <div class="detail-item"><label>Status</label><div class="value" id="stateBadge"></div></div>
+      <div class="detail-item"><label>Auth Number</label><div class="value" id="authNumber">—</div></div>
+      <div class="detail-item"><label>Patient</label><div class="value" id="patient">���</div></div>
+      <div class="detail-item"><label>Date of Birth</label><div class="value" id="patientDob">—</div></div>
+      <div class="detail-item"><label>Service Code</label><div class="value" id="serviceCode">—</div></div>
+      <div class="detail-item"><label>Service</label><div class="value" id="serviceDisplay">—</div></div>
+      <div class="detail-item"><label>Insurer</label><div class="value" id="insurer">—</div></div>
+      <div class="detail-item"><label>Subscriber ID</label><div class="value" id="subscriberId">—</div></div>
+      <div class="detail-item"><label>Provider</label><div class="value" id="provider">—</div></div>
+      <div class="detail-item"><label>Provider NPI</label><div class="value" id="providerNpi">—</div></div>
+      <div class="detail-item"><label>Submitted</label><div class="value" id="submitted">—</div></div>
+      <div class="detail-item"><label>Denial Reason</label><div class="value" id="denialReason" style="display:none;">—</div></div>
+    </div>
+  </div>
+
+  <div class="card" id="actionsCard" style="display:none;">
+    <h2>Actions</h2>
+    <div class="actions" id="actionBtns"></div>
+  </div>
+
+  <div class="card" id="responsesCard" style="display:none;">
+    <h2>Response Timeline</h2>
+    <div class="response-timeline" id="timeline"></div>
+  </div>
+</div>
+
+<script>
+/*__PA_DETAIL_DATA__*/
+(function() {
+  var data = window.__PA_DETAIL_DATA__ || {};
+  var req = data.request || {};
+  var patient = data.patient || {};
+  var responses = data.responses || [];
+
+  document.getElementById('title').textContent = 'Prior Authorization #' + req.id;
+
+  var state = req.state || 'Draft';
+  var badgeClass = 'badge-' + state.toLowerCase().replace(/[^a-z]/g, '');
+  document.getElementById('stateBadge').innerHTML = '<span class="badge ' + badgeClass + '">' + state + '</span>';
+
+  document.getElementById('patient').textContent = patient.firstName + ' ' + patient.lastName;
+  document.getElementById('patientDob').textContent = patient.dateOfBirth || '—';
+  document.getElementById('serviceCode').textContent = req.serviceCode || '—';
+  document.getElementById('serviceDisplay').textContent = req.serviceDisplay || '—';
+  document.getElementById('insurer').textContent = req.insurerName + ' (' + req.insurerId + ')';
+  document.getElementById('subscriberId').textContent = req.subscriberId || '—';
+  document.getElementById('provider').textContent = req.providerName || '—';
+  document.getElementById('providerNpi').textContent = req.providerNpi || '—';
+  document.getElementById('submitted').textContent = req.submittedAt ? new Date(req.submittedAt).toLocaleString() : '—';
+
+  // Show auth number and denial reason from latest response
+  var latestResp = responses[0];
+  if (latestResp && latestResp.authNumber) {
+    document.getElementById('authNumber').textContent = latestResp.authNumber;
+  }
+  if (latestResp && latestResp.denialReason) {
+    var el = document.getElementById('denialReason');
+    el.textContent = latestResp.denialReason;
+    el.style.display = 'block';
+    el.parentElement.querySelector('label').style.display = 'block';
+  }
+
+  // Show pend notice if pended
+  if (state === 'Pended') {
+    document.getElementById('pendNotice').style.display = 'block';
+    startPolling(req.id);
+  }
+
+  // Show actions
+  var actionsCard = document.getElementById('actionsCard');
+  var actionBtns = document.getElementById('actionBtns');
+  if (state === 'Approved' && req.referralId) {
+    actionsCard.style.display = 'block';
+    actionBtns.innerHTML = '<a href="/referrals/' + req.referralId + '/review" class="btn btn-success">Proceed with Referral →</a>';
+  }
+  if (state === 'Denied') {
+    actionsCard.style.display = 'block';
+    actionBtns.innerHTML = '<a href="/prior-auth/new' + (req.referralId ? '?referralId=' + req.referralId : '') + '" class="btn btn-primary">Resubmit with Changes</a>';
+  }
+
+  // Show response timeline
+  if (responses.length > 0) {
+    document.getElementById('responsesCard').style.display = 'block';
+    var timeline = document.getElementById('timeline');
+    responses.forEach(function(resp) {
+      var div = document.createElement('div');
+      div.className = 'response-entry';
+      var outcomeText = resp.outcome === 'approved' ? '✓ Approved' : resp.outcome === 'denied' ? '✗ Denied' : '⏳ Pended';
+      var time = new Date(resp.receivedAt).toLocaleString();
+      div.innerHTML = '<strong>' + outcomeText + '</strong>' +
+        '<span class="response-via">' + resp.receivedVia + '</span>' +
+        '<span style="float:right;color:var(--color-text-muted);font-size:0.85rem;">' + time + '</span>' +
+        (resp.authNumber ? '<br><small>Auth #: ' + resp.authNumber + '</small>' : '') +
+        (resp.denialReason ? '<br><small>Reason: ' + resp.denialReason + '</small>' : '');
+      timeline.appendChild(div);
+    });
+  }
+})();
+
+var pollTimer = null;
+function startPolling(requestId) {
+  pollTimer = setInterval(function() {
+    fetch('/prior-auth/' + requestId + '/status')
+      .then(function(res) { return res.json(); })
+      .then(function(status) {
+        if (status.state !== 'Pended') {
+          clearInterval(pollTimer);
+          window.location.reload();
+        }
+      })
+      .catch(function() {});
+  }, 3000);
+}
+
+function manualInquire() {
+  var data = window.__PA_DETAIL_DATA__ || {};
+  var req = data.request || {};
+  fetch('/prior-auth/' + req.id + '/inquire', { method: 'POST' })
+    .then(function(res) { return res.json(); })
+    .then(function(status) {
+      if (status.state !== 'Pended') {
+        window.location.reload();
+      }
+    })
+    .catch(function() {});
+}
+</script>
+</body>
+</html>

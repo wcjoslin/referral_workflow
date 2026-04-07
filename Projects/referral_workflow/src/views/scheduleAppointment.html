@@ -27,7 +27,7 @@
     .status-bar { padding: 10px 16px; border-radius: 6px; font-size: 0.92rem; margin-top: 12px; display: none; }
     .status-bar.success { background: #d1e7dd; color: #0a3622; display: block; }
     .status-bar.error { background: #f8d7da; color: #58151c; display: block; }
-    .status-bar.warning { background: var(--color-card)3cd; color: #856404; display: block; }
+    .status-bar.warning { background: #fff3cd; color: #856404; display: block; }
     .back-link { font-size: 0.88rem; color: #0d6efd; text-decoration: none; margin-bottom: 16px; display: inline-block; }
     .back-link:hover { text-decoration: underline; }
     .state-badge { font-size: 0.8rem; font-weight: 600; padding: 3px 10px; border-radius: 12px; background: #e0e7ff; color: #3730a3; margin-left: 10px; vertical-align: middle; }
@@ -86,6 +86,14 @@
   document.getElementById('patientDob').textContent = data.patient.dateOfBirth || '—';
   document.getElementById('reason').textContent = data.referral.reasonForReferral || '—';
   document.getElementById('stateBadge').textContent = data.referral.state;
+
+  // If this is a reschedule after a no-show, show a contextual notice
+  if (data.referral.state === 'No-Show') {
+    var notice = document.createElement('div');
+    notice.style.cssText = 'background:#fff3cd;border-left:4px solid #fd7e14;padding:10px 14px;border-radius:0 6px 6px 0;margin-bottom:16px;font-size:0.92rem;color:#664d03;';
+    notice.innerHTML = '<strong>Rescheduling after No-Show</strong> — the original referral remains active. Book a new appointment below.';
+    document.querySelector('.card h2').insertAdjacentElement('afterend', notice);
+  }
 
   // If already scheduled, show confirmation instead of form
   if (data.referral.state === 'Scheduled') {

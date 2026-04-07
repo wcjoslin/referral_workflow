@@ -2,6 +2,7 @@ import { startInboxMonitor } from './modules/prd01/inboxMonitor';
 import { startServer } from './server';
 import { getSkillCatalog, startSkillWatcher } from './modules/prd09/skillLoader';
 import { checkPendingInfoTimeouts } from './modules/prd09/pendingInfoChecker';
+import { expirePendedRequests } from './modules/prd12/priorAuthService';
 import { startEdiWatcher } from './modules/claims/intake/ediWatcher';
 import { config } from './config';
 
@@ -34,3 +35,10 @@ setInterval(() => {
     console.error('[PendingInfoChecker] Check failed:', err);
   });
 }, config.skills.pendingInfoCheckIntervalMs);
+
+// PRD-12: Expire PA requests that have been Pended beyond the configured timeout
+setInterval(() => {
+  expirePendedRequests().catch((err) => {
+    console.error('[PriorAuth] Pend timeout check failed:', err);
+  });
+}, config.priorAuth.inquirePollIntervalMs);

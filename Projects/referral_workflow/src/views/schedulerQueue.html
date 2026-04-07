@@ -18,6 +18,9 @@
     .btn:hover { background: #0b5ed7; }
     .empty { color: #888; font-size: 0.95rem; padding: 20px 0; text-align: center; }
     .state-badge { font-size: 0.78rem; font-weight: 600; padding: 2px 8px; border-radius: 4px; background: #e0e7ff; color: #3730a3; }
+    .state-badge-noshown { background: #fff3cd; color: #664d03; }
+    .btn-reschedule { background: #fd7e14; }
+    .btn-reschedule:hover { background: #e36209; }
   </style>
 </head>
 <body>
@@ -39,7 +42,7 @@
       </thead>
       <tbody id="queueBody"></tbody>
     </table>
-    <div class="empty" id="emptyMsg" style="display:none;">No referrals awaiting scheduling.</div>
+    <div class="empty" id="emptyMsg" style="display:none;">No referrals awaiting scheduling or rescheduling.</div>
   </div>
 </div>
 <script>
@@ -55,13 +58,17 @@
       const received = item.referral.createdAt
         ? new Date(item.referral.createdAt * 1000).toLocaleDateString()
         : '—';
+      const isNoShow = item.referral.state === 'No-Show';
+      const badgeClass = isNoShow ? 'state-badge state-badge-noshown' : 'state-badge';
+      const btnClass = isNoShow ? 'btn btn-reschedule' : 'btn';
+      const btnLabel = isNoShow ? 'Reschedule' : 'Schedule';
       tr.innerHTML = `
         <td>${item.referral.id}</td>
         <td>${item.patient.firstName} ${item.patient.lastName}</td>
         <td>${item.referral.reasonForReferral || '—'}</td>
         <td>${received}</td>
-        <td><span class="state-badge">${item.referral.state}</span></td>
-        <td><a class="btn" href="/referrals/${item.referral.id}/schedule">Schedule</a></td>
+        <td><span class="${badgeClass}">${item.referral.state}</span></td>
+        <td><a class="${btnClass}" href="/referrals/${item.referral.id}/schedule">${btnLabel}</a></td>
       `;
       tbody.appendChild(tr);
     });

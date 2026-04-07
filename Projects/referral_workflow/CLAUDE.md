@@ -224,6 +224,20 @@ Example: PRD-01 (Receive) →
 3. Visit `localhost:3001` to see the UI
 4. Mock scripts will auto-execute on defined triggers (or trigger manually from UI)
 
+## Git Workflow
+
+**Branch per feature/PRD** — every feature or PRD implementation must be done on a dedicated branch, never directly on `main`.
+
+```bash
+git checkout -b prd-11-no-show    # create branch named after the PRD or feature
+# ... implement ...
+gh pr create                       # open PR when ready; merge via GitHub
+```
+
+Branch naming convention: `prd-<number>-<short-slug>` for PRDs, `feature-<short-slug>` for smaller features.
+
+**Rule:** Do not commit implementation work to `main` directly. Always branch → PR → merge.
+
 ## Documentation & Planning
 
 All product and engineering planning docs live in the **`Devault/`** Obsidian vault at the project root. This is the canonical location — not markdown files scattered in the repo root.

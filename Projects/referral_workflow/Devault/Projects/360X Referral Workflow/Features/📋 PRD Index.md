@@ -2,7 +2,7 @@
 title: PRD Index - All Product Requirements
 tags: [prd, features, index]
 up: "[[🎯 PROJECT OVERVIEW]]"
-down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]", "[[Feature - No-Show & Consult Demo Scenarios]]"]
+down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[PRD-12 - Prior Authorization]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]", "[[Feature - No-Show & Consult Demo Scenarios]]"]
 ---
 
 # 📋 PRD Index
@@ -110,7 +110,7 @@ The logical order for PRD development:
 
 ---
 
-### 8. **[[PRD-11 - No-Show & Consult States|PRD-11: No-Show & Consult States]]** 🔧
+### 8. **[[PRD-11 - No-Show & Consult States|PRD-11: No-Show & Consult States]]** ✅
 **Fills missing lifecycle gaps** for appointments and post-encounter consultation.
 
 - Mark a scheduled appointment as no-show; notify referring physician
@@ -119,8 +119,23 @@ The logical order for PRD development:
 - Reintroduce clinician confirmation step before loop closure
 - **Prerequisite:** PRD-03 (Scheduled), PRD-05 (Encounter)
 
-**Status:** 🔧 In Progress  
+**Status:** ✅ Complete  
 **Module:** `prd11/`
+
+---
+
+### 9. **[[PRD-12 - Prior Authorization|PRD-12: Prior Authorization (Da Vinci PAS)]]** ✅
+**FHIR-based prior authorization gate** before referral submission per CMS-0057-F.
+
+- Submit prior authorization requests via Da Vinci PAS `$submit` operation
+- Handle approved, denied, and pended outcomes with subscription + polling
+- Auto-populate PA form from referral clinical data with clinician edit
+- Mock payer with deterministic decision logic for demo scenarios
+- Pended requests auto-expire to Expired state after configurable timeout
+- **Prerequisite:** PRD-08 (FHIR client), PRD-02 (referral with clinical data)
+
+**Status:** ✅ Complete  
+**Module:** `prd12/`
 
 ---
 
@@ -135,7 +150,8 @@ The logical order for PRD development:
 | [[PRD-05 - Patient Encounter|05]] | Patient Encounter | ✅ | Send ADT, update state | `prd05/` |
 | [[PRD-06 - Close Loop|06]] | Close Loop | ✅ | Acknowledge final report | `prd06/` |
 | [[PRD-07 - Ack Tracking|07]] | Ack Tracking | ✅ | Monitor & retry messages | `prd07/` |
-| [[PRD-11 - No-Show & Consult States|11]] | No-Show & Consult States | 🔧 | No-show notify + consult confirmation | `prd11/` |
+| [[PRD-11 - No-Show & Consult States|11]] | No-Show & Consult States | ✅ | No-show notify + consult confirmation | `prd11/` |
+| [[PRD-12 - Prior Authorization|12]] | Prior Authorization (PAS) | ✅ | FHIR PA submit, payer decisions | `prd12/` |
 
 ---
 
