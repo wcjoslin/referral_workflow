@@ -21,7 +21,9 @@ export const referrals = sqliteTable('referrals', {
   appointmentDate: text('appointment_date'), // ISO 8601
   appointmentLocation: text('appointment_location'),
   scheduledProvider: text('scheduled_provider'), // clinician assigned to the appointment
-  aiAssessment: text('ai_assessment'), // JSON-serialised SufficiencyAssessment, nullable until Gemini responds
+  aiAssessment: text('ai_assessment'), // JSON-serialised RoutingAssessment (immutable AI suggestion), nullable until Gemini responds
+  routingDepartment: text('routing_department').notNull().default('Unassigned'), // effective department, editable by coordinator
+  routingEquipment: text('routing_equipment'), // JSON array of resource IDs, editable by coordinator
   clinicalData: text('clinical_data'), // JSON-serialised extended CDA sections (problems, meds, allergies, results)
   rawCcdaXml: text('raw_ccda_xml'), // original inbound C-CDA XML, nullable for seeded demo data
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),

@@ -173,11 +173,24 @@
       <div id="missingSections" style="margin-top: 10px;"></div>
     </div>
 
-    <div class="card" id="assessmentCard">
-      <h2>AI Clinical Sufficiency Assessment <span style="font-size:0.75rem;color:#888;text-transform:none;letter-spacing:0">(advisory only)</span></h2>
+    <div class="card" id="routingCard">
+      <h2>Routing Suggestion <span style="font-size:0.75rem;color:#888;text-transform:none;letter-spacing:0">(advisory — editable)</span></h2>
       <div class="assessment">
-        <p id="assessmentSummary">Loading...</p>
-        <div id="assessmentConcerns"></div>
+        <p id="routingSummary" style="margin-bottom:14px;">Loading...</p>
+        <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:12px;">
+          <div>
+            <label style="font-size:0.82rem;color:var(--color-text-muted);display:block;margin-bottom:4px;">Route to Department</label>
+            <select id="routingDeptSelect" style="padding:6px 10px;border:1px solid var(--color-border);border-radius:5px;font-size:0.92rem;min-width:200px;" onchange="saveRoutingDept()">
+              <option value="Unassigned">Unassigned</option>
+            </select>
+            <span id="routingDeptAiTag" class="badge-fhir" style="display:none;margin-left:4px;">AI</span>
+          </div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label style="font-size:0.82rem;color:var(--color-text-muted);display:block;margin-bottom:4px;">Required Equipment</label>
+          <div id="routingEquipmentList" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+        </div>
+        <div id="routingWarnings"></div>
       </div>
     </div>
 
@@ -506,19 +519,119 @@
     document.getElementById('consultRequestText').textContent = consultClinical.consultRequest;
   }
 
-  // Populate AI assessment
-  if (data.assessment) {
-    const badge = data.assessment.sufficient
-      ? '<span class="badge badge-ok">Sufficient</span>'
-      : '<span class="badge badge-risk">Concerns Noted</span>';
-    document.getElementById('assessmentSummary').innerHTML = badge + ' ' + data.assessment.summary;
-    const concerns = data.assessment.concerns;
-    if (concerns && concerns.length > 0) {
-      document.getElementById('assessmentConcerns').innerHTML =
-        concerns.map(c => `<p class="concern">• ${c}</p>`).join('');
+  // ── Routing Assessment Panel ──────────────────────────────────────────────
+  var allDepartments = data.departments || [];
+  var allResources = data.resources || [];
+  var currentRoutingDept = data.referral.routingDepartment || 'Unassigned';
+  var currentRoutingEquip = [];
+  try { currentRoutingEquip = data.referral.routingEquipment ? JSON.parse(data.referral.routingEquipment) : []; } catch(e) {}
+
+  // Populate department dropdown
+  (function() {
+    var sel = document.getElementById('routingDeptSelect');
+    allDepartments.forEach(function(d) {
+      if (d === 'Unassigned') return; // already added as first option
+      var opt = document.createElement('option');
+      opt.value = d;
+      opt.textContent = d;
+      sel.appendChild(opt);
+    });
+    sel.value = currentRoutingDept;
+  })();
+
+  // Populate equipment checklist
+  function renderEquipmentChecklist() {
+    var container = document.getElementById('routingEquipmentList');
+    container.innerHTML = '';
+    var aiEquip = (data.assessment && data.assessment.requiredEquipment) ? data.assessment.requiredEquipment : [];
+    var aiIds = aiEquip.map(function(e) { return e.resourceId; });
+
+    allResources.forEach(function(r) {
+      var isChecked = currentRoutingEquip.includes(r.id);
+      var isAiSuggested = aiIds.includes(r.id);
+      var unsupported = false;
+      if (isAiSuggested) {
+        var aiItem = aiEquip.find(function(e) { return e.resourceId === r.id; });
+        if (aiItem && !aiItem.supported) unsupported = true;
+      }
+
+      var label = document.createElement('label');
+      label.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--color-border);border-radius:5px;font-size:0.85rem;cursor:pointer;background:' + (isChecked ? '#e8f5e9' : '#fff');
+      if (unsupported) label.style.borderColor = '#fd7e14';
+
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = isChecked;
+      cb.dataset.resourceId = r.id;
+      cb.onchange = function() { saveRoutingEquipment(); };
+      label.appendChild(cb);
+
+      var nameSpan = document.createElement('span');
+      nameSpan.textContent = r.name;
+      label.appendChild(nameSpan);
+
+      if (isAiSuggested) {
+        var aiTag = document.createElement('span');
+        aiTag.className = 'badge-fhir';
+        aiTag.textContent = 'AI';
+        aiTag.style.marginLeft = '2px';
+        label.appendChild(aiTag);
+      }
+      container.appendChild(label);
+    });
+
+    // Show unsupported AI equipment (not in catalogue)
+    aiEquip.forEach(function(e) {
+      if (!e.supported) {
+        var span = document.createElement('span');
+        span.className = 'missing-section';
+        span.style.borderColor = '#fd7e14';
+        span.textContent = e.name + ' (not in catalogue)';
+        container.appendChild(span);
+      }
+    });
+  }
+
+  // Populate routing assessment data
+  if (data.assessment && data.assessment.summary && data.assessment.summary !== 'Routing suggestion unavailable.') {
+    document.getElementById('routingSummary').textContent = data.assessment.summary;
+    if (data.assessment.department && data.assessment.department !== 'Unassigned') {
+      document.getElementById('routingDeptAiTag').style.display = '';
     }
+    // Show warnings
+    if (data.assessment.warnings && data.assessment.warnings.length > 0) {
+      document.getElementById('routingWarnings').innerHTML =
+        data.assessment.warnings.map(function(w) { return '<p class="concern" style="font-size:0.85rem;">⚠ ' + w + '</p>'; }).join('');
+    }
+  } else if (!data.assessment) {
+    document.getElementById('routingSummary').textContent = 'Routing assessment pending — please refresh in a moment.';
   } else {
-    document.getElementById('assessmentSummary').textContent = 'Assessment pending — please refresh in a moment.';
+    document.getElementById('routingSummary').textContent = 'Routing suggestion unavailable.';
+  }
+  renderEquipmentChecklist();
+
+  function saveRoutingDept() {
+    var dept = document.getElementById('routingDeptSelect').value;
+    fetch('/api/referrals/' + referralId + '/routing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ department: dept })
+    }).then(function(r) { return r.json(); }).then(function(result) {
+      currentRoutingDept = result.routingDepartment || dept;
+    });
+  }
+
+  function saveRoutingEquipment() {
+    var checkboxes = document.querySelectorAll('#routingEquipmentList input[type=checkbox]');
+    var selected = [];
+    checkboxes.forEach(function(cb) { if (cb.checked) selected.push(cb.dataset.resourceId); });
+    currentRoutingEquip = selected;
+    fetch('/api/referrals/' + referralId + '/routing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ equipment: selected })
+    });
+    renderEquipmentChecklist();
   }
 
   // Populate clinical info from stored extended CDA parse (supports both string[] and EnrichedClinicalItem[])

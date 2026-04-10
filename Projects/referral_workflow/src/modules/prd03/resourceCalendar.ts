@@ -14,6 +14,7 @@ export interface TimeSlot {
 export interface Resource {
   id: string;
   name: string;
+  department: string;
   blockedSlots: TimeSlot[];
 }
 
@@ -23,9 +24,11 @@ export interface Resource {
  */
 function buildCatalogue(): Resource[] {
   return [
+    // Cardiology
     {
       id: 'echo-lab',
       name: 'Echocardiography Lab',
+      department: 'Cardiology',
       blockedSlots: [
         { start: new Date('2026-03-30T08:00:00'), end: new Date('2026-03-30T12:00:00') },
         { start: new Date('2026-04-01T14:00:00'), end: new Date('2026-04-01T16:00:00') },
@@ -34,13 +37,70 @@ function buildCatalogue(): Resource[] {
     {
       id: 'stress-test-room',
       name: 'Cardiac Stress Test Room',
+      department: 'Cardiology',
       blockedSlots: [
         { start: new Date('2026-03-31T09:00:00'), end: new Date('2026-03-31T11:00:00') },
       ],
     },
+    // Imaging
+    {
+      id: 'mri-suite',
+      name: 'MRI Suite',
+      department: 'Imaging',
+      blockedSlots: [
+        { start: new Date('2026-03-30T08:00:00'), end: new Date('2026-03-30T10:00:00') },
+      ],
+    },
+    {
+      id: 'ct-scanner',
+      name: 'CT Scanner',
+      department: 'Imaging',
+      blockedSlots: [],
+    },
+    // Neurology
+    {
+      id: 'neuro-consult-1',
+      name: 'Neurology Consultation Room 1',
+      department: 'Neurology',
+      blockedSlots: [],
+    },
+    // Orthopedics
+    {
+      id: 'ortho-treatment',
+      name: 'Orthopedics Treatment Room',
+      department: 'Orthopedics',
+      blockedSlots: [
+        { start: new Date('2026-04-02T13:00:00'), end: new Date('2026-04-02T15:00:00') },
+      ],
+    },
+    // Gastroenterology
+    {
+      id: 'endoscopy-suite',
+      name: 'Endoscopy Suite',
+      department: 'Gastroenterology',
+      blockedSlots: [
+        { start: new Date('2026-04-01T07:00:00'), end: new Date('2026-04-01T12:00:00') },
+      ],
+    },
+    // Physical Therapy
+    {
+      id: 'pt-gym',
+      name: 'Physical Therapy Gym',
+      department: 'Physical Therapy',
+      blockedSlots: [],
+    },
+    // Endocrinology
+    {
+      id: 'endo-consult',
+      name: 'Endocrinology Consultation Room',
+      department: 'Endocrinology',
+      blockedSlots: [],
+    },
+    // General / shared
     {
       id: 'exam-room-1',
       name: 'Exam Room 1',
+      department: 'General',
       blockedSlots: [
         { start: new Date('2026-03-30T10:00:00'), end: new Date('2026-03-30T11:00:00') },
       ],
@@ -48,6 +108,7 @@ function buildCatalogue(): Resource[] {
     {
       id: 'exam-room-2',
       name: 'Exam Room 2',
+      department: 'General',
       blockedSlots: [],
     },
   ];
@@ -87,6 +148,12 @@ export function checkConflicts(
       (slot) => proposedStart < slot.end && proposedEnd > slot.start,
     );
   });
+}
+
+/** Returns the sorted list of unique department names from the catalogue. */
+export function getDepartments(): string[] {
+  const depts = new Set(getCatalogue().map((r) => r.department));
+  return [...depts].sort();
 }
 
 /** Reset catalogue (useful for tests). */

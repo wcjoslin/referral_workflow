@@ -43,6 +43,8 @@ jest.mock('../../../src/db', () => {
       appointment_location TEXT,
       scheduled_provider TEXT,
       ai_assessment TEXT,
+      routing_department TEXT NOT NULL DEFAULT 'Unassigned',
+      routing_equipment TEXT,
       clinical_data TEXT,
       raw_ccda_xml TEXT,
       priority_flag INTEGER DEFAULT 0,

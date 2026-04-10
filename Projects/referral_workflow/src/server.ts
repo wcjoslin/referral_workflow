@@ -31,7 +31,7 @@ import { referrals, patients, outboundMessages, attachmentRequests, attachmentRe
 import { accept, decline, ReferralNotFoundError as DispositionNotFoundError } from './modules/prd02/dispositionService';
 import { getCachedAssessment } from './modules/prd02/referralService';
 import { scheduleReferral, ReferralNotFoundError, SchedulingConflictError } from './modules/prd03/schedulingService';
-import { getResources } from './modules/prd03/resourceCalendar';
+import { getResources, getDepartments } from './modules/prd03/resourceCalendar';
 import { markEncounterComplete, ReferralNotFoundError as EncounterNotFoundError } from './modules/prd05/encounterService';
 import { generateAndSend, ReferralNotFoundError as ConsultNotFoundError } from './modules/prd04/consultNoteService';
 import { markNoShow, ReferralNotFoundError as NoShowNotFoundError } from './modules/prd11/noShowService';
@@ -137,7 +137,7 @@ app.get('/', async (_req: Request, res: Response, next: NextFunction) => {
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__DASHBOARD_DATA__*/',
-      `window.__DASHBOARD_DATA__ = ${JSON.stringify({ items })};`,
+      `window.__DASHBOARD_DATA__ = ${JSON.stringify({ items, departments: getDepartments() })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -224,6 +224,8 @@ app.get('/referrals/:id/review', async (req: Request, res: Response, next: NextF
       patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
       referral,
       assessment: assessment ?? null,
+      departments: getDepartments(),
+      resources: getResources().map((r) => ({ id: r.id, name: r.name, department: r.department })),
       outboundMessages: messages,
       hasCcda: !!referral.rawCcdaXml,
       priorAuth: paRequests,
@@ -317,6 +319,53 @@ app.post('/referrals/:id/disposition', async (req: Request, res: Response, next:
     } else {
       next(err);
     }
+  }
+});
+
+// ── PRD-13: Routing override API ─────────────────────────────────────────────
+
+app.post('/api/referrals/:id/routing', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+    if (!referral) {
+      res.status(404).json({ error: 'Referral not found' });
+      return;
+    }
+
+    const { department, equipment } = req.body as {
+      department?: string;
+      equipment?: string[];
+    };
+
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+
+    if (department !== undefined) {
+      const validDepts = getDepartments();
+      updates.routingDepartment = validDepts.includes(department) ? department : 'Unassigned';
+    }
+
+    if (equipment !== undefined) {
+      const validIds = new Set(getResources().map((r) => r.id));
+      const filtered = equipment.filter((id) => validIds.has(id));
+      updates.routingEquipment = JSON.stringify(filtered);
+    }
+
+    await db.update(referrals).set(updates).where(eq(referrals.id, referralId));
+
+    res.json({
+      success: true,
+      routingDepartment: updates.routingDepartment ?? referral.routingDepartment,
+      routingEquipment: updates.routingEquipment ?? referral.routingEquipment,
+    });
+  } catch (err) {
+    next(err);
   }
 });
 
