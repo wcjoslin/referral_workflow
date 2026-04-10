@@ -1,4 +1,4 @@
-import { checkConflicts, getResources, getResource, _resetCatalogue } from '../../../src/modules/prd03/resourceCalendar';
+import { checkConflicts, getResources, getResource, getDepartments, _resetCatalogue } from '../../../src/modules/prd03/resourceCalendar';
 
 beforeEach(() => {
   _resetCatalogue();
@@ -22,6 +22,27 @@ describe('getResource', () => {
 
   it('returns undefined for unknown id', () => {
     expect(getResource('nonexistent')).toBeUndefined();
+  });
+});
+
+describe('getDepartments', () => {
+  it('returns the sorted unique list of departments', () => {
+    const depts = getDepartments();
+    expect(depts).toEqual([...new Set(depts)].sort());
+    expect(depts.length).toBeGreaterThanOrEqual(3);
+    expect(depts).toContain('Cardiology');
+    expect(depts).toContain('Imaging');
+    expect(depts).toContain('General');
+  });
+});
+
+describe('resource department field', () => {
+  it('every resource has a department string', () => {
+    const resources = getResources();
+    resources.forEach((r) => {
+      expect(typeof r.department).toBe('string');
+      expect(r.department.length).toBeGreaterThan(0);
+    });
   });
 });
 

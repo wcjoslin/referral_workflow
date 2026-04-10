@@ -2,7 +2,7 @@
 title: PRD Index - All Product Requirements
 tags: [prd, features, index]
 up: "[[🎯 PROJECT OVERVIEW]]"
-down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[PRD-12 - Prior Authorization]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]", "[[Feature - No-Show & Consult Demo Scenarios]]"]
+down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[PRD-12 - Prior Authorization]]", "[[PRD-13 - Department Classification]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]", "[[Feature - No-Show & Consult Demo Scenarios]]"]
 ---
 
 # 📋 PRD Index
@@ -139,6 +139,20 @@ The logical order for PRD development:
 
 ---
 
+### 10. **[[PRD-13 - Department Classification|PRD-13: Department Classification & Administrative Routing]]** 🔧
+**Repurposes AI assessment for administrative triage** — department routing, equipment identification, and care-request summarization.
+
+- Classify referrals into departments from the facility catalogue
+- Surface required equipment and diagnostic resources
+- Editable routing controls for coordinator overrides
+- Department badge + filter on inbox dashboard
+- **Prerequisite:** PRD-02 (disposition flow), PRD-03 (resource catalogue)
+
+**Status:** 🔧 In Progress  
+**Module:** `prd02/`
+
+---
+
 ## Quick Reference
 
 | PRD | Name | Status | Key Action | Module |
@@ -152,6 +166,7 @@ The logical order for PRD development:
 | [[PRD-07 - Ack Tracking|07]] | Ack Tracking | ✅ | Monitor & retry messages | `prd07/` |
 | [[PRD-11 - No-Show & Consult States|11]] | No-Show & Consult States | ✅ | No-show notify + consult confirmation | `prd11/` |
 | [[PRD-12 - Prior Authorization|12]] | Prior Authorization (PAS) | ✅ | FHIR PA submit, payer decisions | `prd12/` |
+| [[PRD-13 - Department Classification|13]] | Department Classification | 🔧 | Route to dept, surface equipment | `prd02/` |
 
 ---
 

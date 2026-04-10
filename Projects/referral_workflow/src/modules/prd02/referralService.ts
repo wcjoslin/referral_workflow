@@ -13,9 +13,9 @@ import { db } from '../../db';
 import { patients, referrals } from '../../db/schema';
 import { config } from '../../config';
 import { ProcessedMessage } from '../prd01/messageProcessor';
-import { parseExtendedCda, ExtendedReferralData } from '../prd01/cdaParser';
+import { parseExtendedCda } from '../prd01/cdaParser';
 import { transition, ReferralState } from '../../state/referralStateMachine';
-import { assessSufficiency, SufficiencyAssessment } from './claudeService';
+import { assessRouting, RoutingAssessment } from './claudeService';
 import { buildRri } from './rriBuilder';
 import { sendRriMessage } from './dispositionService';
 import { enrichWithFhir } from '../prd08/fhirEnrichment';
@@ -24,11 +24,11 @@ import { executeSkillAction } from '../prd09/skillActions';
 import { randomUUID } from 'crypto';
 import { eq } from 'drizzle-orm';
 
-// In-memory store for Claude assessments, keyed by referralId.
+// In-memory store for routing assessments, keyed by referralId.
 // Cleared on process restart — acceptable for PoC.
-const assessmentCache = new Map<number, SufficiencyAssessment>();
+const assessmentCache = new Map<number, RoutingAssessment>();
 
-export function getCachedAssessment(referralId: number): SufficiencyAssessment | undefined {
+export function getCachedAssessment(referralId: number): RoutingAssessment | undefined {
   return assessmentCache.get(referralId);
 }
 
@@ -105,19 +105,31 @@ export async function ingestReferral(processed: ProcessedMessage): Promise<numbe
 
   console.log(`[ReferralService] Referral #${referral.id} created and acknowledged for patient ${extended.patient.firstName} ${extended.patient.lastName}`);
 
-  // Fire Gemini assessment in background — do not await
-  assessSufficiency(extended)
+  // Fire Gemini routing assessment in background — do not await
+  assessRouting(extended)
     .then(async (assessment) => {
       assessmentCache.set(referral.id, assessment);
       await db
         .update(referrals)
-        .set({ aiAssessment: JSON.stringify(assessment) })
+        .set({
+          aiAssessment: JSON.stringify(assessment),
+          routingDepartment: assessment.department,
+          routingEquipment: JSON.stringify(
+            assessment.requiredEquipment.filter((e) => e.supported).map((e) => e.resourceId),
+          ),
+        })
         .where(eq(referrals.id, referral.id));
-      console.log(`[ReferralService] Claude assessment complete for referral #${referral.id}: sufficient=${assessment.sufficient}`);
+      console.log(`[ReferralService] Routing assessment complete for referral #${referral.id}: department=${assessment.department}`);
     })
     .catch((err) => {
-      console.error(`[ReferralService] Claude assessment failed for referral #${referral.id}:`, err);
-      const fallback = { sufficient: true, summary: 'AI assessment unavailable.', concerns: [] };
+      console.error(`[ReferralService] Routing assessment failed for referral #${referral.id}:`, err);
+      const fallback: RoutingAssessment = {
+        department: 'Unassigned',
+        departmentConfidence: 0,
+        requiredEquipment: [],
+        summary: 'Routing suggestion unavailable.',
+        warnings: [],
+      };
       assessmentCache.set(referral.id, fallback);
     });
 

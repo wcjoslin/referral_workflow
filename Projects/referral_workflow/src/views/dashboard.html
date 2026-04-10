@@ -53,6 +53,11 @@
     .empty { text-align: center; padding: 48px 24px; color: var(--color-text-muted); }
     .empty a { color: #ffc107; font-weight: 600; text-decoration: none; }
     .empty a:hover { text-decoration: underline; }
+    .dept-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600; background: #e0e7ff; color: #3730a3; }
+    .dept-badge-unassigned { background: #f8d7da; color: #58151c; }
+    .filter-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .filter-bar label { font-size: 0.82rem; color: var(--color-text-muted); font-weight: 600; }
+    .filter-bar select { padding: 6px 10px; border: 1px solid var(--color-border); border-radius: 5px; font-size: 0.85rem; }
   </style>
 </head>
 <body>
@@ -61,10 +66,16 @@
 <div class="container">
   <h1>Referral Dashboard</h1>
   <div class="stats" id="stats"></div>
+  <div class="filter-bar" id="filterBar" style="display:none;">
+    <label for="deptFilter">Department:</label>
+    <select id="deptFilter" onchange="applyDeptFilter()">
+      <option value="">All Departments</option>
+    </select>
+  </div>
   <div id="tableWrapper"></div>
 </div>
 <script>
-  const { items } = window.__DASHBOARD_DATA__;
+  const { items, departments } = window.__DASHBOARD_DATA__;
 
   function stateBadge(state) {
     const map = {
@@ -88,12 +99,36 @@
     `<div class="stat-card"><div class="num">${s.fn()}</div><div class="label">${s.label}</div></div>`
   ).join('');
 
-  // Table
-  if (items.length === 0) {
-    document.getElementById('tableWrapper').innerHTML =
-      '<div class="empty"><p>No referrals yet.</p><p><a href="/demo">Launch a demo scenario →</a></p></div>';
-  } else {
-    const rows = items.map(({ referral: r, patient: p }) => {
+  // Department filter
+  if (departments && departments.length > 0) {
+    const filterBar = document.getElementById('filterBar');
+    filterBar.style.display = '';
+    const sel = document.getElementById('deptFilter');
+    // Add "Unassigned" option
+    const unOpt = document.createElement('option');
+    unOpt.value = 'Unassigned';
+    unOpt.textContent = 'Unassigned';
+    sel.appendChild(unOpt);
+    departments.forEach(function(d) {
+      const opt = document.createElement('option');
+      opt.value = d;
+      opt.textContent = d;
+      sel.appendChild(opt);
+    });
+  }
+
+  function deptBadge(dept) {
+    if (!dept || dept === 'Unassigned') return '<span class="dept-badge dept-badge-unassigned">Unassigned</span>';
+    return '<span class="dept-badge">' + dept + '</span>';
+  }
+
+  function renderTable(filteredItems) {
+    if (filteredItems.length === 0) {
+      document.getElementById('tableWrapper').innerHTML =
+        '<div class="empty"><p>No referrals match the filter.</p></div>';
+      return;
+    }
+    const rows = filteredItems.map(({ referral: r, patient: p }) => {
       const name = `${p.lastName}, ${p.firstName}`;
       const created = r.createdAt ? new Date(typeof r.createdAt === 'number' ? r.createdAt * 1000 : r.createdAt).toLocaleDateString() : '—';
       const priority = r.priorityFlag ? '<span class="priority-flag">⚑</span>' : '';
@@ -103,6 +138,7 @@
       return `<tr onclick="location.href='/referrals/${r.id}/review'">
         <td>#${r.id}</td>
         <td>${name} ${priority}</td>
+        <td>${deptBadge(r.routingDepartment)}</td>
         <td>${stateBadge(r.state)}${declineLine}</td>
         <td>${r.reasonForReferral ? r.reasonForReferral.substring(0, 60) + (r.reasonForReferral.length > 60 ? '…' : '') : '—'}</td>
         <td>${created}</td>
@@ -110,9 +146,26 @@
     }).join('');
     document.getElementById('tableWrapper').innerHTML = `
       <table>
-        <thead><tr><th>#</th><th>Patient</th><th>State</th><th>Reason</th><th>Created</th></tr></thead>
+        <thead><tr><th>#</th><th>Patient</th><th>Department</th><th>State</th><th>Reason</th><th>Created</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
+  }
+
+  function applyDeptFilter() {
+    const val = document.getElementById('deptFilter').value;
+    if (!val) {
+      renderTable(items);
+    } else {
+      renderTable(items.filter(function(i) { return (i.referral.routingDepartment || 'Unassigned') === val; }));
+    }
+  }
+
+  // Initial render
+  if (items.length === 0) {
+    document.getElementById('tableWrapper').innerHTML =
+      '<div class="empty"><p>No referrals yet.</p><p><a href="/demo">Launch a demo scenario →</a></p></div>';
+  } else {
+    renderTable(items);
   }
 </script>
 </body>
