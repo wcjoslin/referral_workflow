@@ -24,6 +24,7 @@ import {
 } from './skillLoader';
 import * as fs from 'fs';
 import * as path from 'path';
+import { emitEvent } from '../analytics/eventService';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -115,6 +116,22 @@ export async function evaluateSkills(
         explanation: result.explanation,
         executedAt: new Date(),
       });
+
+      // Analytics: skill evaluated
+      void emitEvent({
+        eventType: 'skill.evaluated',
+        entityType: 'referral',
+        entityId: referralId,
+        actor: `skill:${result.skillName}`,
+        metadata: {
+          triggerPoint,
+          matched: result.matched,
+          confidence: result.confidence,
+          actionType: result.actionType,
+          explanation: result.explanation,
+          isTestMode: result.isTestMode,
+        },
+      }).catch((err) => console.error('[EventService]', err));
     } catch (err) {
       console.error(`[SkillEvaluator] Error evaluating skill "${skill.name}":`, err);
       results.push({

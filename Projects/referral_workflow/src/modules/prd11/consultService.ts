@@ -15,6 +15,7 @@ import { db } from '../../db';
 import { referrals, patients, outboundMessages } from '../../db/schema';
 import { config } from '../../config';
 import { transition, ReferralState, InvalidStateTransitionError } from '../../state/referralStateMachine';
+import { emitEvent } from '../analytics/eventService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -46,6 +47,16 @@ export async function markConsult(referralId: number): Promise<void> {
       updatedAt: new Date(),
     })
     .where(eq(referrals.id, referralId));
+
+  // Analytics: consult requested
+  void emitEvent({
+    eventType: 'referral.consult_requested',
+    entityType: 'referral',
+    entityId: referralId,
+    fromState: currentState,
+    toState: ReferralState.CONSULT,
+    actor: 'system',
+  }).catch((err) => console.error('[EventService]', err));
 
   console.log(`[ConsultService] Referral #${referralId} entered Consult state`);
 
@@ -88,6 +99,14 @@ export async function markConsult(referralId: number): Promise<void> {
     sentAt: new Date(),
   });
 
+  void emitEvent({
+    eventType: 'message.sent',
+    entityType: 'referral',
+    entityId: referralId,
+    actor: 'system',
+    metadata: { messageControlId, messageType: 'ConsultRequest', recipientAddress: referral.referrerAddress },
+  }).catch((err) => console.error('[EventService]', err));
+
   console.log(
     `[ConsultService] Consult request sent for referral #${referralId} (control ID: ${messageControlId})`,
   );
@@ -120,6 +139,17 @@ export async function resolveConsult(referralId: number, clinicianId: string): P
       updatedAt: new Date(),
     })
     .where(eq(referrals.id, referralId));
+
+  // Analytics: consult resolved
+  void emitEvent({
+    eventType: 'referral.consult_resolved',
+    entityType: 'referral',
+    entityId: referralId,
+    fromState: ReferralState.CONSULT,
+    toState: ReferralState.CLOSED,
+    actor: `clinician:${clinicianId}`,
+    metadata: { clinicianId },
+  }).catch((err) => console.error('[EventService]', err));
 
   console.log(
     `[ConsultService] Referral #${referralId} consultation resolved by clinician ${clinicianId} — state → Closed`,

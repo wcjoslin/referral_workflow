@@ -11,6 +11,7 @@ import { db } from '../../db';
 import { referrals, outboundMessages } from '../../db/schema';
 import { transition, ReferralState } from '../../state/referralStateMachine';
 import { AckData } from './ackParser';
+import { emitEvent } from '../analytics/eventService';
 
 export interface AckResult {
   matched: boolean;
@@ -59,6 +60,15 @@ export async function processAck(ackData: AckData): Promise<AckResult> {
     })
     .where(eq(outboundMessages.id, message.id));
 
+  // Analytics: message acknowledged
+  void emitEvent({
+    eventType: 'message.acknowledged',
+    entityType: 'referral',
+    entityId: message.referralId,
+    actor: 'system',
+    metadata: { messageControlId: acknowledgedControlId, messageType: message.messageType, ackCode },
+  }).catch((err) => console.error('[EventService]', err));
+
   console.log(
     `[AckService] Message ${acknowledgedControlId} (${message.messageType}) acknowledged for referral #${message.referralId}`,
   );
@@ -83,6 +93,17 @@ export async function processAck(ackData: AckData): Promise<AckResult> {
         .where(eq(referrals.id, message.referralId));
 
       stateTransitioned = true;
+
+      void emitEvent({
+        eventType: 'referral.closed_confirmed',
+        entityType: 'referral',
+        entityId: message.referralId,
+        fromState: ReferralState.CLOSED,
+        toState: ReferralState.CLOSED_CONFIRMED,
+        actor: 'system',
+        metadata: { acknowledgedControlId },
+      }).catch((err) => console.error('[EventService]', err));
+
       console.log(
         `[AckService] Referral #${message.referralId} transitioned to Closed-Confirmed`,
       );

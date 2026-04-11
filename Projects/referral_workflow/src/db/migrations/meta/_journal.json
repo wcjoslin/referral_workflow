@@ -64,6 +64,13 @@
       "when": 1775789323697,
       "tag": "0008_pale_orphan",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1775874384308,
+      "tag": "0009_secret_starhawk",
+      "breakpoints": true
     }
   ]
 }

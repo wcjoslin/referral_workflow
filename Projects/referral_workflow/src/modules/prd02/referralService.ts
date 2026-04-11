@@ -23,6 +23,7 @@ import { evaluateSkills } from '../prd09/skillEvaluator';
 import { executeSkillAction } from '../prd09/skillActions';
 import { randomUUID } from 'crypto';
 import { eq } from 'drizzle-orm';
+import { emitEvent } from '../analytics/eventService';
 
 // In-memory store for routing assessments, keyed by referralId.
 // Cleared on process restart — acceptable for PoC.
@@ -103,6 +104,26 @@ export async function ingestReferral(processed: ProcessedMessage): Promise<numbe
     .set({ state: nextState, updatedAt: new Date() })
     .where(eq(referrals.id, referral.id));
 
+  // Analytics: referral received + acknowledged
+  void emitEvent({
+    eventType: 'referral.received',
+    entityType: 'referral',
+    entityId: referral.id,
+    toState: ReferralState.RECEIVED,
+    actor: 'system',
+    metadata: { sourceMessageId: extended.sourceMessageId, referrerAddress: processed.referrerAddress },
+  }).catch((err) => console.error('[EventService]', err));
+
+  void emitEvent({
+    eventType: 'referral.acknowledged',
+    entityType: 'referral',
+    entityId: referral.id,
+    fromState: ReferralState.RECEIVED,
+    toState: ReferralState.ACKNOWLEDGED,
+    actor: 'system',
+    metadata: { sourceMessageId: extended.sourceMessageId },
+  }).catch((err) => console.error('[EventService]', err));
+
   console.log(`[ReferralService] Referral #${referral.id} created and acknowledged for patient ${extended.patient.firstName} ${extended.patient.lastName}`);
 
   // Fire Gemini routing assessment in background — do not await
@@ -119,6 +140,14 @@ export async function ingestReferral(processed: ProcessedMessage): Promise<numbe
           ),
         })
         .where(eq(referrals.id, referral.id));
+      void emitEvent({
+        eventType: 'referral.routing_assessed',
+        entityType: 'referral',
+        entityId: referral.id,
+        actor: 'system',
+        metadata: { department: assessment.department, departmentConfidence: assessment.departmentConfidence, warnings: assessment.warnings },
+      }).catch((err) => console.error('[EventService]', err));
+
       console.log(`[ReferralService] Routing assessment complete for referral #${referral.id}: department=${assessment.department}`);
     })
     .catch((err) => {
@@ -166,6 +195,15 @@ async function autoDecline(sourceMessageId: string, referrerAddress: string, rea
 
   try {
     await sendRriMessage(rriMessage, referrerAddress, messageControlId, null, 'AR');
+
+    void emitEvent({
+      eventType: 'referral.auto_declined',
+      entityType: 'referral',
+      entityId: 0, // no DB record for auto-declined referrals
+      actor: 'system',
+      metadata: { sourceMessageId, reasons, referrerAddress },
+    }).catch((err) => console.error('[EventService]', err));
+
     console.log(`[ReferralService] Auto-decline RRI sent for ${sourceMessageId}`);
   } catch (err) {
     console.error(`[ReferralService] Failed to send auto-decline RRI for ${sourceMessageId}:`, err);
