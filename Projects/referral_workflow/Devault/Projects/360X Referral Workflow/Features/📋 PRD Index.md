@@ -2,7 +2,7 @@
 title: PRD Index - All Product Requirements
 tags: [prd, features, index]
 up: "[[🎯 PROJECT OVERVIEW]]"
-down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[PRD-12 - Prior Authorization]]", "[[PRD-13 - Department Classification]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]", "[[Feature - No-Show & Consult Demo Scenarios]]"]
+down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[PRD-12 - Prior Authorization]]", "[[PRD-13 - Department Classification]]", "[[PRD-14 - Analytics Agent (Phase 1)]]", "[[PRD-14 - Analytics Agent (Phase 2)]]", "[[PRD-15 - Analytics Agent AI]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]", "[[Feature - No-Show & Consult Demo Scenarios]]", "[[Feature - Full Demo Seed Expansion (100 Scenarios)]]"]
 ---
 
 # 📋 PRD Index
@@ -153,6 +153,49 @@ The logical order for PRD development:
 
 ---
 
+### 14. **[[PRD-14 - Analytics Agent (Phase 1)|PRD-14: Analytics Agent — Phase 1: Unified Event Log]]** ✅
+**Foundation for analytics & insights.** Establishes centralized event logging across all workflows for future dashboards and proactive recommendations.
+
+- Unified `workflow_events` table capturing all state transitions, messages, skill evaluations, and decisions
+- Event service module (fire-and-forget, non-blocking)
+- Rich metadata (denial reasons, payer info, confidence scores, actor tracking)
+- Dual indexes for efficient Phase 2 queries
+- **Prerequisite:** None (foundational infrastructure)
+
+**Status:** ✅ Complete (2026-04-10)  
+**Module:** `analytics/`
+
+---
+
+### 14b. **[[PRD-14 - Analytics Agent (Phase 2)|PRD-14 Phase 2: Analytics Agent — SQL Dashboard]]** 🔧
+**Operational insights dashboard.** SQL-based charts and KPIs querying the Phase 1 event log — no AI required.
+
+- KPI cards: acceptance rate, avg days to close, PA approval rate, no-show rate
+- Charts: daily intake trend, state distribution, PA outcomes doughnut, denial reasons
+- Tables: skill match rates, avg time per state
+- Synthetic seed script (`seed:analytics`) for 80-referral demo dataset
+- **Prerequisite:** PRD-14 Phase 1 (event log)
+
+**Status:** 🔧 In Progress (2026-04-11)  
+**Module:** `analytics/`, `views/`
+
+---
+
+### 15. **[[PRD-15 - Analytics Agent AI|PRD-15: Analytics Agent AI — Proactive Workflow Intelligence]]** 📋
+**UI-triggered AI agent** that identifies anomaly clusters in the event log, retrieves the full referral and prior auth documents for each cluster, and uses Claude to surface root causes and actionable recommendations.
+
+- Four anomaly types: denial cluster, PA denial pattern, no-show cluster, pending-info cluster
+- Full document context: clinical data JSON, PA service codes, payer denial reasons, review actions
+- Claude-powered pattern analysis (top 3 anomalies, `claude-sonnet-4-6`)
+- Four recommendation types: skill rule update, referrer education, scheduling protocol, payer documentation requirement
+- "Run Analysis" button in analytics filter bar; findings panel with per-anomaly cards
+- **Prerequisite:** PRD-14 Phase 2 (event log + dashboard), [[Feature - Full Demo Seed Expansion (100 Scenarios)]] (sufficient cluster density)
+
+**Status:** 📋 Ready for Dev (2026-04-12)  
+**Module:** `analytics/`
+
+---
+
 ## Quick Reference
 
 | PRD | Name | Status | Key Action | Module |
@@ -167,6 +210,9 @@ The logical order for PRD development:
 | [[PRD-11 - No-Show & Consult States|11]] | No-Show & Consult States | ✅ | No-show notify + consult confirmation | `prd11/` |
 | [[PRD-12 - Prior Authorization|12]] | Prior Authorization (PAS) | ✅ | FHIR PA submit, payer decisions | `prd12/` |
 | [[PRD-13 - Department Classification|13]] | Department Classification | 🔧 | Route to dept, surface equipment | `prd02/` |
+| [[PRD-14 - Analytics Agent (Phase 1)|14]] | Analytics Agent (Phase 1) | ✅ | Event log, indexes, emission | `analytics/` |
+| [[PRD-14 - Analytics Agent (Phase 2)|14b]] | Analytics Agent (Phase 2) | 🔧 | SQL dashboard, KPI charts, seed data | `analytics/` |
+| [[PRD-15 - Analytics Agent AI|15]] | Analytics Agent AI | 📋 | Anomaly detection, Claude pattern analysis, findings UI | `analytics/` |
 
 ---
 
@@ -196,6 +242,7 @@ PRD-07 (Ack Tracking) ← Horizontal feature, monitors all outbound messages
 | [[Feature - Human-Readable Message Type Labels]] | Friendly labels for message types in UI | ✅ Complete |
 | [[Feature - Demo Launcher Message Preview]] | C-CDA viewer + envelope preview on demo launcher | ✅ Complete |
 | [[Feature - No-Show & Consult Demo Scenarios]] | Demo scenarios for No-Show and Consult state paths | 🔧 Ready for Dev |
+| [[Feature - Full Demo Seed Expansion (100 Scenarios)]] | Expand seed-full-demo.ts to 100 scenarios with concentrated anomaly patterns | 📋 Ready for Dev |
 
 ---
 

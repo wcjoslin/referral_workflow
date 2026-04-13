@@ -10,6 +10,7 @@ import { db } from '../../db';
 import { referrals } from '../../db/schema';
 import { SkillEvalResult } from './skillEvaluator';
 import { accept, decline } from '../prd02/dispositionService';
+import { emitEvent } from '../analytics/eventService';
 
 // ── Main Dispatcher ──────────────────────────────────────────────────────────
 
@@ -31,6 +32,15 @@ export async function executeSkillAction(
   console.log(
     `[SkillActions] Executing "${result.actionType}" for skill "${result.skillName}" on referral #${referralId}`,
   );
+
+  // Analytics: skill action executed
+  void emitEvent({
+    eventType: 'skill.action_executed',
+    entityType: 'referral',
+    entityId: referralId,
+    actor: `skill:${result.skillName}`,
+    metadata: { actionType: result.actionType, skillName: result.skillName },
+  }).catch((err) => console.error('[EventService]', err));
 
   switch (result.actionType) {
     case 'auto-decline':

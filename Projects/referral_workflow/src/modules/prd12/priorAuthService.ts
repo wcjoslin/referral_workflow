@@ -15,6 +15,7 @@ import { config } from '../../config';
 import { parseClaimResponse } from './pasResponseParser';
 import * as pasClient from './pasClient';
 import { registerPendedSubscription } from './subscriptionService';
+import { emitEvent } from '../analytics/eventService';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -102,6 +103,17 @@ export async function submitPriorAuth(formData: SubmitFormData): Promise<SubmitR
     .set({ state: submittedState, submittedAt: now, updatedAt: now })
     .where(eq(priorAuthRequests.id, inserted.id));
 
+  // Analytics: prior auth submitted
+  void emitEvent({
+    eventType: 'prior_auth.submitted',
+    entityType: 'priorAuth',
+    entityId: inserted.id,
+    fromState: PriorAuthState.DRAFT,
+    toState: PriorAuthState.SUBMITTED,
+    actor: 'system',
+    metadata: { insurerName: formData.insurerName, serviceCode: formData.serviceCode, providerNpi: formData.providerNpi },
+  }).catch((err) => console.error('[EventService]', err));
+
   // Call $submit
   const responseBody = await pasClient.submit(bundle);
 
@@ -112,6 +124,17 @@ export async function submitPriorAuth(formData: SubmitFormData): Promise<SubmitR
       .update(priorAuthRequests)
       .set({ state: errorState, updatedAt: new Date() })
       .where(eq(priorAuthRequests.id, inserted.id));
+
+    void emitEvent({
+      eventType: 'prior_auth.error',
+      entityType: 'priorAuth',
+      entityId: inserted.id,
+      fromState: PriorAuthState.SUBMITTED,
+      toState: PriorAuthState.ERROR,
+      actor: 'system',
+      metadata: { errorMessage: 'Failed to connect to payer' },
+    }).catch((err) => console.error('[EventService]', err));
+
     return {
       id: inserted.id,
       state: PriorAuthState.ERROR,
@@ -138,6 +161,16 @@ export async function submitPriorAuth(formData: SubmitFormData): Promise<SubmitR
       receivedVia: 'sync',
       receivedAt: new Date(),
     });
+
+    void emitEvent({
+      eventType: 'prior_auth.error',
+      entityType: 'priorAuth',
+      entityId: inserted.id,
+      fromState: PriorAuthState.SUBMITTED,
+      toState: PriorAuthState.ERROR,
+      actor: 'system',
+      metadata: { errorMessage: parsed.message },
+    }).catch((err) => console.error('[EventService]', err));
 
     return {
       id: inserted.id,
@@ -175,6 +208,25 @@ export async function submitPriorAuth(formData: SubmitFormData): Promise<SubmitR
     .update(priorAuthRequests)
     .set({ state: nextState, updatedAt: new Date() })
     .where(eq(priorAuthRequests.id, inserted.id));
+
+  // Analytics: prior auth outcome
+  const paEventType =
+    result.outcome === 'approved' ? 'prior_auth.approved'
+    : result.outcome === 'denied' ? 'prior_auth.denied'
+    : 'prior_auth.pended';
+  void emitEvent({
+    eventType: paEventType,
+    entityType: 'priorAuth',
+    entityId: inserted.id,
+    fromState: PriorAuthState.SUBMITTED,
+    toState: nextState,
+    actor: `payer:${formData.insurerName}`,
+    metadata: {
+      receivedVia: 'sync',
+      ...(result.authNumber ? { authNumber: result.authNumber } : {}),
+      ...(result.denialReason ? { denialReason: result.denialReason } : {}),
+    },
+  }).catch((err) => console.error('[EventService]', err));
 
   // If pended, register subscription for async notification
   if (nextState === PriorAuthState.PENDED) {
@@ -309,6 +361,21 @@ export async function handlePayerNotification(
     .set({ state: nextState, updatedAt: new Date() })
     .where(eq(priorAuthRequests.id, requestId));
 
+  // Analytics: payer notification outcome
+  void emitEvent({
+    eventType: result.outcome === 'approved' ? 'prior_auth.approved' : 'prior_auth.denied',
+    entityType: 'priorAuth',
+    entityId: requestId,
+    fromState: PriorAuthState.PENDED,
+    toState: nextState,
+    actor: `payer:${request.insurerName}`,
+    metadata: {
+      receivedVia: 'subscription',
+      ...(result.authNumber ? { authNumber: result.authNumber } : {}),
+      ...(result.denialReason ? { denialReason: result.denialReason } : {}),
+    },
+  }).catch((err) => console.error('[EventService]', err));
+
   console.log(`[PriorAuth] Subscription notification: request ${requestId} → ${nextState}`);
   return { requestId, outcome: result.outcome };
 }
@@ -374,6 +441,21 @@ export async function inquirePriorAuth(requestId: number): Promise<PriorAuthStat
     .update(priorAuthRequests)
     .set({ state: nextState, updatedAt: new Date() })
     .where(eq(priorAuthRequests.id, requestId));
+
+  // Analytics: inquire outcome
+  void emitEvent({
+    eventType: result.outcome === 'approved' ? 'prior_auth.approved' : 'prior_auth.denied',
+    entityType: 'priorAuth',
+    entityId: requestId,
+    fromState: PriorAuthState.PENDED,
+    toState: nextState,
+    actor: `payer:${request.insurerName}`,
+    metadata: {
+      receivedVia: 'inquire',
+      ...(result.authNumber ? { authNumber: result.authNumber } : {}),
+      ...(result.denialReason ? { denialReason: result.denialReason } : {}),
+    },
+  }).catch((err) => console.error('[EventService]', err));
 
   return {
     state: nextState,
@@ -514,6 +596,16 @@ export async function expirePendedRequests(): Promise<number> {
         receivedVia: 'timeout',
         receivedAt: new Date(),
       });
+
+      void emitEvent({
+        eventType: 'prior_auth.expired',
+        entityType: 'priorAuth',
+        entityId: request.id,
+        fromState: PriorAuthState.PENDED,
+        toState: PriorAuthState.EXPIRED,
+        actor: 'system',
+        metadata: { timeoutMs: config.priorAuth.pendTimeoutMs },
+      }).catch((err) => console.error('[EventService]', err));
 
       console.log(
         `[PriorAuth] Request ${request.id} expired after pend timeout (${config.priorAuth.pendTimeoutMs}ms)`,

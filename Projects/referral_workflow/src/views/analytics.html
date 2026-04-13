@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>360X Analytics Dashboard</title>
+  <script>/*__ANALYTICS_DATA__*/</script>
+  <style>
+    :root {
+      --color-nav-bg: #0d2d3a;
+      --color-brand: #009aab;
+      --color-brand-hover: #007d8a;
+      --color-bg-page: #f0f2f5;
+      --color-text: #212529;
+      --color-text-muted: #6c757d;
+      --color-border: #dee2e6;
+      --color-card: #fff;
+      --color-table-header: #f0f2f4;
+    }
+  </style>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--color-bg-page); color: var(--color-text); }
+    .container { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
+    h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 4px; }
+    .page-subtitle { font-size: 0.88rem; color: var(--color-text-muted); margin: 0 0 20px; }
+
+    /* ── Filter bar ── */
+    .filter-panel { background: var(--color-card); border-radius: 10px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 18px; }
+    .filter-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .filter-row + .filter-row { margin-top: 10px; }
+    .filter-group { display: flex; flex-direction: column; gap: 3px; }
+    .filter-label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); }
+    .filter-select { font-size: 0.83rem; padding: 5px 28px 5px 10px; border: 1px solid var(--color-border); border-radius: 6px; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236c757d'/%3E%3C/svg%3E") no-repeat right 10px center; appearance: none; cursor: pointer; min-width: 130px; color: var(--color-text); }
+    .filter-select:focus { outline: none; border-color: var(--color-brand); }
+    .day-btns { display: flex; gap: 4px; }
+    .day-btn { font-size: 0.8rem; padding: 5px 12px; border: 1px solid var(--color-border); border-radius: 6px; background: #fff; cursor: pointer; color: var(--color-text-muted); transition: all 0.15s; }
+    .day-btn:hover { border-color: var(--color-brand); color: var(--color-brand); }
+    .day-btn.active { background: var(--color-brand); border-color: var(--color-brand); color: #fff; font-weight: 600; }
+    .reset-btn { font-size: 0.8rem; padding: 5px 14px; border: 1px solid #dc3545; border-radius: 6px; background: #fff; color: #dc3545; cursor: pointer; margin-left: auto; transition: all 0.15s; }
+    .reset-btn:hover { background: #dc3545; color: #fff; }
+
+    /* Active filter tags */
+    .active-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 0; }
+    .active-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 0.75rem; background: #e0e7ff; color: #3730a3; border-radius: 20px; padding: 3px 10px; font-weight: 600; }
+    .active-tag .rm { cursor: pointer; font-size: 0.85rem; line-height: 1; opacity: 0.6; }
+    .active-tag .rm:hover { opacity: 1; }
+    .filter-loading { font-size: 0.8rem; color: var(--color-text-muted); margin-left: 8px; display: none; }
+    .filter-loading.visible { display: inline; }
+
+    /* KPI cards */
+    .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 28px; }
+    .kpi-card { background: var(--color-card); border-radius: 10px; padding: 18px 22px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border-top: 3px solid var(--color-brand); transition: opacity 0.2s; }
+    .kpi-card .kpi-value { font-size: 2rem; font-weight: 700; line-height: 1; color: var(--color-text); }
+    .kpi-card .kpi-label { font-size: 0.75rem; color: var(--color-text-muted); margin-top: 6px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+    .kpi-card .kpi-unit { font-size: 1rem; font-weight: 400; color: var(--color-text-muted); }
+
+    /* Chart grid */
+    .chart-row { display: grid; gap: 18px; margin-bottom: 18px; }
+    .chart-row-2 { grid-template-columns: 1fr 1fr; }
+    .chart-card { background: var(--color-card); border-radius: 10px; padding: 22px 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .chart-card h2 { font-size: 0.95rem; font-weight: 700; margin: 0 0 16px; color: var(--color-text); }
+    .chart-canvas-wrap { position: relative; height: 240px; }
+
+    /* Tables */
+    .data-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    .data-table thead th { text-align: left; padding: 10px 14px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); background: var(--color-table-header); border-bottom: 1px solid var(--color-border); }
+    .data-table tbody td { padding: 10px 14px; border-bottom: 1px solid var(--color-bg-page); }
+    .data-table tbody tr:last-child td { border-bottom: none; }
+    .data-table tbody tr:hover td { background: var(--color-bg-page); }
+    .match-bar-wrap { display: flex; align-items: center; gap: 8px; }
+    .match-bar-bg { flex: 1; height: 6px; background: #e9ecef; border-radius: 3px; overflow: hidden; min-width: 60px; }
+    .match-bar-fill { height: 100%; background: var(--color-brand); border-radius: 3px; }
+    .match-pct { font-size: 0.82rem; font-weight: 600; min-width: 38px; text-align: right; }
+
+    /* Empty state */
+    .empty-state { text-align: center; padding: 80px 24px; color: var(--color-text-muted); }
+    .empty-state h2 { font-size: 1.2rem; margin-bottom: 12px; color: var(--color-text); }
+    .empty-state p { margin: 0 0 12px; font-size: 0.92rem; }
+    .empty-state code { background: var(--color-table-header); padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; }
+
+    /* ── Agent button ── */
+    .agent-btn { font-size: 0.8rem; padding: 5px 14px; border: 1px solid var(--color-brand); border-radius: 6px; background: var(--color-brand); color: #fff; cursor: pointer; margin-left: 8px; transition: all 0.15s; font-weight: 600; }
+    .agent-btn:hover:not(:disabled) { background: var(--color-brand-hover); border-color: var(--color-brand-hover); }
+    .agent-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* ── Agent panel ── */
+    .agent-panel { background: #fffbea; border: 1px solid #f6d860; border-radius: 10px; padding: 16px 20px; margin-bottom: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .agent-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .agent-panel-title { font-size: 1rem; font-weight: 700; color: #5c4005; }
+    .agent-panel-meta { font-size: 0.8rem; color: var(--color-text-muted); }
+
+    /* ── Finding cards ── */
+    .finding-card { background: #fff; border-radius: 8px; padding: 16px 18px; margin-bottom: 10px; border-left: 4px solid var(--color-brand); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+    .finding-card:last-child { margin-bottom: 0; }
+    .finding-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .finding-label { font-size: 0.92rem; font-weight: 700; color: var(--color-text); flex: 1; }
+    .confidence-pill { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+    .confidence-high { background: #d3f9d8; color: #2b8a3e; }
+    .confidence-medium { background: #fff3bf; color: #e67700; }
+    .confidence-low { background: #f1f3f5; color: #868e96; }
+    .finding-patterns { margin: 0 0 10px; padding: 0 0 0 18px; font-size: 0.85rem; color: var(--color-text); line-height: 1.5; }
+    .finding-patterns li { margin-bottom: 2px; }
+    .finding-root-cause { font-size: 0.85rem; background: #f8f9fa; border-radius: 5px; padding: 8px 12px; margin-bottom: 10px; color: var(--color-text); }
+    .finding-root-cause strong { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: #6c757d; display: block; margin-bottom: 3px; }
+    .finding-action { border-radius: 5px; padding: 8px 12px; font-size: 0.85rem; }
+    .finding-action-type { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 3px; }
+    .rec-skill_rule_update { background: #f3f0ff; color: #5c3bc7; }
+    .rec-skill_rule_update .finding-action-type { color: #6741d9; }
+    .rec-referrer_education { background: #fff0f6; color: #a61e4d; }
+    .rec-referrer_education .finding-action-type { color: #c2255c; }
+    .rec-scheduling_protocol { background: #e6fcf5; color: #0b7a4e; }
+    .rec-scheduling_protocol .finding-action-type { color: #0ca678; }
+    .rec-payer_documentation_requirement { background: #e7f5ff; color: #1864ab; }
+    .rec-payer_documentation_requirement .finding-action-type { color: #1971c2; }
+    .agent-no-findings { text-align: center; padding: 20px; color: var(--color-text-muted); font-size: 0.88rem; }
+
+    @media (max-width: 700px) {
+      .chart-row-2 { grid-template-columns: 1fr; }
+      .kpi-row { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+<!--__NAV__-->
+
+<div class="container">
+  <h1>Analytics Dashboard</h1>
+  <p class="page-subtitle">Operational insights from the workflow event log. Data refreshes on each page load.</p>
+
+  <div id="main-content"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  var data = window.__ANALYTICS_DATA__;
+  var container = document.getElementById('main-content');
+
+  // ── Empty state gate ──────────────────────────────────────────────────────
+  if (data.eventCount < 10) {
+    container.innerHTML = '<div class="empty-state"><h2>Not enough data yet</h2>' +
+      '<p>The analytics dashboard needs at least 10 workflow events to render charts.</p>' +
+      '<p>Run referral workflows through the <a href="/demo">Demo Launcher</a> or populate the database with synthetic data:</p>' +
+      '<p><code>npm run seed:analytics</code></p></div>';
+    return;
+  }
+
+  // ── Active filter state ───────────────────────────────────────────────────
+  var activeFilters = { department: '', clinicianId: '', state: '', payer: '', skillName: '', denialReason: '', days: 90 };
+  var opts = data.filterOptions;
+
+  // ── Render filter panel ───────────────────────────────────────────────────
+  function buildSelect(id, label, values, filterKey) {
+    if (!values || values.length === 0) return '';
+    var options = '<option value="">All</option>' +
+      values.map(function(v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join('');
+    return '<div class="filter-group">' +
+      '<span class="filter-label">' + label + '</span>' +
+      '<select class="filter-select" id="filter-' + id + '" data-key="' + filterKey + '">' + options + '</select>' +
+      '</div>';
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  var filterPanelHtml = '<div class="filter-panel">' +
+    '<div class="filter-row">' +
+      buildSelect('dept', 'Department', opts.departments, 'department') +
+      buildSelect('clinician', 'Clinician', opts.clinicians, 'clinicianId') +
+      buildSelect('state', 'State', opts.states, 'state') +
+      buildSelect('payer', 'Payer', opts.payers, 'payer') +
+      buildSelect('skill', 'Skill', opts.skills, 'skillName') +
+      buildSelect('denial', 'Denial Reason', opts.denialReasons, 'denialReason') +
+    '</div>' +
+    '<div class="filter-row">' +
+      '<div class="filter-group"><span class="filter-label">Date Range</span>' +
+        '<div class="day-btns">' +
+          '<button class="day-btn" data-days="30">30d</button>' +
+          '<button class="day-btn" data-days="60">60d</button>' +
+          '<button class="day-btn active" data-days="90">90d</button>' +
+          '<button class="day-btn" data-days="0">All time</button>' +
+        '</div>' +
+      '</div>' +
+      '<span class="filter-loading" id="filter-loading">Updating...</span>' +
+      '<button class="reset-btn" id="reset-btn">Reset All</button>' +
+      '<button class="agent-btn" id="agent-btn">Run Analysis</button>' +
+    '</div>' +
+    '<div class="active-tags" id="active-tags"></div>' +
+    '</div>';
+
+  container.innerHTML = filterPanelHtml;
+
+  // ── Agent panel (hidden until first run) ─────────────────────────────────
+  container.innerHTML +=
+    '<div class="agent-panel" id="agent-panel" style="display:none">' +
+      '<div class="agent-panel-header">' +
+        '<span class="agent-panel-title">Agent Insights</span>' +
+        '<span class="agent-panel-meta" id="agent-meta"></span>' +
+      '</div>' +
+      '<div id="agent-findings"></div>' +
+    '</div>';
+
+  // ── KPI Cards ─────────────────────────────────────────────────────────────
+  container.innerHTML += '<div class="kpi-row" id="kpi-row"></div>';
+
+  // ── Chart rows ────────────────────────────────────────────────────────────
+  container.innerHTML += '<div class="chart-row chart-row-2">' +
+    '<div class="chart-card"><h2>Daily Referral Intake</h2><div class="chart-canvas-wrap"><canvas id="chartIntake"></canvas></div></div>' +
+    '<div class="chart-card"><h2>Referral State Distribution</h2><div class="chart-canvas-wrap"><canvas id="chartStates"></canvas></div></div>' +
+    '</div>';
+
+  container.innerHTML += '<div class="chart-row chart-row-2">' +
+    '<div class="chart-card"><h2>Prior Auth Outcomes</h2><div class="chart-canvas-wrap"><canvas id="chartPa"></canvas></div></div>' +
+    '<div class="chart-card"><h2>Top Denial Reasons</h2><div class="chart-canvas-wrap"><canvas id="chartDenials"></canvas></div></div>' +
+    '</div>';
+
+  container.innerHTML += '<div class="chart-row chart-row-2">' +
+    '<div class="chart-card"><h2>Skill Match Rates</h2><div id="skillTable"></div></div>' +
+    '<div class="chart-card"><h2>Avg Time Per State Transition</h2><div id="timingTable"></div></div>' +
+    '</div>';
+
+  // ── Chart instances (module-level so we can update them) ──────────────────
+  var intakeChart = null;
+  var statesChart = null;
+  var paChart = null;
+  var denialsChart = null;
+
+  var STATE_COLORS = {
+    'Received': '#adb5bd', 'Acknowledged': '#74c0fc', 'Accepted': '#63e6be',
+    'Declined': '#ff8787', 'Scheduled': '#74c0fc', 'Encounter': '#b197fc',
+    'Closed': '#69db7c', 'Closed-Confirmed': '#2f9e44',
+    'Pending-Information': '#ffd43b', 'No-Show': '#ff922b',
+  };
+  var PA_COLORS = { approved: '#63e6be', denied: '#ff8787', pended: '#ffd43b', expired: '#adb5bd' };
+
+  // ── Render / update KPI cards ─────────────────────────────────────────────
+  function renderKpis(kpis) {
+    document.getElementById('kpi-row').innerHTML =
+      kpiCard(kpis.totalReferrals, '', 'Total Referrals') +
+      kpiCard(kpis.acceptanceRate, '%', 'Acceptance Rate') +
+      kpiCard(kpis.avgDaysToClose, ' days', 'Avg Days to Close') +
+      kpiCard(kpis.paApprovalRate, '%', 'PA Approval Rate') +
+      kpiCard(kpis.noShowRate, '%', 'No-Show Rate');
+  }
+
+  function kpiCard(value, unit, label) {
+    return '<div class="kpi-card"><div class="kpi-value">' + value +
+      (unit ? '<span class="kpi-unit">' + unit + '</span>' : '') +
+      '</div><div class="kpi-label">' + label + '</div></div>';
+  }
+
+  // ── Chart initialisation (run once) ──────────────────────────────────────
+  function initCharts(d) {
+    intakeChart = new Chart(document.getElementById('chartIntake'), {
+      type: 'line',
+      data: intakeChartData(d.dailyIntake),
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 7, font: { size: 11 } } },
+          y: { beginAtZero: true, ticks: { precision: 0, font: { size: 11 } } }
+        }
+      }
+    });
+
+    statesChart = new Chart(document.getElementById('chartStates'), {
+      type: 'bar',
+      data: statesChartData(d.stateCounts),
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { precision: 0, font: { size: 11 } } },
+          x: { ticks: { font: { size: 11 } } }
+        }
+      }
+    });
+
+    paChart = new Chart(document.getElementById('chartPa'), {
+      type: 'doughnut',
+      data: paChartData(d.paOutcomes),
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { font: { size: 12 }, boxWidth: 14 } } }
+      }
+    });
+
+    denialsChart = new Chart(document.getElementById('chartDenials'), {
+      type: 'bar',
+      data: denialsChartData(d.denialReasons),
+      options: {
+        indexAxis: 'y',
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { beginAtZero: true, ticks: { precision: 0, font: { size: 11 } } },
+          y: { ticks: { font: { size: 11 } } }
+        }
+      }
+    });
+  }
+
+  // ── Chart data builders ───────────────────────────────────────────────────
+  function intakeChartData(intake) {
+    return {
+      labels: (intake || []).map(function(d) { return d.date; }),
+      datasets: [{ label: 'Referrals Received', data: (intake || []).map(function(d) { return d.count; }),
+        fill: true, borderColor: '#009aab', backgroundColor: 'rgba(0,154,171,0.1)', tension: 0.3, pointRadius: 3 }]
+    };
+  }
+
+  function statesChartData(states) {
+    return {
+      labels: (states || []).map(function(s) { return s.state; }),
+      datasets: [{ data: (states || []).map(function(s) { return s.count; }),
+        backgroundColor: (states || []).map(function(s) { return STATE_COLORS[s.state] || '#adb5bd'; }),
+        borderRadius: 4 }]
+    };
+  }
+
+  function paChartData(outcomes) {
+    return {
+      labels: (outcomes || []).map(function(o) { return o.outcome.charAt(0).toUpperCase() + o.outcome.slice(1); }),
+      datasets: [{ data: (outcomes || []).map(function(o) { return o.count; }),
+        backgroundColor: (outcomes || []).map(function(o) { return PA_COLORS[o.outcome] || '#adb5bd'; }) }]
+    };
+  }
+
+  function denialsChartData(reasons) {
+    return {
+      labels: (reasons || []).map(function(r) { return r.reason; }),
+      datasets: [{ data: (reasons || []).map(function(r) { return r.count; }), backgroundColor: '#ff8787', borderRadius: 4 }]
+    };
+  }
+
+  // ── Chart / table update ──────────────────────────────────────────────────
+  function updateAllCharts(d) {
+    renderKpis(d.kpis);
+
+    var id = intakeChartData(d.dailyIntake);
+    intakeChart.data.labels = id.labels;
+    intakeChart.data.datasets[0].data = id.datasets[0].data;
+    intakeChart.update();
+
+    var sd = statesChartData(d.stateCounts);
+    statesChart.data.labels = sd.labels;
+    statesChart.data.datasets[0].data = sd.datasets[0].data;
+    statesChart.data.datasets[0].backgroundColor = sd.datasets[0].backgroundColor;
+    statesChart.update();
+
+    var pd = paChartData(d.paOutcomes);
+    paChart.data.labels = pd.labels;
+    paChart.data.datasets[0].data = pd.datasets[0].data;
+    paChart.data.datasets[0].backgroundColor = pd.datasets[0].backgroundColor;
+    paChart.update();
+
+    var dd = denialsChartData(d.denialReasons);
+    denialsChart.data.labels = dd.labels;
+    denialsChart.data.datasets[0].data = dd.datasets[0].data;
+    denialsChart.update();
+
+    renderSkillTable(d.skillRates);
+    renderTimingTable(d.stateTimings);
+  }
+
+  // ── Skill table ───────────────────────────────────────────────────────────
+  function renderSkillTable(skills) {
+    var el = document.getElementById('skillTable');
+    if (!skills || skills.length === 0) {
+      el.innerHTML = '<p style="color:var(--color-text-muted);font-size:0.88rem;text-align:center;padding:40px 0">No skill evaluation data.</p>';
+      return;
+    }
+    var rows = skills.map(function(s) {
+      return '<tr><td>' + esc(s.skill) + '</td>' +
+        '<td style="text-align:right">' + s.evaluations + '</td>' +
+        '<td><div class="match-bar-wrap"><div class="match-bar-bg"><div class="match-bar-fill" style="width:' + s.matchRate + '%"></div></div>' +
+        '<span class="match-pct">' + s.matchRate + '%</span></div></td>' +
+        '<td style="text-align:right">' + (s.avgConfidence * 100).toFixed(0) + '%</td></tr>';
+    }).join('');
+    el.innerHTML = '<table class="data-table"><thead><tr>' +
+      '<th>Skill</th><th style="text-align:right">Evals</th><th>Match Rate</th><th style="text-align:right">Avg Conf</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  // ── Timing table ──────────────────────────────────────────────────────────
+  function renderTimingTable(timings) {
+    var el = document.getElementById('timingTable');
+    if (!timings || timings.length === 0) {
+      el.innerHTML = '<p style="color:var(--color-text-muted);font-size:0.88rem;text-align:center;padding:40px 0">Not enough transition data.</p>';
+      return;
+    }
+    var fmt = function(h) {
+      if (h < 1) return (h * 60).toFixed(0) + ' min';
+      if (h < 24) return h.toFixed(1) + ' hr';
+      return (h / 24).toFixed(1) + ' days';
+    };
+    var rows = timings.map(function(t) {
+      return '<tr><td>' + esc(t.fromState) + '</td><td style="color:var(--color-text-muted)">→</td>' +
+        '<td>' + esc(t.toState) + '</td><td style="text-align:right;font-weight:600">' + fmt(t.avgHours) + '</td></tr>';
+    }).join('');
+    el.innerHTML = '<table class="data-table"><thead><tr>' +
+      '<th>From</th><th></th><th>To</th><th style="text-align:right">Avg Time</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  // ── Active filter tags ────────────────────────────────────────────────────
+  var FILTER_LABELS = {
+    department: 'Dept', clinicianId: 'Clinician', state: 'State',
+    payer: 'Payer', skillName: 'Skill', denialReason: 'Denial Reason'
+  };
+
+  function renderActiveTags() {
+    var tags = document.getElementById('active-tags');
+    var html = '';
+    var keys = Object.keys(FILTER_LABELS);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (activeFilters[k]) {
+        html += '<span class="active-tag">' + FILTER_LABELS[k] + ': ' + esc(activeFilters[k]) +
+          ' <span class="rm" data-key="' + k + '">×</span></span>';
+      }
+    }
+    if (activeFilters.days !== 90) {
+      var dayLabel = activeFilters.days === 0 ? 'All time' : 'Last ' + activeFilters.days + 'd';
+      html += '<span class="active-tag">' + dayLabel + ' <span class="rm" data-key="days">×</span></span>';
+    }
+    tags.innerHTML = html;
+
+    tags.querySelectorAll('.rm').forEach(function(el) {
+      el.addEventListener('click', function() {
+        var key = el.getAttribute('data-key');
+        if (key === 'days') {
+          activeFilters.days = 90;
+          setDayBtn(90);
+        } else {
+          activeFilters[key] = '';
+          var sel = document.querySelector('[data-key="' + key + '"]');
+          if (sel) sel.value = '';
+        }
+        fetchAndUpdate();
+      });
+    });
+  }
+
+  // ── Fetch & update ────────────────────────────────────────────────────────
+  function fetchAndUpdate() {
+    var loading = document.getElementById('filter-loading');
+    loading.classList.add('visible');
+    renderActiveTags();
+
+    var params = new URLSearchParams();
+    if (activeFilters.department) params.set('department', activeFilters.department);
+    if (activeFilters.clinicianId) params.set('clinicianId', activeFilters.clinicianId);
+    if (activeFilters.state) params.set('state', activeFilters.state);
+    if (activeFilters.payer) params.set('payer', activeFilters.payer);
+    if (activeFilters.skillName) params.set('skillName', activeFilters.skillName);
+    if (activeFilters.denialReason) params.set('denialReason', activeFilters.denialReason);
+    params.set('days', String(activeFilters.days));
+
+    fetch('/analytics/data?' + params.toString())
+      .then(function(r) { return r.json(); })
+      .then(function(newData) {
+        loading.classList.remove('visible');
+        updateAllCharts(newData);
+      })
+      .catch(function(err) {
+        loading.classList.remove('visible');
+        console.error('Analytics fetch error:', err);
+      });
+  }
+
+  // ── Day button helper ─────────────────────────────────────────────────────
+  function setDayBtn(days) {
+    document.querySelectorAll('.day-btn').forEach(function(btn) {
+      btn.classList.toggle('active', parseInt(btn.getAttribute('data-days'), 10) === days);
+    });
+  }
+
+  // ── Wire up filter events ─────────────────────────────────────────────────
+  document.querySelectorAll('.filter-select').forEach(function(sel) {
+    sel.addEventListener('change', function() {
+      activeFilters[sel.getAttribute('data-key')] = sel.value;
+      fetchAndUpdate();
+    });
+  });
+
+  document.querySelectorAll('.day-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      activeFilters.days = parseInt(btn.getAttribute('data-days'), 10);
+      setDayBtn(activeFilters.days);
+      fetchAndUpdate();
+    });
+  });
+
+  document.getElementById('reset-btn').addEventListener('click', function() {
+    activeFilters = { department: '', clinicianId: '', state: '', payer: '', skillName: '', denialReason: '', days: 90 };
+    document.querySelectorAll('.filter-select').forEach(function(s) { s.value = ''; });
+    setDayBtn(90);
+    fetchAndUpdate();
+  });
+
+  document.getElementById('agent-btn').addEventListener('click', runAgent);
+
+  // ── Analytics Agent ───────────────────────────────────────────────────────
+  var REC_TYPE_LABELS = {
+    'skill_rule_update': 'Update Skill Rule',
+    'referrer_education': 'Referrer Education',
+    'scheduling_protocol': 'Scheduling Protocol',
+    'payer_documentation_requirement': 'Payer Documentation Requirement',
+  };
+
+  function runAgent() {
+    var btn = document.getElementById('agent-btn');
+    btn.disabled = true;
+    btn.textContent = 'Analyzing...';
+
+    var body = { days: activeFilters.days };
+    if (activeFilters.department) body.department = activeFilters.department;
+    if (activeFilters.clinicianId) body.clinicianId = activeFilters.clinicianId;
+
+    fetch('/analytics/agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (result) {
+        btn.disabled = false;
+        btn.textContent = 'Run Analysis';
+        renderFindings(result);
+      })
+      .catch(function (err) {
+        btn.disabled = false;
+        btn.textContent = 'Run Analysis';
+        console.error('Agent error:', err);
+        document.getElementById('agent-panel').style.display = 'block';
+        document.getElementById('agent-meta').textContent = '';
+        document.getElementById('agent-findings').innerHTML =
+          '<div class="agent-no-findings">Agent request failed — check server logs.</div>';
+      });
+  }
+
+  function renderFindings(result) {
+    var panel = document.getElementById('agent-panel');
+    var meta = document.getElementById('agent-meta');
+    var findingsEl = document.getElementById('agent-findings');
+
+    panel.style.display = 'block';
+    meta.textContent =
+      result.filterContext +
+      ' · ' +
+      result.anomaliesFound +
+      ' anomal' +
+      (result.anomaliesFound === 1 ? 'y' : 'ies') +
+      ' found';
+
+    if (!result.findings || result.findings.length === 0) {
+      findingsEl.innerHTML =
+        '<div class="agent-no-findings">No patterns detected above threshold. ' +
+        'Try expanding the date range or check back when more data accumulates.</div>';
+      return;
+    }
+
+    findingsEl.innerHTML = result.findings
+      .map(function (f) {
+        var confClass = 'confidence-' + f.confidence;
+        var recClass = 'rec-' + f.recommendationType;
+        var recLabel = REC_TYPE_LABELS[f.recommendationType] || f.recommendationType;
+        var patterns = (f.patterns || [])
+          .map(function (p) { return '<li>' + esc(p) + '</li>'; })
+          .join('');
+
+        return (
+          '<div class="finding-card">' +
+            '<div class="finding-header">' +
+              '<span class="finding-label">' + esc(f.anomaly.label) + '</span>' +
+              '<span class="confidence-pill ' + confClass + '">' + esc(f.confidence) + ' confidence</span>' +
+            '</div>' +
+            (patterns ? '<ul class="finding-patterns">' + patterns + '</ul>' : '') +
+            '<div class="finding-root-cause"><strong>Root Cause</strong>' + esc(f.rootCause) + '</div>' +
+            '<div class="finding-action ' + recClass + '">' +
+              '<div class="finding-action-type">' + esc(recLabel) + '</div>' +
+              esc(f.recommendation) +
+            '</div>' +
+          '</div>'
+        );
+      })
+      .join('');
+  }
+
+  // ── Initial render ────────────────────────────────────────────────────────
+  renderKpis(data.kpis);
+  initCharts(data);
+  renderSkillTable(data.skillRates);
+  renderTimingTable(data.stateTimings);
+  renderActiveTags();
+
+}());
+</script>
+</body>
+</html>

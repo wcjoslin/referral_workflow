@@ -20,6 +20,7 @@ import { checkConflicts, Resource } from './resourceCalendar';
 import { buildSiu, isoToHl7 } from './siuBuilder';
 import { onReferralScheduled } from '../prd05/mockEncounter';
 import { autoAck } from '../prd06/mockReferrer';
+import { emitEvent } from '../analytics/eventService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -140,6 +141,30 @@ export async function scheduleReferral(
     status: 'Pending',
     sentAt: new Date(),
   });
+
+  // Analytics: scheduled + message sent
+  void emitEvent({
+    eventType: 'referral.scheduled',
+    entityType: 'referral',
+    entityId: referralId,
+    fromState: ReferralState.ACCEPTED,
+    toState: ReferralState.SCHEDULED,
+    actor: 'system',
+    metadata: {
+      appointmentDate: details.appointmentDatetime,
+      locationName: details.locationName,
+      scheduledProvider: details.scheduledProvider,
+      durationMinutes: details.durationMinutes,
+    },
+  }).catch((err) => console.error('[EventService]', err));
+
+  void emitEvent({
+    eventType: 'message.sent',
+    entityType: 'referral',
+    entityId: referralId,
+    actor: 'system',
+    metadata: { messageControlId, messageType: 'SIU', recipientAddress: referral.referrerAddress },
+  }).catch((err) => console.error('[EventService]', err));
 
   console.log(
     `[SchedulingService] Referral #${referralId} scheduled for ${details.appointmentDatetime} at ${details.locationName}. SIU sent (control ID: ${messageControlId})`,

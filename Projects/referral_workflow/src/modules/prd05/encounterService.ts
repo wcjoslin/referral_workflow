@@ -16,6 +16,7 @@ import { onEncounterComplete } from '../prd04/mockEhr';
 import { autoAck } from '../prd06/mockReferrer';
 import { evaluateSkills } from '../prd09/skillEvaluator';
 import { executeSkillAction } from '../prd09/skillActions';
+import { emitEvent } from '../analytics/eventService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -54,6 +55,17 @@ export async function markEncounterComplete(opts: EncounterOptions): Promise<voi
       updatedAt: new Date(),
     })
     .where(eq(referrals.id, referralId));
+
+  // Analytics: encounter complete
+  void emitEvent({
+    eventType: 'referral.encounter_complete',
+    entityType: 'referral',
+    entityId: referralId,
+    fromState: currentState,
+    toState: ReferralState.ENCOUNTER,
+    actor: 'system',
+    metadata: { sendInterimUpdate },
+  }).catch((err) => console.error('[EventService]', err));
 
   console.log(`[EncounterService] Referral #${referralId} marked as Encounter`);
 
@@ -99,6 +111,14 @@ export async function markEncounterComplete(opts: EncounterOptions): Promise<voi
       status: 'Pending',
       sentAt: new Date(),
     });
+
+    void emitEvent({
+      eventType: 'message.sent',
+      entityType: 'referral',
+      entityId: referralId,
+      actor: 'system',
+      metadata: { messageControlId, messageType: 'InterimUpdate', recipientAddress: referral.referrerAddress },
+    }).catch((err) => console.error('[EventService]', err));
 
     console.log(
       `[EncounterService] Interim update sent for referral #${referralId} (control ID: ${messageControlId})`,

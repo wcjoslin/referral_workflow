@@ -13,6 +13,7 @@ import { db } from '../../db';
 import { referrals, patients, outboundMessages } from '../../db/schema';
 import { config } from '../../config';
 import { transition, ReferralState } from '../../state/referralStateMachine';
+import { emitEvent } from '../analytics/eventService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -44,6 +45,17 @@ export async function markNoShow(referralId: number): Promise<void> {
       updatedAt: new Date(),
     })
     .where(eq(referrals.id, referralId));
+
+  // Analytics: no-show
+  void emitEvent({
+    eventType: 'referral.no_show',
+    entityType: 'referral',
+    entityId: referralId,
+    fromState: currentState,
+    toState: ReferralState.NO_SHOW,
+    actor: 'system',
+    metadata: { appointmentDate: referral.appointmentDate, appointmentLocation: referral.appointmentLocation },
+  }).catch((err) => console.error('[EventService]', err));
 
   console.log(`[NoShowService] Referral #${referralId} marked as No-Show`);
 
@@ -95,6 +107,14 @@ export async function markNoShow(referralId: number): Promise<void> {
     status: 'Pending',
     sentAt: new Date(),
   });
+
+  void emitEvent({
+    eventType: 'message.sent',
+    entityType: 'referral',
+    entityId: referralId,
+    actor: 'system',
+    metadata: { messageControlId, messageType: 'NoShowNotification', recipientAddress: referral.referrerAddress },
+  }).catch((err) => console.error('[EventService]', err));
 
   console.log(
     `[NoShowService] No-show notification sent for referral #${referralId} (control ID: ${messageControlId})`,

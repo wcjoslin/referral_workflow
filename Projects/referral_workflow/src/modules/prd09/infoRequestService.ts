@@ -14,6 +14,7 @@ import { referrals, outboundMessages } from '../../db/schema';
 import { config } from '../../config';
 import { transition, ReferralState } from '../../state/referralStateMachine';
 import { autoAck } from '../prd06/mockReferrer';
+import { emitEvent } from '../analytics/eventService';
 
 /**
  * Send an info request to the referring provider and transition to Pending-Information.
@@ -69,6 +70,25 @@ export async function sendInfoRequest(
       updatedAt: new Date(),
     })
     .where(eq(referrals.id, referralId));
+
+  // Analytics: pending info + message sent
+  void emitEvent({
+    eventType: 'referral.pending_info',
+    entityType: 'referral',
+    entityId: referralId,
+    fromState: currentState,
+    toState: ReferralState.PENDING_INFORMATION,
+    actor: `skill:${skillName}`,
+    metadata: { skillName, explanation },
+  }).catch((err) => console.error('[EventService]', err));
+
+  void emitEvent({
+    eventType: 'message.sent',
+    entityType: 'referral',
+    entityId: referralId,
+    actor: 'system',
+    metadata: { messageControlId, messageType: 'InfoRequest', recipientAddress: referral.referrerAddress },
+  }).catch((err) => console.error('[EventService]', err));
 
   console.log(
     `[InfoRequestService] Info request sent for referral #${referralId}. Skill: ${skillName}. State → Pending-Information`,

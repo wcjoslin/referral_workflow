@@ -16,6 +16,7 @@ import { transition, ReferralState } from '../../state/referralStateMachine';
 import { structureNote } from './geminiConsultNote';
 import { buildConsultNoteCcda } from './ccdaBuilder';
 import { autoAck } from '../prd06/mockReferrer';
+import { emitEvent } from '../analytics/eventService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -122,6 +123,25 @@ export async function generateAndSend(opts: ConsultNoteOptions): Promise<void> {
       updatedAt: new Date(),
     })
     .where(eq(referrals.id, referralId));
+
+  // Analytics: closed + message sent
+  void emitEvent({
+    eventType: 'referral.closed',
+    entityType: 'referral',
+    entityId: referralId,
+    fromState: currentState,
+    toState: ReferralState.CLOSED,
+    actor: 'system',
+    metadata: { consultNoteId: messageControlId },
+  }).catch((err) => console.error('[EventService]', err));
+
+  void emitEvent({
+    eventType: 'message.sent',
+    entityType: 'referral',
+    entityId: referralId,
+    actor: 'system',
+    metadata: { messageControlId, messageType: 'ConsultNote', recipientAddress: referral.referrerAddress },
+  }).catch((err) => console.error('[EventService]', err));
 
   console.log(
     `[ConsultNoteService] Consult note sent for referral #${referralId} (control ID: ${messageControlId}). State → Closed`,

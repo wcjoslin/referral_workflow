@@ -24,6 +24,7 @@ import { onReferralAccepted } from '../prd03/mockScheduler';
 import { evaluateSkills } from '../prd09/skillEvaluator';
 import { executeSkillAction } from '../prd09/skillActions';
 import { randomUUID } from 'crypto';
+import { emitEvent } from '../analytics/eventService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -87,6 +88,26 @@ async function applyDisposition(
   // Send and log
   const acceptCode = nextState === ReferralState.ACCEPTED ? 'AA' : 'AR';
   await sendRriMessage(rriMessage, referral.referrerAddress, messageControlId, referralId, acceptCode);
+
+  // Analytics: disposition event
+  const eventType = nextState === ReferralState.ACCEPTED ? 'referral.accepted' : 'referral.declined';
+  void emitEvent({
+    eventType,
+    entityType: 'referral',
+    entityId: referralId,
+    fromState: currentState,
+    toState: nextState,
+    actor: `clinician:${clinicianId}`,
+    metadata: { clinicianId, ...(declineReason ? { declineReason } : {}) },
+  }).catch((err) => console.error('[EventService]', err));
+
+  void emitEvent({
+    eventType: 'message.sent',
+    entityType: 'referral',
+    entityId: referralId,
+    actor: 'system',
+    metadata: { messageControlId, messageType: 'RRI', recipientAddress: referral.referrerAddress },
+  }).catch((err) => console.error('[EventService]', err));
 
   console.log(
     `[DispositionService] Referral #${referralId} ${nextState} by ${clinicianId}. RRI sent (control ID: ${messageControlId})`,

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { index, sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
 
 export const patients = sqliteTable('patients', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -59,6 +59,27 @@ export const outboundMessages = sqliteTable('outbound_messages', {
   sentAt: integer('sent_at', { mode: 'timestamp' }).notNull(),
   acknowledgedAt: integer('acknowledged_at', { mode: 'timestamp' }),
 });
+
+// ── Workflow Analytics Event Log ─────────────────────────────────────────────
+
+export const workflowEvents = sqliteTable(
+  'workflow_events',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    eventType: text('event_type').notNull(), // e.g. 'referral.received', 'prior_auth.denied'
+    entityType: text('entity_type').notNull(), // 'referral' | 'priorAuth'
+    entityId: integer('entity_id').notNull(), // referral.id or priorAuthRequest.id
+    fromState: text('from_state'), // nullable — not all events are state transitions
+    toState: text('to_state'), // nullable
+    actor: text('actor').notNull(), // 'system' | 'clinician:<id>' | 'skill:<name>' | 'payer:<name>'
+    metadata: text('metadata'), // JSON blob for event-specific context
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    entityIdx: index('idx_workflow_events_entity').on(table.entityType, table.entityId),
+    typeTimeIdx: index('idx_workflow_events_type_time').on(table.eventType, table.createdAt),
+  }),
+);
 
 // ── Claims Attachment Workflow (X12N 277/275) ─────────────────────────────────
 
