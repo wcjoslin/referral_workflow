@@ -57,6 +57,20 @@ import { generateSkill, writeSkillToDir } from './modules/prd09/skillGenerator';
 import { signRequest } from './modules/claims/review/signatureService';
 import { sendResponse } from './modules/claims/response/responseService';
 import { desc, and } from 'drizzle-orm';
+import {
+  getKpis,
+  getReferralStateCounts,
+  getDailyIntake,
+  getReferralFunnel,
+  getPriorAuthOutcomes,
+  getTopDenialReasons,
+  getSkillMatchRates,
+  getAvgStateTimings,
+  getEventCount,
+  getFilterOptions,
+  type AnalyticsFilters,
+} from './modules/analytics/analyticsQueries';
+import { runAnalyticsAgent } from './modules/analytics/analyticsAgent';
 
 export const app = express();
 app.use(express.json({ type: ['application/json', 'application/fhir+json'] }));
@@ -99,6 +113,7 @@ const NAV_HTML = `<style>
   <a href="/overview" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Overview</a>
   <a href="/claims" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Claims</a>
   <a href="/prior-auth" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Prior Auth</a>
+  <a href="/analytics" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Analytics</a>
   <a href="/rules/admin" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Skills</a>
   <a href="/walkthrough" style="color:#20c997;text-decoration:none;font-size:0.88rem;font-weight:600;">Walkthrough</a>
   <a href="/demo" style="color:#ffc107;text-decoration:none;font-size:0.88rem;font-weight:600;">Demo Launcher</a>
@@ -1781,6 +1796,84 @@ app.post('/walkthrough/inject-277', async (req: Request, res: Response, next: Ne
       .returning();
 
     res.json({ success: true, claimsId: inserted.id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Analytics Dashboard (PRD-14 Phase 2) ─────────────────────────────────────
+
+function parseAnalyticsFilters(query: Record<string, unknown>): AnalyticsFilters {
+  const str = (k: string): string | undefined => {
+    const v = query[k];
+    return typeof v === 'string' && v !== '' ? v : undefined;
+  };
+  const daysRaw = query['days'];
+  const days =
+    daysRaw === '0' ? 0 : typeof daysRaw === 'string' ? parseInt(daysRaw, 10) || 90 : 90;
+  return {
+    department: str('department'),
+    clinicianId: str('clinicianId'),
+    state: str('state'),
+    payer: str('payer'),
+    skillName: str('skillName'),
+    denialReason: str('denialReason'),
+    days,
+  };
+}
+
+app.get('/analytics', (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const defaultFilters: AnalyticsFilters = { days: 90 };
+    const eventCount = getEventCount();
+    const filterOptions = getFilterOptions();
+
+    const template = fs.readFileSync(path.join(__dirname, 'views', 'analytics.html'), 'utf-8');
+    const html = template.replace(
+      '/*__ANALYTICS_DATA__*/',
+      `window.__ANALYTICS_DATA__ = ${JSON.stringify({
+        eventCount,
+        filterOptions,
+        kpis: getKpis(defaultFilters),
+        stateCounts: getReferralStateCounts(defaultFilters),
+        dailyIntake: getDailyIntake(defaultFilters),
+        funnel: getReferralFunnel(defaultFilters),
+        paOutcomes: getPriorAuthOutcomes(defaultFilters),
+        denialReasons: getTopDenialReasons(defaultFilters),
+        skillRates: getSkillMatchRates(defaultFilters),
+        stateTimings: getAvgStateTimings(defaultFilters),
+      })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/analytics/data', (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const filters = parseAnalyticsFilters(req.query as Record<string, unknown>);
+    res.json({
+      kpis: getKpis(filters),
+      stateCounts: getReferralStateCounts(filters),
+      dailyIntake: getDailyIntake(filters),
+      funnel: getReferralFunnel(filters),
+      paOutcomes: getPriorAuthOutcomes(filters),
+      denialReasons: getTopDenialReasons(filters),
+      skillRates: getSkillMatchRates(filters),
+      stateTimings: getAvgStateTimings(filters),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/analytics/agent', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const filters = parseAnalyticsFilters(req.body as Record<string, unknown>);
+    const result = await runAnalyticsAgent({ filters });
+    res.json(result);
   } catch (err) {
     next(err);
   }
