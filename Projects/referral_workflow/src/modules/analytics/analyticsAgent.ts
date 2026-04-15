@@ -347,6 +347,7 @@ function makeFallback(anomaly: Anomaly, reason: string): Finding {
 function extractRetryDelaySecs(err: unknown): number | null {
   if (err && typeof err === 'object' && 'errorDetails' in err) {
     const details = (err as { errorDetails: unknown[] }).errorDetails;
+    if (!Array.isArray(details)) return null;
     for (const d of details) {
       if (
         d &&
@@ -408,10 +409,11 @@ export async function analyzeAnomaly(anomaly: Anomaly, attempt = 0): Promise<Fin
         : 'low',
     };
   } catch (err) {
-    const is429 = err && typeof err === 'object' && 'status' in err && (err as { status: number }).status === 429;
-    if (is429 && attempt < 2) {
-      const delaySecs = extractRetryDelaySecs(err) ?? 65;
-      console.warn(`[AnalyticsAgent] Rate limited for "${anomaly.label}" — retrying in ${delaySecs}s`);
+    const status = err && typeof err === 'object' && 'status' in err ? (err as { status: number }).status : 0;
+    const isRetryable = status === 429 || status === 503;
+    if (isRetryable && attempt < 2) {
+      const delaySecs = status === 429 ? (extractRetryDelaySecs(err) ?? 65) : 15;
+      console.warn(`[AnalyticsAgent] ${status} for "${anomaly.label}" — retrying in ${delaySecs}s`);
       await new Promise((r) => setTimeout(r, delaySecs * 1000));
       return analyzeAnomaly(anomaly, attempt + 1);
     }
