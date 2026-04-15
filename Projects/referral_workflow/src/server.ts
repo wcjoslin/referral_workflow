@@ -15,6 +15,7 @@
  *   POST /referrals/:id/consult/resolve  — resolve consult and move to Closed (PRD-11)
  *   GET  /referrals/:id/consult-note    — consult note form (PRD-04)
  *   POST /referrals/:id/consult-note    — generate and send consult note (PRD-04)
+ *   GET  /api/referrals/:id/preview      — lightweight preview data for dashboard expand row
  *   GET  /messages                      — message history dashboard (PRD-07)
  *   GET  /claims                        — claims attachment queue (claims intake)
  *   GET  /claims/:id                    — claims request detail + sign UI
@@ -378,6 +379,68 @@ app.post('/api/referrals/:id/routing', async (req: Request, res: Response, next:
       success: true,
       routingDepartment: updates.routingDepartment ?? referral.routingDepartment,
       routingEquipment: updates.routingEquipment ?? referral.routingEquipment,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Dashboard preview API ─────────────────────────────────────────────────────
+
+app.get('/api/referrals/:id/preview', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+    if (!referral) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+
+    const [patient] = await db.select().from(patients).where(eq(patients.id, referral.patientId));
+
+    const paRows = await db
+      .select()
+      .from(priorAuthRequests)
+      .where(eq(priorAuthRequests.referralId, referralId))
+      .orderBy(desc(priorAuthRequests.createdAt))
+      .limit(1);
+    const priorAuth = paRows[0] ?? null;
+
+    res.json({
+      referral: {
+        id: referral.id,
+        state: referral.state,
+        reasonForReferral: referral.reasonForReferral,
+        referrerAddress: referral.referrerAddress,
+        declineReason: referral.declineReason,
+        createdAt: referral.createdAt,
+        routingDepartment: referral.routingDepartment,
+        aiAssessment: referral.aiAssessment,
+        clinicalData: referral.clinicalData,
+        appointmentDate: referral.appointmentDate,
+        appointmentLocation: referral.appointmentLocation,
+        scheduledProvider: referral.scheduledProvider,
+      },
+      patient: patient
+        ? { firstName: patient.firstName, lastName: patient.lastName, dateOfBirth: patient.dateOfBirth }
+        : { firstName: '', lastName: '', dateOfBirth: '' },
+      priorAuth: priorAuth
+        ? {
+            id: priorAuth.id,
+            state: priorAuth.state,
+            insurerName: priorAuth.insurerName,
+            serviceCode: priorAuth.serviceCode,
+            serviceDisplay: priorAuth.serviceDisplay,
+            createdAt: priorAuth.createdAt,
+          }
+        : null,
+      resources: getResources(),
     });
   } catch (err) {
     next(err);

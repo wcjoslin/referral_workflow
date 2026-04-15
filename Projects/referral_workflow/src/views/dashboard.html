@@ -33,31 +33,92 @@
     .stat-card { background: var(--color-card); border-radius: 8px; padding: 14px 20px; min-width: 110px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
     .stat-card .num { font-size: 1.6rem; font-weight: 700; line-height: 1; }
     .stat-card .label { font-size: 0.75rem; color: var(--color-text-muted); margin-top: 4px; }
+
+    /* Table */
     table { width: 100%; border-collapse: collapse; background: var(--color-card); border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-    thead th { background: var(--color-table-header); font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--color-border); }
-    tbody tr { border-bottom: 1px solid var(--color-bg-page); transition: background 0.1s; cursor: pointer; }
-    tbody tr:hover { background: var(--color-table-header); }
-    tbody tr:last-child { border-bottom: none; }
+    thead th { background: var(--color-table-header); font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); padding: 12px 16px; text-align: left; border-bottom: 2px solid #c8cdd3; }
+    tbody tr.data-row { border-bottom: 2px solid #c8cdd3; transition: background 0.1s; cursor: pointer; }
+    tbody tr.data-row:hover { background: var(--color-table-header); }
+    tbody tr.data-row.expanded { background: #f5f8ff; border-bottom: none; }
+    tbody tr.preview-row td { padding: 0; border-bottom: 2px solid #c8cdd3; }
     td { padding: 12px 16px; font-size: 0.9rem; vertical-align: middle; }
+    .chevron-cell { width: 36px; padding: 12px 4px 12px 14px !important; color: var(--color-text-muted); }
+    .chevron { display: inline-block; font-size: 0.65rem; transition: transform 0.2s; user-select: none; line-height: 1; }
+    .expanded .chevron { transform: rotate(90deg); }
+    .ref-link { color: var(--color-brand); text-decoration: none; font-weight: 600; }
+    .ref-link:hover { text-decoration: underline; }
+
+    /* Badges */
     .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
-    .badge-received    { background: #e9ecef; color: #495057; }
+    .badge-received     { background: #e9ecef; color: #495057; }
     .badge-acknowledged { background: #cff4fc; color: #055160; }
-    .badge-accepted    { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
-    .badge-pending     { background: var(--color-badge-pending); color: var(--color-badge-pending-text); }
-    .badge-declined    { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
-    .badge-scheduled   { background: #d0efff; color: #0c63e4; }
-    .badge-encounter   { background: #e2d9f3; color: #3d0a91; }
-    .badge-closed      { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
-    .badge-confirmed   { background: #badbcc; color: #0a3622; font-style: italic; }
+    .badge-accepted     { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+    .badge-pending      { background: var(--color-badge-pending); color: var(--color-badge-pending-text); }
+    .badge-declined     { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
+    .badge-scheduled    { background: #d0efff; color: #0c63e4; }
+    .badge-encounter    { background: #e2d9f3; color: #3d0a91; }
+    .badge-closed       { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+    .badge-confirmed    { background: #badbcc; color: #0a3622; font-style: italic; }
     .priority-flag { color: var(--color-priority); font-weight: 700; font-size: 0.85rem; }
+    .dept-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600; background: #e0e7ff; color: #3730a3; }
+    .dept-badge-unassigned { background: #f8d7da; color: #58151c; }
+
+    /* Filter & misc */
     .empty { text-align: center; padding: 48px 24px; color: var(--color-text-muted); }
     .empty a { color: #ffc107; font-weight: 600; text-decoration: none; }
     .empty a:hover { text-decoration: underline; }
-    .dept-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600; background: #e0e7ff; color: #3730a3; }
-    .dept-badge-unassigned { background: #f8d7da; color: #58151c; }
     .filter-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
     .filter-bar label { font-size: 0.82rem; color: var(--color-text-muted); font-weight: 600; }
     .filter-bar select { padding: 6px 10px; border: 1px solid var(--color-border); border-radius: 5px; font-size: 0.85rem; }
+
+    /* Preview panel */
+    .preview-panel { padding: 16px 20px 20px; background: #f8faff; border-top: 1px solid #dde8f5; }
+    .preview-header { display: flex; gap: 24px; align-items: center; margin-bottom: 14px; font-size: 0.88rem; flex-wrap: wrap; }
+    .preview-header .ph-item { display: flex; align-items: center; gap: 8px; }
+    .preview-header .ph-label { color: var(--color-text-muted); font-weight: 600; }
+    .preview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    .preview-card { background: var(--color-card); border: 1px solid #dde3ee; border-radius: 8px; padding: 12px 14px; }
+    .preview-card-full { background: var(--color-card); border: 1px solid #dde3ee; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+    .preview-card h4, .preview-card-full h4 { margin: 0 0 8px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); }
+    .preview-field { display: flex; gap: 6px; font-size: 0.84rem; margin-bottom: 5px; }
+    .preview-field .pf-label { color: var(--color-text-muted); min-width: 90px; flex-shrink: 0; font-weight: 500; }
+    .preview-field .pf-value { color: var(--color-text); }
+    .clinical-row { display: flex; gap: 20px; flex-wrap: wrap; }
+    .clinical-item { flex: 1; min-width: 160px; }
+    .clinical-item .ci-label { font-size: 0.73rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); margin-bottom: 3px; }
+    .clinical-item .ci-value { font-size: 0.84rem; line-height: 1.4; }
+
+    /* Action section */
+    .preview-action { background: var(--color-card); border: 1px solid #dde3ee; border-radius: 8px; padding: 14px 16px; }
+    .preview-action h4 { margin: 0 0 10px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); }
+    .action-form-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+    .action-field { display: flex; flex-direction: column; gap: 3px; }
+    .action-field label { font-size: 0.78rem; color: var(--color-text-muted); font-weight: 600; }
+    .action-field input, .action-field select { padding: 6px 10px; border: 1px solid var(--color-border); border-radius: 5px; font-size: 0.88rem; background: #fff; }
+    .action-field input[type="datetime-local"] { min-width: 200px; }
+    .btn-act { padding: 7px 18px; border: none; border-radius: 5px; font-size: 0.88rem; font-weight: 600; cursor: pointer; white-space: nowrap; line-height: 1.5; }
+    .btn-accept  { background: #198754; color: #fff; }
+    .btn-accept:hover  { background: #157347; }
+    .btn-decline { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
+    .btn-decline:hover { background: #f1aeb5; }
+    .btn-schedule { background: #0d6efd; color: #fff; text-decoration: none; }
+    .btn-schedule:hover { background: #0b5ed7; }
+    .btn-neutral { background: #6c757d; color: #fff; }
+    .btn-neutral:hover { background: #5c636a; }
+    .btn-consult { background: #6f42c1; color: #fff; }
+    .btn-consult:hover { background: #5a2fa0; }
+    .decline-form { margin-top: 10px; display: none; }
+    .decline-form.visible { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+    .action-msg { margin-top: 8px; font-size: 0.82rem; padding: 5px 10px; border-radius: 4px; display: none; }
+    .action-msg.visible { display: block; }
+    .action-msg-error   { background: #f8d7da; color: #58151c; }
+    .action-msg-success { background: #d1e7dd; color: #0a3622; }
+    .terminal-status { display: inline-flex; align-items: center; gap: 6px; font-size: 0.84rem; color: var(--color-text-muted); padding: 4px 0; }
+
+    /* Spinner */
+    .spinner { display: flex; justify-content: center; align-items: center; height: 64px; }
+    .spinner::after { content: ''; width: 28px; height: 28px; border: 3px solid #e0e7ff; border-top-color: var(--color-brand); border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -76,43 +137,43 @@
 </div>
 <script>
   const { items, departments } = window.__DASHBOARD_DATA__;
+  const previewCache = {};
 
   function stateBadge(state) {
     const map = {
       'Received': 'received', 'Acknowledged': 'acknowledged', 'Accepted': 'accepted',
       'Pending-Information': 'pending', 'Declined': 'declined', 'Scheduled': 'scheduled',
-      'Encounter': 'encounter', 'Closed': 'closed', 'Closed-Confirmed': 'confirmed',
+      'No-Show': 'pending', 'Encounter': 'encounter', 'Closed': 'closed',
+      'Closed-Confirmed': 'confirmed', 'Consult': 'encounter',
     };
     return `<span class="badge badge-${map[state] ?? 'received'}">${state}</span>`;
   }
 
-  // Stats
+  // ── Stats ─────────────────────────────────────────────────────────────────────
+
   const statsDef = [
-    { label: 'Total', fn: () => items.length },
-    { label: 'Active', fn: () => items.filter(i => !['Declined','Closed-Confirmed'].includes(i.referral.state)).length },
-    { label: 'Acknowledged', fn: () => items.filter(i => i.referral.state === 'Acknowledged').length },
-    { label: 'Pending Info', fn: () => items.filter(i => i.referral.state === 'Pending-Information').length },
-    { label: 'Declined', fn: () => items.filter(i => i.referral.state === 'Declined').length },
-    { label: 'Closed', fn: () => items.filter(i => ['Closed','Closed-Confirmed'].includes(i.referral.state)).length },
+    { label: 'Total',       fn: () => items.length },
+    { label: 'Active',      fn: () => items.filter(i => !['Declined','Closed-Confirmed'].includes(i.referral.state)).length },
+    { label: 'Acknowledged',fn: () => items.filter(i => i.referral.state === 'Acknowledged').length },
+    { label: 'Pending Info',fn: () => items.filter(i => i.referral.state === 'Pending-Information').length },
+    { label: 'Declined',    fn: () => items.filter(i => i.referral.state === 'Declined').length },
+    { label: 'Closed',      fn: () => items.filter(i => ['Closed','Closed-Confirmed'].includes(i.referral.state)).length },
   ];
   document.getElementById('stats').innerHTML = statsDef.map(s =>
     `<div class="stat-card"><div class="num">${s.fn()}</div><div class="label">${s.label}</div></div>`
   ).join('');
 
-  // Department filter
+  // ── Department filter ─────────────────────────────────────────────────────────
+
   if (departments && departments.length > 0) {
-    const filterBar = document.getElementById('filterBar');
-    filterBar.style.display = '';
+    document.getElementById('filterBar').style.display = '';
     const sel = document.getElementById('deptFilter');
-    // Add "Unassigned" option
     const unOpt = document.createElement('option');
-    unOpt.value = 'Unassigned';
-    unOpt.textContent = 'Unassigned';
+    unOpt.value = 'Unassigned'; unOpt.textContent = 'Unassigned';
     sel.appendChild(unOpt);
     departments.forEach(function(d) {
       const opt = document.createElement('option');
-      opt.value = d;
-      opt.textContent = d;
+      opt.value = d; opt.textContent = d;
       sel.appendChild(opt);
     });
   }
@@ -121,6 +182,415 @@
     if (!dept || dept === 'Unassigned') return '<span class="dept-badge dept-badge-unassigned">Unassigned</span>';
     return '<span class="dept-badge">' + dept + '</span>';
   }
+
+  // ── Preview expand / collapse ─────────────────────────────────────────────────
+
+  async function togglePreview(event, id) {
+    // Let hyperlinks and buttons handle their own clicks
+    if (event.target.closest('a, button, input, select')) return;
+
+    const dataRow = document.getElementById('row-' + id);
+    const existingPreview = document.getElementById('preview-' + id);
+
+    if (existingPreview) {
+      const isHidden = existingPreview.style.display === 'none';
+      existingPreview.style.display = isHidden ? '' : 'none';
+      dataRow.classList.toggle('expanded', isHidden);
+      return;
+    }
+
+    // First expand — insert loading row immediately below
+    dataRow.classList.add('expanded');
+    const loadingRow = document.createElement('tr');
+    loadingRow.id = 'preview-' + id;
+    loadingRow.className = 'preview-row';
+    loadingRow.innerHTML = '<td colspan="7"><div class="spinner"></div></td>';
+    dataRow.after(loadingRow);
+
+    // Fetch detail data (cached after first load)
+    if (!previewCache[id]) {
+      try {
+        const resp = await fetch('/api/referrals/' + id + '/preview');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        previewCache[id] = await resp.json();
+      } catch (err) {
+        loadingRow.innerHTML = '<td colspan="7"><div style="padding:16px 20px;color:#842029;font-size:0.88rem;">Failed to load preview. <a href="/referrals/' + id + '/review">Open full view →</a></div></td>';
+        return;
+      }
+    }
+
+    loadingRow.innerHTML = '<td colspan="7">' + renderPreview(previewCache[id]) + '</td>';
+  }
+
+  // ── Preview rendering ─────────────────────────────────────────────────────────
+
+  function esc(str) {
+    return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function renderClinicalList(arr) {
+    if (!Array.isArray(arr) || arr.length === 0) {
+      return '<span style="color:var(--color-text-muted)">None recorded</span>';
+    }
+    const names = arr.map(function(item) {
+      return typeof item === 'string' ? item : (item.name || '');
+    }).filter(Boolean);
+    if (names.length === 0) return '<span style="color:var(--color-text-muted)">None recorded</span>';
+    const shown = names.slice(0, 3).map(esc).join(', ');
+    const rest = names.length - 3;
+    return rest > 0 ? shown + ` <span style="color:var(--color-text-muted)">…and ${rest} more</span>` : shown;
+  }
+
+  function fmtDate(val) {
+    if (!val) return '—';
+    return new Date(typeof val === 'number' ? val * 1000 : val).toLocaleDateString();
+  }
+
+  function renderPreview(data) {
+    const { referral, patient, priorAuth, resources } = data;
+
+    let clinical = null;
+    try { clinical = referral.clinicalData ? JSON.parse(referral.clinicalData) : null; } catch(e) {}
+    let assessment = null;
+    try { assessment = referral.aiAssessment ? JSON.parse(referral.aiAssessment) : null; } catch(e) {}
+
+    const dobStr = patient.dateOfBirth
+      ? new Date(patient.dateOfBirth + 'T00:00:00').toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric' })
+      : '—';
+
+    // State + department header
+    const headerHtml = `
+      <div class="preview-header">
+        <div class="ph-item"><span class="ph-label">Current State:</span>${stateBadge(referral.state)}</div>
+        <div class="ph-item"><span class="ph-label">Department:</span>${deptBadge(referral.routingDepartment)}</div>
+      </div>`;
+
+    // Patient demographics
+    const demoCard = `
+      <div class="preview-card">
+        <h4>Patient Demographics</h4>
+        <div class="preview-field"><span class="pf-label">Name</span><span class="pf-value">${esc(patient.firstName)} ${esc(patient.lastName)}</span></div>
+        <div class="preview-field"><span class="pf-label">Date of Birth</span><span class="pf-value">${esc(dobStr)}</span></div>
+      </div>`;
+
+    // Referral details
+    const reason = referral.reasonForReferral
+      ? esc(referral.reasonForReferral).substring(0, 200) + (referral.reasonForReferral.length > 200 ? '…' : '')
+      : '—';
+    const declineLine = referral.declineReason
+      ? `<div class="preview-field"><span class="pf-label">Decline Reason</span><span class="pf-value" style="color:#842029">${esc(referral.declineReason)}</span></div>`
+      : '';
+    const detailCard = `
+      <div class="preview-card">
+        <h4>Referral Details</h4>
+        <div class="preview-field"><span class="pf-label">Reason</span><span class="pf-value">${reason}</span></div>
+        <div class="preview-field"><span class="pf-label">Referrer</span><span class="pf-value">${esc(referral.referrerAddress) || '—'}</span></div>
+        <div class="preview-field"><span class="pf-label">Received</span><span class="pf-value">${fmtDate(referral.createdAt)}</span></div>
+        ${declineLine}
+      </div>`;
+
+    // Prior authorization
+    let paContent;
+    if (priorAuth) {
+      paContent = `
+        <div class="preview-field"><span class="pf-label">State</span><span class="pf-value">${stateBadge(priorAuth.state)}</span></div>
+        <div class="preview-field"><span class="pf-label">Insurer</span><span class="pf-value">${esc(priorAuth.insurerName)}</span></div>
+        <div class="preview-field"><span class="pf-label">Service</span><span class="pf-value">${esc(priorAuth.serviceDisplay || priorAuth.serviceCode)}</span></div>
+        <div class="preview-field"><span class="pf-label">Submitted</span><span class="pf-value">${fmtDate(priorAuth.createdAt)}</span></div>`;
+    } else {
+      paContent = `<div style="font-size:0.84rem;color:var(--color-text-muted);padding:2px 0">No prior authorization on file.</div>`;
+    }
+    const paCard = `<div class="preview-card"><h4>Prior Authorization</h4>${paContent}</div>`;
+
+    // Routing suggestion
+    let routingContent;
+    if (assessment && assessment.summary) {
+      const summary = esc(assessment.summary).substring(0, 220) + (assessment.summary.length > 220 ? '…' : '');
+      routingContent = `
+        <div class="preview-field"><span class="pf-label">Department</span><span class="pf-value">${esc(assessment.department || referral.routingDepartment)}</span></div>
+        <div class="preview-field" style="flex-direction:column;gap:2px;">
+          <span class="pf-label">AI Summary</span>
+          <span class="pf-value" style="line-height:1.4">${summary}</span>
+        </div>`;
+    } else {
+      routingContent = `<div style="font-size:0.84rem;color:var(--color-text-muted);padding:2px 0">AI assessment pending or unavailable.</div>`;
+    }
+    const routingCard = `<div class="preview-card"><h4>Routing Suggestion</h4>${routingContent}</div>`;
+
+    // Clinical information
+    const clinicalHtml = `
+      <div class="preview-card-full">
+        <h4>Clinical Information</h4>
+        <div class="clinical-row">
+          <div class="clinical-item"><div class="ci-label">Problems</div><div class="ci-value">${renderClinicalList(clinical && clinical.problems)}</div></div>
+          <div class="clinical-item"><div class="ci-label">Allergies</div><div class="ci-value">${renderClinicalList(clinical && clinical.allergies)}</div></div>
+          <div class="clinical-item"><div class="ci-label">Medications</div><div class="ci-value">${renderClinicalList(clinical && clinical.medications)}</div></div>
+          <div class="clinical-item"><div class="ci-label">Results</div><div class="ci-value">${renderClinicalList(clinical && clinical.diagnosticResults)}</div></div>
+        </div>
+      </div>`;
+
+    const actionHtml = renderActionSection(referral, resources);
+
+    return `<div class="preview-panel">
+      ${headerHtml}
+      <div class="preview-grid">
+        ${demoCard}
+        ${detailCard}
+        ${paCard}
+        ${routingCard}
+      </div>
+      ${clinicalHtml}
+      ${actionHtml}
+    </div>`;
+  }
+
+  // ── Action section (state-gated) ──────────────────────────────────────────────
+
+  const DECLINE_REASONS = [
+    'Out of Scope',
+    'Insufficient Clinical Information',
+    'Patient Already Under Care',
+    'Capacity Unavailable',
+    'Other',
+  ];
+
+  function renderActionSection(referral, resources) {
+    const id = referral.id;
+    const state = referral.state;
+    let content = '';
+
+    if (state === 'Acknowledged' || state === 'Pending-Information') {
+      const reasonOpts = DECLINE_REASONS.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
+      content = `
+        <div class="action-form-row">
+          <div class="action-field">
+            <label>Clinician ID</label>
+            <input type="text" id="clinId-${id}" placeholder="e.g. DR001" style="width:130px" />
+          </div>
+          <button class="btn-act btn-accept" onclick="submitAcceptDash(${id})">Accept Referral</button>
+          <button class="btn-act btn-decline" onclick="toggleDeclineForm(${id})">Decline ▼</button>
+        </div>
+        <div id="declineForm-${id}" class="decline-form">
+          <div class="action-field">
+            <label>Decline Reason</label>
+            <select id="declineReason-${id}">${reasonOpts}</select>
+          </div>
+          <button class="btn-act btn-decline" onclick="submitDeclineDash(${id})">Confirm Decline</button>
+        </div>
+        <div id="actionMsg-${id}" class="action-msg"></div>`;
+
+    } else if (state === 'Accepted') {
+      const def = new Date();
+      def.setDate(def.getDate() + 7);
+      def.setHours(10, 0, 0, 0);
+      const defVal = def.toISOString().slice(0, 16);
+      const locationOpts = (resources || []).length > 0
+        ? (resources || []).map(r => `<option value="${esc(r.name)}">${esc(r.name)}</option>`).join('')
+        : '<option value="">No locations available</option>';
+      content = `
+        <div class="action-form-row">
+          <div class="action-field">
+            <label>Date &amp; Time</label>
+            <input type="datetime-local" id="apptDate-${id}" value="${defVal}" />
+          </div>
+          <div class="action-field">
+            <label>Location</label>
+            <select id="apptLoc-${id}" style="min-width:160px">${locationOpts}</select>
+          </div>
+          <div class="action-field">
+            <label>Provider</label>
+            <input type="text" id="apptProv-${id}" placeholder="e.g. Dr. Sarah Chen" style="width:180px" />
+          </div>
+          <button class="btn-act btn-schedule" onclick="submitScheduleDash(${id})">Schedule →</button>
+        </div>
+        <div id="actionMsg-${id}" class="action-msg"></div>`;
+
+    } else if (state === 'Scheduled') {
+      content = `
+        <div class="action-form-row">
+          <button class="btn-act btn-neutral" onclick="submitNoShowDash(${id})">Mark No-Show</button>
+        </div>
+        <div id="actionMsg-${id}" class="action-msg"></div>`;
+
+    } else if (state === 'No-Show') {
+      const def = new Date();
+      def.setDate(def.getDate() + 7);
+      def.setHours(10, 0, 0, 0);
+      const defVal = def.toISOString().slice(0, 16);
+      const locationOpts = (resources || []).length > 0
+        ? (resources || []).map(r => `<option value="${esc(r.name)}">${esc(r.name)}</option>`).join('')
+        : '<option value="">No locations available</option>';
+      content = `
+        <div class="action-form-row">
+          <div class="action-field">
+            <label>Date &amp; Time</label>
+            <input type="datetime-local" id="apptDate-${id}" value="${defVal}" />
+          </div>
+          <div class="action-field">
+            <label>Location</label>
+            <select id="apptLoc-${id}" style="min-width:160px">${locationOpts}</select>
+          </div>
+          <div class="action-field">
+            <label>Provider</label>
+            <input type="text" id="apptProv-${id}" placeholder="e.g. Dr. Sarah Chen" style="width:180px" />
+          </div>
+          <button class="btn-act btn-schedule" onclick="submitScheduleDash(${id})">Reschedule →</button>
+        </div>
+        <div id="actionMsg-${id}" class="action-msg"></div>`;
+
+    } else if (state === 'Encounter') {
+      content = `
+        <div class="action-form-row">
+          <button class="btn-act btn-consult" onclick="submitConsultDash(${id})">Request Consultation</button>
+        </div>
+        <div id="actionMsg-${id}" class="action-msg"></div>`;
+
+    } else if (state === 'Consult') {
+      content = `
+        <div class="action-form-row">
+          <div class="action-field">
+            <label>Clinician ID</label>
+            <input type="text" id="clinId-${id}" placeholder="e.g. DR001" style="width:130px" />
+          </div>
+          <button class="btn-act btn-accept" onclick="submitConsultResolveDash(${id})">Confirm Consultation</button>
+        </div>
+        <div id="actionMsg-${id}" class="action-msg"></div>`;
+
+    } else if (state === 'Declined' || state === 'Closed-Confirmed') {
+      content = `<div class="terminal-status">✓ No further action required</div>`;
+
+    } else {
+      return ''; // Received, Closed — automated transitions; no manual action shown
+    }
+
+    return `<div class="preview-action"><h4>Next Action</h4>${content}</div>`;
+  }
+
+  // ── Action handlers ───────────────────────────────────────────────────────────
+
+  function setActionMsg(id, msg, isError) {
+    const el = document.getElementById('actionMsg-' + id);
+    if (!el) return;
+    el.className = 'action-msg visible ' + (isError ? 'action-msg-error' : 'action-msg-success');
+    el.textContent = msg;
+  }
+
+  function toggleDeclineForm(id) {
+    const form = document.getElementById('declineForm-' + id);
+    if (form) form.classList.toggle('visible');
+  }
+
+  async function submitAcceptDash(id) {
+    const clinicianId = (document.getElementById('clinId-' + id) || {}).value || '';
+    if (!clinicianId.trim()) { setActionMsg(id, 'Please enter a Clinician ID.', true); return; }
+    try {
+      const resp = await fetch('/referrals/' + id + '/disposition', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision: 'Accept', clinicianId }),
+      });
+      const body = await resp.json();
+      if (!resp.ok || !body.success) throw new Error(body.error || 'Request failed');
+      setActionMsg(id, 'Accepted — reloading…', false);
+      setTimeout(() => location.reload(), 800);
+    } catch (err) {
+      setActionMsg(id, 'Error: ' + err.message, true);
+    }
+  }
+
+  async function submitDeclineDash(id) {
+    const clinicianId = (document.getElementById('clinId-' + id) || {}).value || '';
+    const declineReason = (document.getElementById('declineReason-' + id) || {}).value || '';
+    if (!clinicianId.trim()) { setActionMsg(id, 'Please enter a Clinician ID.', true); return; }
+    if (!declineReason) { setActionMsg(id, 'Please select a decline reason.', true); return; }
+    try {
+      const resp = await fetch('/referrals/' + id + '/disposition', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision: 'Decline', clinicianId, declineReason }),
+      });
+      const body = await resp.json();
+      if (!resp.ok || !body.success) throw new Error(body.error || 'Request failed');
+      setActionMsg(id, 'Declined — reloading…', false);
+      setTimeout(() => location.reload(), 800);
+    } catch (err) {
+      setActionMsg(id, 'Error: ' + err.message, true);
+    }
+  }
+
+  async function submitScheduleDash(id) {
+    const apptDatetime = (document.getElementById('apptDate-' + id) || {}).value || '';
+    const locationName = (document.getElementById('apptLoc-' + id) || {}).value || '';
+    const scheduledProvider = ((document.getElementById('apptProv-' + id) || {}).value || '').trim();
+    if (!apptDatetime) { setActionMsg(id, 'Please select a date and time.', true); return; }
+    if (!locationName) { setActionMsg(id, 'Please select a location.', true); return; }
+    if (!scheduledProvider) { setActionMsg(id, 'Please enter a provider name.', true); return; }
+    try {
+      const resp = await fetch('/referrals/' + id + '/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appointmentDatetime: apptDatetime, durationMinutes: 60, locationName, scheduledProvider }),
+      });
+      const body = await resp.json();
+      if (!resp.ok || !body.success) throw new Error(body.error || 'Request failed');
+      setActionMsg(id, 'Scheduled — reloading…', false);
+      setTimeout(() => location.reload(), 800);
+    } catch (err) {
+      setActionMsg(id, 'Error: ' + err.message, true);
+    }
+  }
+
+  async function submitNoShowDash(id) {
+    try {
+      const resp = await fetch('/referrals/' + id + '/no-show', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const body = await resp.json();
+      if (!resp.ok || !body.success) throw new Error(body.error || 'Request failed');
+      setActionMsg(id, 'Marked as no-show — reloading…', false);
+      setTimeout(() => location.reload(), 800);
+    } catch (err) {
+      setActionMsg(id, 'Error: ' + err.message, true);
+    }
+  }
+
+  async function submitConsultDash(id) {
+    try {
+      const resp = await fetch('/referrals/' + id + '/consult', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const body = await resp.json();
+      if (!resp.ok || !body.success) throw new Error(body.error || 'Request failed');
+      setActionMsg(id, 'Consultation requested — reloading…', false);
+      setTimeout(() => location.reload(), 800);
+    } catch (err) {
+      setActionMsg(id, 'Error: ' + err.message, true);
+    }
+  }
+
+  async function submitConsultResolveDash(id) {
+    const clinicianId = (document.getElementById('clinId-' + id) || {}).value || '';
+    if (!clinicianId.trim()) { setActionMsg(id, 'Please enter a Clinician ID.', true); return; }
+    try {
+      const resp = await fetch('/referrals/' + id + '/consult/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clinicianId }),
+      });
+      const body = await resp.json();
+      if (!resp.ok || !body.success) throw new Error(body.error || 'Request failed');
+      setActionMsg(id, 'Consultation confirmed — reloading…', false);
+      setTimeout(() => location.reload(), 800);
+    } catch (err) {
+      setActionMsg(id, 'Error: ' + err.message, true);
+    }
+  }
+
+  // ── Table rendering ───────────────────────────────────────────────────────────
 
   function renderTable(filteredItems) {
     if (filteredItems.length === 0) {
@@ -135,8 +605,9 @@
       const declineLine = (r.state === 'Declined' && r.declineReason)
         ? `<div style="font-size:0.72rem;color:#842029;margin-top:4px;white-space:normal;">${r.declineReason.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`
         : '';
-      return `<tr onclick="location.href='/referrals/${r.id}/review'">
-        <td>#${r.id}</td>
+      return `<tr id="row-${r.id}" class="data-row" onclick="togglePreview(event, ${r.id})">
+        <td class="chevron-cell"><span class="chevron">&#9654;</span></td>
+        <td><a class="ref-link" href="/referrals/${r.id}/review" onclick="event.stopPropagation()">#${r.id}</a></td>
         <td>${name} ${priority}</td>
         <td>${deptBadge(r.routingDepartment)}</td>
         <td>${stateBadge(r.state)}${declineLine}</td>
@@ -146,7 +617,7 @@
     }).join('');
     document.getElementById('tableWrapper').innerHTML = `
       <table>
-        <thead><tr><th>#</th><th>Patient</th><th>Department</th><th>State</th><th>Reason</th><th>Created</th></tr></thead>
+        <thead><tr><th></th><th>#</th><th>Patient</th><th>Department</th><th>State</th><th>Reason</th><th>Created</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
   }
