@@ -21,6 +21,7 @@ import { buildSiu, isoToHl7 } from './siuBuilder';
 import { onReferralScheduled } from '../prd05/mockEncounter';
 import { autoAck } from '../prd06/mockReferrer';
 import { emitEvent } from '../analytics/eventService';
+import { recordThreadMessage } from '../messaging/threadService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -134,12 +135,37 @@ export async function scheduleReferral(
   });
 
   // 7. Log outbound message
+  const emailBody = [
+    `APPOINTMENT SCHEDULED — Referral #${referralId}`,
+    ``,
+    `Patient: ${patient?.lastName ?? ''}, ${patient?.firstName ?? ''}`,
+    `Date/Time: ${details.appointmentDatetime}`,
+    `Location: ${details.locationName}`,
+    `Provider: ${details.scheduledProvider}`,
+    `Duration: ${details.durationMinutes} min`,
+  ].join('\n');
+
   await db.insert(outboundMessages).values({
     referralId,
     messageControlId,
     messageType: 'SIU',
     status: 'Pending',
     sentAt: new Date(),
+  });
+
+  await recordThreadMessage({
+    referralId,
+    direction: 'outbound',
+    messageType: 'SIU',
+    subject: `Appointment Scheduled — Referral #${referralId}`,
+    summary: `Appointment notification sent for ${details.appointmentDatetime} at ${details.locationName}`,
+    senderAddress: config.receiving.directAddress,
+    recipientAddress: referral.referrerAddress,
+    contentBody: emailBody,
+    contentHl7: siuMessage,
+    messageControlId,
+    ackStatus: 'Pending',
+    relatedStateTransition: 'Accepted->Scheduled',
   });
 
   // Analytics: scheduled + message sent

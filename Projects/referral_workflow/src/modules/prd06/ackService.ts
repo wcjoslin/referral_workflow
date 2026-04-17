@@ -12,6 +12,7 @@ import { referrals, outboundMessages } from '../../db/schema';
 import { transition, ReferralState } from '../../state/referralStateMachine';
 import { AckData } from './ackParser';
 import { emitEvent } from '../analytics/eventService';
+import { recordThreadMessage, updateThreadAckStatus } from '../messaging/threadService';
 
 export interface AckResult {
   matched: boolean;
@@ -59,6 +60,16 @@ export async function processAck(ackData: AckData): Promise<AckResult> {
       acknowledgedAt: new Date(),
     })
     .where(eq(outboundMessages.id, message.id));
+
+  // Update thread entry ACK status + record ACK as inbound thread message
+  await updateThreadAckStatus(acknowledgedControlId);
+  await recordThreadMessage({
+    referralId: message.referralId,
+    direction: 'inbound',
+    messageType: 'ACK',
+    summary: `ACK received for ${message.messageType} (control ID: ${acknowledgedControlId.slice(0, 8)}...)`,
+    relatedStateTransition: message.messageType === 'ConsultNote' ? 'Closed->Closed-Confirmed' : undefined,
+  });
 
   // Analytics: message acknowledged
   void emitEvent({

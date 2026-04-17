@@ -81,6 +81,24 @@ jest.mock('../../../src/db', () => {
       sent_at INTEGER NOT NULL,
       acknowledged_at INTEGER
     );
+    CREATE TABLE referral_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      referral_id INTEGER NOT NULL,
+      direction TEXT NOT NULL,
+      message_type TEXT NOT NULL,
+      subject TEXT,
+      summary TEXT NOT NULL,
+      sender_address TEXT,
+      recipient_address TEXT,
+      content_body TEXT,
+      content_hl7 TEXT,
+      content_xml TEXT,
+      message_control_id TEXT,
+      ack_status TEXT,
+      ack_at INTEGER,
+      related_state_transition TEXT,
+      created_at INTEGER NOT NULL
+    );
   `);
 
   return { db: drizzle(sqlite, { schema }) };

@@ -81,6 +81,36 @@ export const workflowEvents = sqliteTable(
   }),
 );
 
+// ── Referral Message Thread ─────────────────────────────────────────────────
+
+export const referralMessages = sqliteTable(
+  'referral_messages',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    referralId: integer('referral_id')
+      .references(() => referrals.id)
+      .notNull(),
+    direction: text('direction').notNull(), // 'inbound' | 'outbound'
+    messageType: text('message_type').notNull(), // ReferralCCDA, MDN, RRI, SIU, InterimUpdate, ConsultNote, ConsultRequest, NoShowNotification, InfoRequest, InfoReply, ACK
+    subject: text('subject'),
+    summary: text('summary').notNull(), // human-readable one-liner
+    senderAddress: text('sender_address'),
+    recipientAddress: text('recipient_address'),
+    contentBody: text('content_body'), // plain-text email body
+    contentHl7: text('content_hl7'), // raw HL7 message body
+    contentXml: text('content_xml'), // C-CDA XML content
+    messageControlId: text('message_control_id'), // HL7 MSH-10 for ACK correlation
+    ackStatus: text('ack_status'), // 'Pending' | 'Acknowledged' | null (inbound)
+    ackAt: integer('ack_at', { mode: 'timestamp' }),
+    relatedStateTransition: text('related_state_transition'), // e.g. 'Acknowledged->Accepted'
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    referralIdx: index('idx_referral_messages_referral').on(table.referralId, table.createdAt),
+    controlIdIdx: index('idx_referral_messages_control_id').on(table.messageControlId),
+  }),
+);
+
 // ── Claims Attachment Workflow (X12N 277/275) ─────────────────────────────────
 
 export const attachmentRequests = sqliteTable('attachment_requests', {

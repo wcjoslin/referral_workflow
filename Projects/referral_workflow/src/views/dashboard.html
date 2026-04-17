@@ -331,6 +331,30 @@
 
     const actionHtml = renderActionSection(referral, resources);
 
+    // Recent activity from message thread
+    const recentMsgs = data.recentMessages || [];
+    let activityHtml = '';
+    if (recentMsgs.length > 0) {
+      const msgRows = recentMsgs.map(function(m) {
+        const dirClass = m.direction === 'inbound' ? 'badge-ok' : 'badge-warn';
+        const dirLabel = m.direction === 'inbound' ? 'IN' : 'OUT';
+        const ts = typeof m.createdAt === 'number' ? new Date(m.createdAt * 1000) : new Date(m.createdAt);
+        const timeStr = ts.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        let ackHtml = '';
+        if (m.ackStatus && m.direction === 'outbound') {
+          const ackClass = m.ackStatus === 'Acknowledged' ? 'badge-ok' : 'badge-warn';
+          ackHtml = '<span class="badge ' + ackClass + '" style="margin-left:6px;font-size:0.65rem;">' + esc(m.ackStatus) + '</span>';
+        }
+        return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--color-border);font-size:0.82rem;">' +
+          '<span class="badge ' + dirClass + '" style="font-size:0.65rem;">' + dirLabel + '</span>' +
+          '<span style="flex:1;color:var(--color-text-muted);">' + esc(m.summary) + '</span>' +
+          ackHtml +
+          '<span style="color:#999;font-size:0.72rem;white-space:nowrap;">' + timeStr + '</span>' +
+          '</div>';
+      }).join('');
+      activityHtml = '<div class="preview-card-full"><h4>Recent Activity <a href="/referrals/' + referral.id + '/review" style="font-size:0.72rem;font-weight:400;color:#0d6efd;text-decoration:none;margin-left:8px;">View full thread \u2192</a></h4>' + msgRows + '</div>';
+    }
+
     return `<div class="preview-panel">
       ${headerHtml}
       <div class="preview-grid">
@@ -340,6 +364,7 @@
         ${routingCard}
       </div>
       ${clinicalHtml}
+      ${activityHtml}
       ${actionHtml}
     </div>`;
   }
