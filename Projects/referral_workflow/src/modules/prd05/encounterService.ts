@@ -17,6 +17,7 @@ import { autoAck } from '../prd06/mockReferrer';
 import { evaluateSkills } from '../prd09/skillEvaluator';
 import { executeSkillAction } from '../prd09/skillActions';
 import { emitEvent } from '../analytics/eventService';
+import { recordThreadMessage } from '../messaging/threadService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -110,6 +111,20 @@ export async function markEncounterComplete(opts: EncounterOptions): Promise<voi
       messageType: 'InterimUpdate',
       status: 'Pending',
       sentAt: new Date(),
+    });
+
+    await recordThreadMessage({
+      referralId,
+      direction: 'outbound',
+      messageType: 'InterimUpdate',
+      subject: `Interim Update — Referral #${referralId}`,
+      summary: `Interim update sent — patient ${patientName} seen on ${encounterDate}`,
+      senderAddress: config.receiving.directAddress,
+      recipientAddress: referral.referrerAddress,
+      contentBody: messageText,
+      messageControlId,
+      ackStatus: 'Pending',
+      relatedStateTransition: 'Scheduled->Encounter',
     });
 
     void emitEvent({

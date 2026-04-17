@@ -71,6 +71,13 @@
       "when": 1775874384308,
       "tag": "0009_secret_starhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1776361735374,
+      "tag": "0010_curved_matthew_murdock",
+      "breakpoints": true
     }
   ]
 }

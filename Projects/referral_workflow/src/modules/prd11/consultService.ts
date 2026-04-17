@@ -16,6 +16,7 @@ import { referrals, patients, outboundMessages } from '../../db/schema';
 import { config } from '../../config';
 import { transition, ReferralState, InvalidStateTransitionError } from '../../state/referralStateMachine';
 import { emitEvent } from '../analytics/eventService';
+import { recordThreadMessage } from '../messaging/threadService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -97,6 +98,20 @@ export async function markConsult(referralId: number): Promise<void> {
     messageType: 'ConsultRequest',
     status: 'Pending',
     sentAt: new Date(),
+  });
+
+  await recordThreadMessage({
+    referralId,
+    direction: 'outbound',
+    messageType: 'ConsultRequest',
+    subject: `Consultation Request — Referral #${referralId}`,
+    summary: `Consultation request sent to referring provider`,
+    senderAddress: config.receiving.directAddress,
+    recipientAddress: referral.referrerAddress,
+    contentBody: messageText,
+    messageControlId,
+    ackStatus: 'Pending',
+    relatedStateTransition: 'Encounter->Consult',
   });
 
   void emitEvent({

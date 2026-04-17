@@ -130,6 +130,37 @@
     .fhir-med-list li:last-child { border-bottom: none; }
     .manual-meds-input { width: 100%; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 5px; font-size: 0.92rem; font-family: inherit; resize: vertical; margin-bottom: 8px; }
     .enrich-divider { text-align: center; font-size: 0.82rem; color: var(--color-text-muted); margin: 6px 0; }
+
+    /* Message Thread */
+    .thread-container { display: flex; flex-direction: column; gap: 0; }
+    .thread-count { font-size: 0.75rem; font-weight: 400; color: var(--color-text-muted); margin-left: 6px; }
+    .thread-entry { border-left: 4px solid var(--color-border); padding: 12px 16px; cursor: pointer; transition: background 0.15s; }
+    .thread-entry:not(:last-child) { border-bottom: 1px solid var(--color-border); }
+    .thread-entry:hover { background: #f8f9fa; }
+    .thread-entry.inbound { border-left-color: #198754; }
+    .thread-entry.outbound { border-left-color: #0d6efd; }
+    .thread-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .thread-arrow { font-size: 0.7rem; color: var(--color-text-muted); transition: transform 0.15s; min-width: 12px; }
+    .thread-entry.expanded .thread-arrow { transform: rotate(90deg); }
+    .thread-dir-badge { font-size: 0.68rem; font-weight: 700; padding: 1px 6px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .thread-dir-badge.inbound { background: #d1e7dd; color: #0a3622; }
+    .thread-dir-badge.outbound { background: #cfe2ff; color: #084298; }
+    .thread-type { font-size: 0.82rem; font-weight: 600; color: var(--color-text); }
+    .thread-time { font-size: 0.75rem; color: #999; margin-left: auto; white-space: nowrap; }
+    .thread-ack { font-size: 0.68rem; font-weight: 600; padding: 1px 6px; border-radius: 3px; }
+    .thread-ack.acked { background: #d1e7dd; color: #0a3622; }
+    .thread-ack.pending { background: #fff3cd; color: #664d03; }
+    .thread-summary { font-size: 0.85rem; color: var(--color-text-muted); margin-top: 4px; }
+    .thread-body { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--color-border); }
+    .thread-entry.expanded .thread-body { display: block; }
+    .thread-body-text { font-size: 0.88rem; white-space: pre-wrap; font-family: system-ui, sans-serif; line-height: 1.6; background: #f8f9fa; padding: 12px; border-radius: 6px; margin-bottom: 8px; max-height: 300px; overflow-y: auto; }
+    .thread-body-hl7 { font-family: 'Courier New', monospace; font-size: 0.78rem; white-space: pre-wrap; background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; max-height: 300px; overflow-y: auto; margin-bottom: 8px; }
+    .thread-content-btns { display: flex; gap: 8px; margin-top: 8px; }
+    .thread-content-btn { font-size: 0.78rem; padding: 4px 12px; border: 1px solid var(--color-border); border-radius: 4px; background: #fff; cursor: pointer; color: #0d6efd; font-weight: 600; }
+    .thread-content-btn:hover { background: #e7f1ff; }
+    .thread-content-btn.active { background: #0d6efd; color: #fff; border-color: #0d6efd; }
+    .thread-no-content { font-size: 0.82rem; color: #999; font-style: italic; }
+    .thread-loading { text-align: center; padding: 20px; color: var(--color-text-muted); font-size: 0.88rem; }
   </style>
 </head>
 <body>
@@ -137,11 +168,17 @@
 <script>/*__PAGE_DATA__*/</script>
 <div class="review-grid">
   <div class="review-left">
-    <h1>Referral Review <span class="state-badge" id="stateBadge"></span> <a href="/messages" style="font-size:0.78rem;font-weight:400;color:#0d6efd;text-decoration:none;margin-left:12px;">Message History →</a></h1>
+    <h1>Referral Review <span class="state-badge" id="stateBadge"></span></h1>
 
     <div class="card">
       <h2>Referral Journey</h2>
       <div class="timeline" id="timeline"></div>
+    </div>
+
+    <div class="card" id="messageThreadCard">
+      <h2>Message Thread <span class="thread-count" id="threadCount"></span></h2>
+      <div id="threadLoading" class="thread-loading">Loading message thread...</div>
+      <div id="threadContainer" class="thread-container" style="display:none;"></div>
     </div>
 
     <div class="card">
@@ -930,6 +967,259 @@
       showStatusFor('manualMedStatus', 'Network error — please try again.', 'error');
     }
   }
+
+  // ── Message Thread ──────────────────────────────────────────────────────────
+  (async function loadThread() {
+    var threadContainer = document.getElementById('threadContainer');
+    var threadLoading = document.getElementById('threadLoading');
+    var threadCount = document.getElementById('threadCount');
+    var contentCache = {};
+
+    try {
+      var res = await fetch('/api/referrals/' + referralId + '/thread');
+      if (!res.ok) throw new Error('Failed to load thread');
+      var json = await res.json();
+      var thread = json.thread || [];
+
+      threadLoading.style.display = 'none';
+      threadContainer.style.display = 'flex';
+      threadCount.textContent = '(' + thread.length + ')';
+
+      if (thread.length === 0) {
+        threadContainer.innerHTML = '<div class="thread-no-content">No messages recorded for this referral.</div>';
+        return;
+      }
+
+      // Also enrich the timeline with message annotations
+      enrichTimeline(thread);
+
+      thread.forEach(function(msg) {
+        var entry = document.createElement('div');
+        entry.className = 'thread-entry ' + msg.direction;
+
+        // Header row
+        var header = document.createElement('div');
+        header.className = 'thread-header';
+
+        var arrow = document.createElement('span');
+        arrow.className = 'thread-arrow';
+        arrow.textContent = '\u25B6';
+        header.appendChild(arrow);
+
+        var dirBadge = document.createElement('span');
+        dirBadge.className = 'thread-dir-badge ' + msg.direction;
+        dirBadge.textContent = msg.direction === 'inbound' ? 'IN' : 'OUT';
+        header.appendChild(dirBadge);
+
+        var typeName = document.createElement('span');
+        typeName.className = 'thread-type';
+        typeName.textContent = formatMessageType(msg.messageType);
+        header.appendChild(typeName);
+
+        if (msg.ackStatus && msg.direction === 'outbound') {
+          var ackBadge = document.createElement('span');
+          ackBadge.className = 'thread-ack ' + (msg.ackStatus === 'Acknowledged' ? 'acked' : 'pending');
+          ackBadge.textContent = msg.ackStatus === 'Acknowledged' ? '\u2713 ACK\'d' : '\u23F3 Pending';
+          header.appendChild(ackBadge);
+        }
+
+        var time = document.createElement('span');
+        time.className = 'thread-time';
+        var ts = typeof msg.createdAt === 'number' ? new Date(msg.createdAt * 1000) : new Date(msg.createdAt);
+        time.textContent = ts.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        header.appendChild(time);
+
+        entry.appendChild(header);
+
+        // Summary
+        var summary = document.createElement('div');
+        summary.className = 'thread-summary';
+        summary.textContent = msg.summary;
+        entry.appendChild(summary);
+
+        // Expandable body
+        var body = document.createElement('div');
+        body.className = 'thread-body';
+        body.id = 'thread-body-' + msg.id;
+        entry.appendChild(body);
+
+        // Click to expand/collapse
+        entry.addEventListener('click', function(e) {
+          if (e.target.closest('.thread-content-btn')) return;
+          entry.classList.toggle('expanded');
+          if (entry.classList.contains('expanded') && !body.dataset.loaded) {
+            loadThreadContent(msg, body);
+          }
+        });
+
+        threadContainer.appendChild(entry);
+      });
+    } catch (err) {
+      threadLoading.textContent = 'Failed to load message thread.';
+      console.error('[Thread]', err);
+    }
+
+    async function loadThreadContent(msg, bodyEl) {
+      if (!msg.hasContent) {
+        bodyEl.innerHTML = '<div class="thread-no-content">Content not recorded for this message.</div>';
+        bodyEl.dataset.loaded = '1';
+        return;
+      }
+
+      bodyEl.innerHTML = '<div class="thread-loading" style="padding:8px;">Loading...</div>';
+
+      if (contentCache[msg.id]) {
+        renderContent(contentCache[msg.id], msg, bodyEl);
+        return;
+      }
+
+      try {
+        var res = await fetch('/api/referrals/' + referralId + '/thread/' + msg.id + '/content');
+        if (!res.ok) throw new Error('Failed');
+        var content = await res.json();
+        contentCache[msg.id] = content;
+        renderContent(content, msg, bodyEl);
+      } catch {
+        bodyEl.innerHTML = '<div class="thread-no-content">Failed to load content.</div>';
+        bodyEl.dataset.loaded = '1';
+      }
+    }
+
+    function renderContent(content, msg, bodyEl) {
+      bodyEl.innerHTML = '';
+      bodyEl.dataset.loaded = '1';
+
+      var hasBody = !!content.contentBody;
+      var hasHl7 = !!content.contentHl7;
+      var hasXml = !!content.contentXml;
+
+      if (!hasBody && !hasHl7 && !hasXml) {
+        bodyEl.innerHTML = '<div class="thread-no-content">Content not recorded for this message.</div>';
+        return;
+      }
+
+      // Content area that switches between views
+      var contentArea = document.createElement('div');
+      contentArea.id = 'thread-content-area-' + msg.id;
+      bodyEl.appendChild(contentArea);
+
+      // Buttons row
+      var btns = document.createElement('div');
+      btns.className = 'thread-content-btns';
+      bodyEl.appendChild(btns);
+
+      var views = [];
+      if (hasBody) views.push({ label: 'Message', key: 'body' });
+      if (hasHl7) views.push({ label: 'HL7', key: 'hl7' });
+      if (hasXml) views.push({ label: 'C-CDA XML', key: 'xml' });
+
+      function showView(key) {
+        contentArea.innerHTML = '';
+        btns.querySelectorAll('.thread-content-btn').forEach(function(b) {
+          b.classList.toggle('active', b.dataset.key === key);
+        });
+        if (key === 'body' && hasBody) {
+          var pre = document.createElement('div');
+          pre.className = 'thread-body-text';
+          pre.textContent = content.contentBody;
+          contentArea.appendChild(pre);
+        } else if (key === 'hl7' && hasHl7) {
+          var pre = document.createElement('div');
+          pre.className = 'thread-body-hl7';
+          pre.textContent = content.contentHl7;
+          contentArea.appendChild(pre);
+        } else if (key === 'xml' && hasXml) {
+          var pre = document.createElement('div');
+          pre.className = 'thread-body-hl7';
+          pre.textContent = content.contentXml;
+          contentArea.appendChild(pre);
+        }
+      }
+
+      views.forEach(function(v) {
+        var btn = document.createElement('button');
+        btn.className = 'thread-content-btn';
+        btn.dataset.key = v.key;
+        btn.textContent = v.label;
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          showView(v.key);
+        });
+        btns.appendChild(btn);
+      });
+
+      // Show first view by default
+      if (views.length > 0) showView(views[0].key);
+    }
+
+    function formatMessageType(type) {
+      var map = {
+        ReferralCCDA: 'Referral C-CDA',
+        RRI: 'RRI Response',
+        SIU: 'Scheduling Notice',
+        InterimUpdate: 'Interim Update',
+        ConsultNote: 'Consult Note',
+        ConsultRequest: 'Consultation Request',
+        NoShowNotification: 'No-Show Notice',
+        InfoRequest: 'Info Request',
+        InfoReply: 'Info Reply',
+        ACK: 'Acknowledgment',
+        MDN: 'Delivery Notification',
+      };
+      return map[type] || type;
+    }
+
+    function enrichTimeline(thread) {
+      // Map messageType to timeline state
+      var typeToState = {
+        ReferralCCDA: 'Received',
+        RRI: null, // handled specially
+        SIU: 'Scheduled',
+        NoShowNotification: 'No-Show',
+        InterimUpdate: 'Encounter',
+        ConsultRequest: 'Consult',
+        ConsultNote: 'Closed',
+        ACK: null, // could be Closed-Confirmed
+      };
+
+      var stateMessages = {};
+      thread.forEach(function(msg) {
+        var targetState = typeToState[msg.messageType];
+        if (msg.messageType === 'RRI') {
+          targetState = (msg.summary || '').indexOf('Decline') >= 0 ? 'Declined' : 'Accepted';
+        }
+        if (msg.messageType === 'ACK' && msg.relatedStateTransition === 'Closed->Closed-Confirmed') {
+          targetState = 'Closed-Confirmed';
+        }
+        if (targetState && !stateMessages[targetState]) {
+          stateMessages[targetState] = msg.summary;
+        }
+      });
+
+      // Add message annotations to timeline steps
+      var steps = document.querySelectorAll('#timeline .tl-step');
+      steps.forEach(function(step) {
+        var labelEl = step.querySelector('.tl-label');
+        if (!labelEl) return;
+        var label = labelEl.textContent.trim();
+        // Map label back to state key
+        var labelToState = { "Received": "Received", "Ack'd": "Acknowledged", "Accepted": "Accepted", "Scheduled": "Scheduled", "No-Show": "No-Show", "Encounter": "Encounter", "Consult": "Consult", "Closed": "Closed", "Confirmed": "Closed-Confirmed", "Declined": "Declined" };
+        var state = labelToState[label];
+        if (state && stateMessages[state]) {
+          var msgEl = document.createElement('div');
+          msgEl.className = 'tl-time';
+          msgEl.style.fontSize = '0.6rem';
+          msgEl.style.maxWidth = '100px';
+          msgEl.style.overflow = 'hidden';
+          msgEl.style.textOverflow = 'ellipsis';
+          msgEl.style.whiteSpace = 'nowrap';
+          msgEl.title = stateMessages[state];
+          msgEl.textContent = stateMessages[state];
+          step.appendChild(msgEl);
+        }
+      });
+    }
+  })();
 </script>
 </body>
 </html>

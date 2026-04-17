@@ -14,6 +14,7 @@ import { referrals, patients, outboundMessages } from '../../db/schema';
 import { config } from '../../config';
 import { transition, ReferralState } from '../../state/referralStateMachine';
 import { emitEvent } from '../analytics/eventService';
+import { recordThreadMessage } from '../messaging/threadService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -106,6 +107,20 @@ export async function markNoShow(referralId: number): Promise<void> {
     messageType: 'NoShowNotification',
     status: 'Pending',
     sentAt: new Date(),
+  });
+
+  await recordThreadMessage({
+    referralId,
+    direction: 'outbound',
+    messageType: 'NoShowNotification',
+    subject: `No-Show Notification — Referral #${referralId}`,
+    summary: `No-show notification sent for missed appointment on ${originalDate}`,
+    senderAddress: config.receiving.directAddress,
+    recipientAddress: referral.referrerAddress,
+    contentBody: messageText,
+    messageControlId,
+    ackStatus: 'Pending',
+    relatedStateTransition: 'Scheduled->No-Show',
   });
 
   void emitEvent({

@@ -17,6 +17,7 @@ import { structureNote } from './geminiConsultNote';
 import { buildConsultNoteCcda } from './ccdaBuilder';
 import { autoAck } from '../prd06/mockReferrer';
 import { emitEvent } from '../analytics/eventService';
+import { recordThreadMessage } from '../messaging/threadService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -113,6 +114,21 @@ export async function generateAndSend(opts: ConsultNoteOptions): Promise<void> {
     messageType: 'ConsultNote',
     status: 'Pending',
     sentAt: new Date(),
+  });
+
+  await recordThreadMessage({
+    referralId,
+    direction: 'outbound',
+    messageType: 'ConsultNote',
+    subject: `Consultation Note — Referral #${referralId} — ${patientName.lastName}, ${patientName.firstName}`,
+    summary: `Consult note with C-CDA sent to ${referral.referrerAddress}`,
+    senderAddress: config.receiving.directAddress,
+    recipientAddress: referral.referrerAddress,
+    contentBody: `Consultation Note for ${patientName.firstName} ${patientName.lastName} (Referral #${referralId}). C-CDA document attached.`,
+    contentXml: ccdaXml,
+    messageControlId,
+    ackStatus: 'Pending',
+    relatedStateTransition: 'Encounter->Closed',
   });
 
   // 7. Update state to Closed

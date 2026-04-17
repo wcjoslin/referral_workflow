@@ -24,6 +24,7 @@ import { executeSkillAction } from '../prd09/skillActions';
 import { randomUUID } from 'crypto';
 import { eq } from 'drizzle-orm';
 import { emitEvent } from '../analytics/eventService';
+import { recordThreadMessage } from '../messaging/threadService';
 
 // In-memory store for routing assessments, keyed by referralId.
 // Cleared on process restart — acceptable for PoC.
@@ -123,6 +124,19 @@ export async function ingestReferral(processed: ProcessedMessage): Promise<numbe
     actor: 'system',
     metadata: { sourceMessageId: extended.sourceMessageId },
   }).catch((err) => console.error('[EventService]', err));
+
+  // Record inbound referral in message thread
+  await recordThreadMessage({
+    referralId: referral.id,
+    direction: 'inbound',
+    messageType: 'ReferralCCDA',
+    subject: `Inbound Referral — ${extended.patient.lastName}, ${extended.patient.firstName}`,
+    summary: `Inbound referral received from ${processed.referrerAddress}`,
+    senderAddress: processed.referrerAddress,
+    recipientAddress: config.receiving.directAddress,
+    contentXml: rawCdaXml,
+    relatedStateTransition: 'Received->Acknowledged',
+  });
 
   console.log(`[ReferralService] Referral #${referral.id} created and acknowledged for patient ${extended.patient.firstName} ${extended.patient.lastName}`);
 

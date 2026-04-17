@@ -15,6 +15,7 @@ import { config } from '../../config';
 import { transition, ReferralState } from '../../state/referralStateMachine';
 import { autoAck } from '../prd06/mockReferrer';
 import { emitEvent } from '../analytics/eventService';
+import { recordThreadMessage } from '../messaging/threadService';
 
 /**
  * Send an info request to the referring provider and transition to Pending-Information.
@@ -60,6 +61,20 @@ export async function sendInfoRequest(
     messageType: 'InfoRequest',
     status: 'Pending',
     sentAt: new Date(),
+  });
+
+  await recordThreadMessage({
+    referralId,
+    direction: 'outbound',
+    messageType: 'InfoRequest',
+    subject: `Information Request — Referral #${referralId}`,
+    summary: `Information request: ${explanation.slice(0, 120)}${explanation.length > 120 ? '...' : ''}`,
+    senderAddress: config.receiving.directAddress,
+    recipientAddress: referral.referrerAddress,
+    contentBody: emailBody,
+    messageControlId,
+    ackStatus: 'Pending',
+    relatedStateTransition: `${currentState}->Pending-Information`,
   });
 
   // Update referral state

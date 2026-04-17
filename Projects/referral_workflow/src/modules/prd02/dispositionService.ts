@@ -25,6 +25,7 @@ import { evaluateSkills } from '../prd09/skillEvaluator';
 import { executeSkillAction } from '../prd09/skillActions';
 import { randomUUID } from 'crypto';
 import { emitEvent } from '../analytics/eventService';
+import { recordThreadMessage } from '../messaging/threadService';
 
 export class ReferralNotFoundError extends Error {
   constructor(referralId: number) {
@@ -187,6 +188,22 @@ export async function sendRriMessage(
       messageType: 'RRI',
       status: 'Pending',
       sentAt: new Date(),
+    });
+
+    const disposition = acceptCode === 'AA' ? 'Accept' : 'Decline';
+    await recordThreadMessage({
+      referralId,
+      direction: 'outbound',
+      messageType: 'RRI',
+      subject,
+      summary: `RRI ${disposition} sent to ${toAddress}`,
+      senderAddress: config.receiving.directAddress,
+      recipientAddress: toAddress,
+      contentBody: body,
+      contentHl7: rriMessage,
+      messageControlId,
+      ackStatus: 'Pending',
+      relatedStateTransition: acceptCode === 'AA' ? 'Acknowledged->Accepted' : 'Acknowledged->Declined',
     });
 
     // PRD-06: auto-ACK from mock referrer (non-blocking)

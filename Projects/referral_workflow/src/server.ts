@@ -28,7 +28,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { eq, inArray } from 'drizzle-orm';
 import { db } from './db';
-import { referrals, patients, outboundMessages, attachmentRequests, attachmentResponses, priorAuthRequests } from './db/schema';
+import { referrals, patients, outboundMessages, attachmentRequests, attachmentResponses, priorAuthRequests, referralMessages } from './db/schema';
 import { accept, decline, ReferralNotFoundError as DispositionNotFoundError } from './modules/prd02/dispositionService';
 import { getCachedAssessment } from './modules/prd02/referralService';
 import { scheduleReferral, ReferralNotFoundError, SchedulingConflictError } from './modules/prd03/schedulingService';
@@ -110,7 +110,6 @@ const NAV_HTML = `<style>
 <nav style="background:var(--color-nav-bg);padding:12px 24px;display:flex;gap:24px;align-items:center;position:sticky;top:0;z-index:100;box-shadow:0 2px 4px rgba(0,0,0,0.4);">
   <span style="color:#fff;font-weight:700;font-size:0.95rem;letter-spacing:0.02em;">360X Referral</span>
   <a href="/" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;margin-left:8px;">Home</a>
-  <a href="/messages" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Inbox</a>
   <a href="/overview" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Overview</a>
   <a href="/claims" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Claims</a>
   <a href="/prior-auth" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Prior Auth</a>
@@ -441,6 +440,90 @@ app.get('/api/referrals/:id/preview', async (req: Request, res: Response, next: 
           }
         : null,
       resources: getResources(),
+      recentMessages: (await db
+        .select({
+          id: referralMessages.id,
+          direction: referralMessages.direction,
+          messageType: referralMessages.messageType,
+          summary: referralMessages.summary,
+          createdAt: referralMessages.createdAt,
+          ackStatus: referralMessages.ackStatus,
+        })
+        .from(referralMessages)
+        .where(eq(referralMessages.referralId, referralId))
+        .orderBy(desc(referralMessages.createdAt))
+        .limit(3)).reverse(),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Message Thread API ────────────────────────────────────────────────────────
+
+app.get('/api/referrals/:id/thread', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idParam = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(idParam, 10);
+    if (isNaN(referralId)) {
+      res.status(400).json({ error: 'Invalid referral ID' });
+      return;
+    }
+
+    const messages = await db
+      .select()
+      .from(referralMessages)
+      .where(eq(referralMessages.referralId, referralId))
+      .orderBy(referralMessages.createdAt);
+
+    res.json({
+      thread: messages.map((m) => ({
+        id: m.id,
+        direction: m.direction,
+        messageType: m.messageType,
+        subject: m.subject,
+        summary: m.summary,
+        senderAddress: m.senderAddress,
+        recipientAddress: m.recipientAddress,
+        createdAt: m.createdAt,
+        ackStatus: m.ackStatus,
+        relatedStateTransition: m.relatedStateTransition,
+        hasContent: !!(m.contentBody || m.contentHl7 || m.contentXml),
+        hasXml: !!m.contentXml,
+        hasHl7: !!m.contentHl7,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/referrals/:id/thread/:messageId/content', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const messageId = parseInt(Array.isArray(req.params.messageId) ? req.params.messageId[0] : req.params.messageId, 10);
+    if (isNaN(messageId)) {
+      res.status(400).json({ error: 'Invalid message ID' });
+      return;
+    }
+
+    const [message] = await db
+      .select({
+        contentBody: referralMessages.contentBody,
+        contentHl7: referralMessages.contentHl7,
+        contentXml: referralMessages.contentXml,
+      })
+      .from(referralMessages)
+      .where(eq(referralMessages.id, messageId));
+
+    if (!message) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+
+    res.json({
+      contentBody: message.contentBody,
+      contentHl7: message.contentHl7,
+      contentXml: message.contentXml,
     });
   } catch (err) {
     next(err);
