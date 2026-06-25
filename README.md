@@ -1,74 +1,225 @@
-To create a proof of concept (PoC) for the **360X Closed Loop Referral** process, you need to bridge the gap between traditional healthcare interoperability standards (Direct Secure Messaging, HL7 V2, and C-CDA) and modern agentic AI.
+# 360X Closed Loop Referral — Healthcare Workflow Simulation
 
-The 360X protocol is essentially a **state machine** where two organizations exchange status updates until a referral is "closed" by a final clinical report.
+A production-grade simulation of the complete 360X closed-loop referral protocol, implementing authentic healthcare provider-to-provider workflows across HL7 V2, C-CDA, Direct Secure Messaging, FHIR, and X12 EDI standards. Built to explore how agentic AI can be layered onto deterministic clinical workflows without replacing clinician oversight.
 
------
+---
 
-## 1\. Step-by-Step 360X Workflow
+## What This Is
 
-The 360X process uses **Direct Secure Messaging** as the transport layer. The "intelligence" of the loop is maintained through specific HL7 V2 messages or C-CDA documents attached to those messages.
+The 360X protocol defines a state machine where a referring provider and a receiving specialist exchange structured messages until a referral is formally "closed" by a final consult report. This project implements the full lifecycle end-to-end — from initial C-CDA referral intake through prior authorization, scheduling, encounter, consult note generation, and ACK-based loop closure.
 
-| Step | Actor | Action | Technical Payload |
-| :--- | :--- | :--- | :--- |
-| **1. Initiation** | Referring Provider | Sends referral request. | **C-CDA** (Referral Note) + **HL7 V2 REF^I12** |
-| **2. Receipt** | Receiving Provider | Confirms message delivery. | **Direct MDN** (Message Delivery Notification) |
-| **3. Disposition** | Receiving Provider | Accepts or declines the referral. | **HL7 V2 RRI^I12** (Accept/Decline status) |
-| **4. Scheduling** | Receiving Provider | Notifies that the patient is scheduled. | **HL7 V2 SIU^S12** (Appointment Scheduled) |
-| **5. Encounter** | Receiving Provider | Patient is seen; interim updates sent. | **Direct Message** (Optional) |
-| **6. Closing** | Receiving Provider | Sends final consult report. | **C-CDA** (Consult Note) |
-| **7. Completion**| Referring Provider | Acknowledges report receipt. | **HL7 V2 ACK** (Closes the loop) |
+**Core thesis:** Healthcare workflow automation requires a hybrid architecture. Most steps are deterministic (state validation, message routing, standards compliance). A small number of steps require clinical reasoning — that's where AI is applied, surgically.
 
------
+---
 
-## 2\. Open Source C-CDA Repositories
+## Architecture
 
-To simulate a patient care scenario, you need high-fidelity sample documents.
+### State Machine
 
-  * **[HL7 C-CDA Examples](https://github.com/HL7/C-CDA-Examples):** The official repository for C-CDA R2.1 samples. Look in the `/Referrals - Planned and Completed` folder for your specific use case.
-  * **[Smart Health IT / SyntheticMass](https://synthea.mitre.org/):** While primarily FHIR-based, the **Synthea** tool can generate thousands of "synthetic patients" with full histories in C-CDA format. This is the best tool for "simulating a scenario" from scratch.
-  * **[CHB Sample C-CDAs](https://github.com/chb/sample_ccdas):** A collection of samples from various EHR vendors (Epic, Cerner, Allscripts) to test your parser's resilience against "real-world" formatting differences.
+All referrals follow a strictly enforced lifecycle. No ad-hoc state updates — every transition runs through `referralStateMachine.ts`.
 
------
+```
+Received
+  └─► Acknowledged
+        ├─► Accepted ──────────────────────────────────────────────────────────────┐
+        ├─► Declined (terminal)                                                    │
+        └─► Pending-Information                                                    │
+              ├─► Acknowledged (info received)                                     │
+              └─► Declined (timeout, terminal)                                     │
+                                                                                   ▼
+                                                                              Scheduled
+                                                                              ├─► Encounter
+                                                                              │     ├─► Consult ─► Closed
+                                                                              │     └─► Closed
+                                                                              └─► No-Show ─► Scheduled
+                                                                                        ↓
+                                                                              Closed-Confirmed (terminal)
+```
 
-## 3\. Libraries for Ingestion, Parsing, and Logic
+### AI Integration Points
 
-For an **Agentic AI** approach, you want libraries that convert XML into clean JSON for the LLM to process.
+AI is used in exactly three places, each chosen because deterministic logic is insufficient:
 
-### **Parsing & Ingestion**
+| Module | Model | Task |
+|---|---|---|
+| PRD-02 Disposition | Claude (Anthropic SDK) | Validates C-CDA clinical sufficiency — checks for required sections (medications, diagnoses, reason for referral) before accept/decline |
+| PRD-04 Consult Note | Gemini 2.5-Flash | Extracts structured clinical findings from a signed ORU message to generate a C-CDA Consult Note |
+| PRD-09 Skills Engine | Gemini 2.5-Flash (fallback) | Evaluates YAML-defined automation rules against referral data when deterministic scripts can't resolve |
 
-  * **Node.js:** **[@kno2/bluebutton](https://www.google.com/search?q=https://www.npmjs.com/package/%40kno2/bluebutton)** – This is the most active fork of the original BlueButton.js. it converts complex C-CDA XML into a developer-friendly JSON object.
-  * **Python:** **[pyCCDA](https://github.com/MemoirHealth/ccda-parser)** – A lightweight engine to extract demographics and clinical sections (Allergies, Meds, Problems) into Python dictionaries.
-  * **HL7 V2:** **[HAPI HL7v2](https://hapifhir.github.io/hapi-hl7v2/)** (Java) or **[hl7-parser](https://www.google.com/search?q=https://github.com/cleohealth/hl7-parser)** (Python) to handle the status update messages (REF, RRI, SIU).
+All other workflow steps are deterministic TypeScript. No LangGraph, no CrewAI — custom state machine with direct API calls.
 
-### **Agentic Orchestration**
+### Modular PRD Structure
 
-  * **[LangGraph](https://www.langchain.com/langgraph):** Ideal for 360X because it supports **stateful, multi-step cycles**. You can define nodes for "Parse Message," "Check for Errors," and "Formulate Response."
-  * **[CrewAI](https://www.crewai.com/):** You can set up "Specialist Agents" (e.g., a "Referral Intake Agent" that checks for missing insurance info and a "Clinical Summarizer" that ensures the Care Summary matches the Referral Reason).
+Each workflow step is implemented as an isolated module under `src/modules/prd<N>/`. Each module has a trigger, a logic service, a message builder, and mock automation for demo purposes.
 
------
+---
 
-## 4\. Technical Layout for the PoC Application
+## Skills Engine (PRD-09)
 
-### **Layer 1: The Simulator (Transport)**
+The skills engine is a configurable, pluggable rules framework for automating referral disposition decisions. Skills are defined as YAML-frontmatter Markdown files and evaluated against live clinical data at defined trigger points.
 
-Since setting up a full HISP is difficult, use a **Mock Direct Gateway**.
+**Trigger points:** `post-intake`, `post-acceptance`, `encounter-complete`
 
-  * Use a basic **SMTP server** (e.g., [Mailtrap](https://mailtrap.io/) or a local Dockerized Postfix) to mimic the "Push" nature of Direct.
-  * Write a script to wrap your C-CDA/HL7 payloads in an S/MIME-like envelope (or just plain MIME for the PoC).
+**Evaluation tiers:**
+1. **Deterministic script** — TypeScript `check()` function runs first. If it resolves the decision, AI is never called. Confidence = 1.0.
+2. **Gemini fallback** — If the script returns `resolved: false` (e.g., missing payer data), the full SKILL.md + clinical context + facility assets are passed to Gemini 2.5-Flash for evaluation.
+3. **Confidence threshold + conflict resolution** — If multiple skills match, the most restrictive action wins (`auto-decline` > `request-info` > `flag-priority` > `auto-accept`). Matches below the skill's confidence threshold are downgraded to `flag-priority` for manual review.
 
-### **Layer 2: The Agentic Orchestrator (The "Brain")**
+**Example skill (`skills/in-network-accept/SKILL.md`):**
+```yaml
+---
+name: in-network-accept
+description: Auto-accept referrals where the patient's payer is in-network and the referral includes diagnosis codes
+metadata:
+  trigger-point: post-intake
+  action-type: auto-accept
+  confidence-threshold: 0.90
+  priority: 10
+  active: true
+---
+```
 
-1.  **Ingestion:** A listener script polls the "Inbox."
-2.  **Parsing Node:** The agent uses `@kno2/bluebutton` to turn the incoming C-CDA into JSON.
-3.  **Validation Node (AI):** The agent compares the `Reason for Referral` in the C-CDA against your simulated specialty (e.g., Cardiology).
-      * *Error Handling:* If the C-CDA is missing a "Medication List," the AI identifies this and triggers an "Information Request" message instead of an "Acceptance."
-4.  **Logic Node:** Based on the 360X state, the agent generates the next HL7 V2 message (e.g., an RRI^I12 to accept).
+**Adding a new skill:** Drop a directory under `skills/` with a `SKILL.md`. Optionally add a `scripts/check-*.ts` for deterministic evaluation and `assets/*.json` for facility configuration. The skill watcher picks it up at runtime without a restart.
 
-### **Layer 3: The Feedback Loop (Closing)**
+---
 
-  * Simulate a "Consultation" by having the AI generate a **Consult Note C-CDA** based on a prompt: *"Write a specialist summary for a patient with the following lab results..."*
-  * The system "sends" this back to the referring address, updating the local database status to `CLOSED`.
+## Healthcare Standards Implemented
 
-Would you like me to provide a **Python code snippet** using a library like `LangGraph` to handle the "Wait for Appointment" vs "Send Error" logic in this workflow?
+| Standard | Usage |
+|---|---|
+| **HL7 V2 REF^I12** | Inbound referral request |
+| **HL7 V2 RRI^I12** | Accept/decline response |
+| **HL7 V2 SIU^S12** | Appointment scheduling notification |
+| **HL7 V2 ADT** | Patient encounter trigger |
+| **HL7 V2 ORU** | Clinical results (EHR → consult note trigger) |
+| **HL7 V2 ACK** | Loop closure acknowledgment |
+| **C-CDA Referral Note** | Inbound referral document (parsed via `@kno2/bluebutton`) |
+| **C-CDA Consult Note** | Outbound final report (generated via `xmlbuilder2`) |
+| **Direct Secure Messaging** | Transport layer (SMTP/IMAP mock gateway; RFC 3798 MDN) |
+| **FHIR R4** | Optional patient record enrichment (HAPI FHIR) |
+| **X12 277** | Inbound payer claims attachment request |
+| **X12 275** | Outbound claims attachment response |
+| **LOINC** | Document type mapping for claims attachments |
+| **ICD-10** | Diagnosis code validation in skills engine |
 
-The [Official 360X Guide](https://www.google.com/search?q=https://www.youtube.com/watch%3Fv%3D3u_9XU56gP8) provides a deep dive into how DirectTrust manages the trust framework and the technical handshake required for closed-loop referrals.
+---
+
+## Workflow Modules
+
+### Core Referral Lifecycle
+
+| Module | What it does |
+|---|---|
+| **PRD-01** | IMAP polling → C-CDA parsing → MDN delivery notification |
+| **PRD-02** | Claude API validates clinical completeness → Accept/Decline via RRI |
+| **PRD-03** | Calendar slot assignment → SIU scheduling notification |
+| **PRD-04** | ORU triggers Gemini-based note extraction → C-CDA Consult Note generation |
+| **PRD-05** | ADT parsing → Encounter state transition |
+| **PRD-06** | ACK parsing → terminal state closure |
+| **PRD-07** | Overdue ACK detection for referrer-side tracking |
+| **PRD-08** | Optional HAPI FHIR enrichment — merges patient history into clinical data |
+| **PRD-09** | YAML skills engine (see above) |
+| **PRD-11** | No-show handling and specialist-initiated consult states |
+| **PRD-12** | Prior authorization request/response workflow with mock payer API |
+
+### Claims Attachment Workflow (CMS-0053-F)
+
+Separate state machine (`Received → Signed → Sent`) that handles X12 EDI payer requests:
+
+1. File watcher monitors `claims-inbox/` for inbound X12 277 EDI files
+2. Parser extracts LOINC codes from the attachment request
+3. FHIR patient lookup enriches the record
+4. C-CDA documents generated per requested LOINC code
+5. Clinician signs via Express UI
+6. X12 275 response written to `claims-outbox/`
+
+---
+
+## Tech Stack
+
+- **Runtime:** Node.js + TypeScript (strict mode)
+- **Database:** SQLite + Drizzle ORM
+- **UI:** Express + Bootstrap (clinician review interface)
+- **AI:** Anthropic Claude SDK (PRD-02), Google Gemini 2.5-Flash (PRD-04, PRD-09)
+- **HL7/CDA:** `hl7` npm package, `@kno2/bluebutton`, `xmlbuilder2`
+- **EDI:** `node-x12`
+- **Email:** `nodemailer` (SMTP) + `imapflow` (IMAP)
+- **Testing:** Jest, >80% line/function coverage
+
+---
+
+## Getting Started
+
+```bash
+# Install dependencies
+npm install
+
+# Set up environment variables (see .env.example)
+cp .env.example .env
+
+# Run database migrations
+npm run db:migrate
+
+# Seed demo data
+npm run seed
+
+# Start the application
+npm run dev
+# → Express UI at localhost:3001
+# → IMAP monitor polling for inbound referrals
+# → Skills watcher monitoring skills/ directory
+# → EDI watcher monitoring claims-inbox/
+```
+
+### Run the Full Demo
+
+With `npm run dev` running:
+
+1. Visit `localhost:3001` — see the clinician review queue
+2. Mock scripts auto-trigger non-clinician workflow steps (scheduling, encounter, consult note, ACK)
+3. Use the UI to manually accept/decline referrals (PRD-02) or override any step
+
+### Seed Claims Demo
+
+```bash
+npm run seed:claims   # generates 4 X12 277 EDI files in claims-inbox/
+# file watcher picks them up automatically
+```
+
+---
+
+## Project Structure
+
+```
+src/
+├── index.ts                    # Entry point (IMAP monitor, skills watcher, EDI watcher, server)
+├── server.ts                   # Express server + clinician UI
+├── config.ts                   # Centralized env-based config
+├── state/
+│   └── referralStateMachine.ts # Enforced state transitions
+├── db/
+│   └── schema.ts               # Drizzle schema (patients, referrals, skill_executions, claims)
+└── modules/
+    ├── prd01/ – prd12/         # One directory per workflow module
+    └── claims/                 # X12 claims attachment workflow
+
+skills/
+├── in-network-accept/          # SKILL.md + check script + approved-payers.json
+├── payer-network-check/
+└── missing-icd-codes/
+
+claims-inbox/                   # Drop X12 277 EDI files here
+claims-outbox/                  # X12 275 responses written here
+```
+
+---
+
+## Key Design Decisions
+
+**No orchestration framework.** A custom TypeScript state machine enforces transitions rather than LangGraph or CrewAI. This keeps the workflow deterministic, auditable, and independently testable at each step.
+
+**Deterministic-first AI.** Skills evaluate with TypeScript logic before touching Gemini. Claude validates C-CDA completeness rather than making disposition decisions — the clinician still accepts or declines.
+
+**Clinician override at every step.** All AI outputs are stored as suggestions. The Express UI provides manual fallbacks for every automated step.
+
+**Immutable audit trail.** All state transitions and skill evaluations are logged to `workflowEvents` and `skillExecutions` tables with actor, timestamp, and metadata.
