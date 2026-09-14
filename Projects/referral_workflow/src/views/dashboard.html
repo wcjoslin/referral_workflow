@@ -214,7 +214,7 @@
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         previewCache[id] = await resp.json();
       } catch (err) {
-        loadingRow.innerHTML = '<td colspan="7"><div style="padding:16px 20px;color:#842029;font-size:0.88rem;">Failed to load preview. <a href="/referrals/' + id + '/review">Open full view →</a></div></td>';
+        loadingRow.innerHTML = '<td colspan="7"><div style="padding:16px 20px;color:#842029;font-size:0.88rem;">Failed to load preview. <a href="/referrals/' + id + '/review">Open full view →</a> &middot; <a href="/referrals/' + id + '/workspace">Open workspace →</a></div></td>';
         return;
       }
     }
@@ -369,7 +369,8 @@
           '<span style="color:#999;font-size:0.72rem;white-space:nowrap;">' + timeStr + '</span>' +
           '</div>';
       }).join('');
-      activityHtml = '<div class="preview-card-full"><h4>Recent Activity <a href="/referrals/' + referral.id + '/review" style="font-size:0.72rem;font-weight:400;color:#0d6efd;text-decoration:none;margin-left:8px;">View full thread \u2192</a></h4>' + msgRows + '</div>';
+      activityHtml = '<div class="preview-card-full"><h4>Recent Activity <a href="/referrals/' + referral.id + '/review" style="font-size:0.72rem;font-weight:400;color:#0d6efd;text-decoration:none;margin-left:8px;">View full thread \u2192</a>' +
+        '<a href="/referrals/' + referral.id + '/workspace" style="font-size:0.72rem;font-weight:400;color:#009aab;text-decoration:none;margin-left:10px;">Open workspace \u2192</a></h4>' + msgRows + '</div>';
     }
 
     return `<div class="preview-panel">
@@ -649,7 +650,8 @@
         : '';
       return `<tr id="row-${r.id}" class="data-row" onclick="togglePreview(event, ${r.id})">
         <td class="chevron-cell"><span class="chevron">&#9654;</span></td>
-        <td><a class="ref-link" href="/referrals/${r.id}/review" onclick="event.stopPropagation()">#${r.id}</a></td>
+        <td><a class="ref-link" href="/referrals/${r.id}/review" onclick="event.stopPropagation()">#${r.id}</a>
+          <a href="/referrals/${r.id}/workspace" onclick="event.stopPropagation()" title="Open the collaboration workspace" style="display:block;font-size:0.68rem;color:#009aab;text-decoration:none;margin-top:2px;">workspace →</a></td>
         <td>${name} ${priority}</td>
         <td>${deptBadge(r.routingDepartment)}</td>
         <td>${stateBadge(r.state)}${declineLine}</td>

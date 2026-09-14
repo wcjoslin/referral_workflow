@@ -169,6 +169,13 @@
 <div class="review-grid">
   <div class="review-left">
     <h1>Referral Review <span class="state-badge" id="stateBadge"></span></h1>
+    <!-- PRD-19: the only change to this page. It stays the clinical disposition
+         screen; the workspace is the operational surface. -->
+    <div style="margin:-6px 0 14px;font-size:0.82rem;">
+      <a id="workspaceLink" href="#" style="color:#009aab;text-decoration:none;font-weight:600;">
+        Open collaboration workspace &rarr;</a>
+      <span style="color:#6c757d;margin-left:8px;">ownership, next action and internal work status</span>
+    </div>
 
     <div class="card">
       <h2>Referral Journey</h2>
@@ -999,6 +1006,11 @@
   }
 
   // ── Message Thread ──────────────────────────────────────────────────────────
+  (function setWorkspaceLink() {
+    var link = document.getElementById('workspaceLink');
+    if (link) link.href = '/referrals/' + encodeURIComponent(referralId) + '/workspace';
+  })();
+
   (async function loadThread() {
     var threadContainer = document.getElementById('threadContainer');
     var threadLoading = document.getElementById('threadLoading');
