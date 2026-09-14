@@ -108,7 +108,9 @@ only as that event. No forward dependency and no silent loss.
 
 **AC10:** When `referrals.state` reaches `Closed-Confirmed` while the workspace has open internal
 items, the work status becomes `Follow-up-Required` and the external state is untouched. The branch
-is computed inside `proposeWorkStatus()`, not by the caller.  
+is computed inside `proposeWorkStatus()`, not by the caller. In Phase 1 the open-items test is always
+false (see below), so this branch resolves and `Follow-up-Required` is reachable only by a person
+setting it — the branch exists for PRD-28 and PRD-22 to give it a second answer.  
 **AC11:** A workspace in `Follow-up-Required` cannot be archived; the archive attempt returns a clear
 error naming what is still open.  
 **AC12:** A workspace can only be archived from `Resolved`, and archival sets `archived_at` without
@@ -281,7 +283,7 @@ Advisory protocol→work mapping (proposals only, per AC3):
 | `No-Show` | `In-Progress` |
 | `Declined` | `Resolved` |
 | `Closed` | `Waiting-External` |
-| `Closed-Confirmed` | `Resolved`, or `Follow-up-Required` when internal items are open |
+| `Closed-Confirmed` | `Resolved` in Phase 1; `Follow-up-Required` once PRD-28/PRD-22 supply an open item |
 
 **The rule, stated precisely enough to implement.** The first draft said a proposal applies "only
 when the work status has not been manually set since the last protocol event." That is
@@ -337,23 +339,36 @@ Note that `proposeWorkStatus()` no longer takes the proposed status — it deriv
 knows the protocol state it just transitioned to and nothing more, which is what keeps every
 transition site a single line and keeps the mapping in one place.
 
-**`hasOpenInternalItems()` — the Phase-1 definition, spelled out so it is testable on day one.**
-
-In this PRD it is exactly:
+**`hasOpenInternalItems()` — the Phase-1 definition.**
 
 ```
-hasOpenInternalItems(workspace)  ≡  workspace.workStatus !== 'Resolved'
+hasOpenInternalItems(workspace)  ≡  false
 ```
 
-evaluated against the status *before* the closure proposal is applied. Reading the current work
-status to decide what to propose is not circular — the proposal is about the next value, the check is
-about the present one. Concretely: a referral reaching `Closed-Confirmed` while its workspace sits at
-`In-Progress` or `Waiting-Internal` still has work outstanding, so the proposal resolves to
-`Follow-up-Required`; one already at `Resolved` stays `Resolved`.
+Phase 1 has nothing that can *be* an open internal item. The sources are an unresolved
+`workspace_exceptions` row (PRD-28) and an unacknowledged mention (PRD-22), and neither exists yet.
+So the honest Phase-1 answer is false, and `Closed-Confirmed` resolves.
 
-Later PRDs OR additional sources into the same function without changing any caller — an unresolved
-`workspace_exceptions` row (PRD-28), an unacknowledged mention (PRD-22). Each of those PRDs owns
-adding its clause and its test.
+**This replaces the original definition, `workStatus !== 'Resolved'`, which was wrong.** It was
+adopted because it looked concrete and testable on day one. It is both, and still wrong, in a way
+only visible once real data existed:
+
+- Nothing in Phase 1 ever sets `Resolved`, so the test was true for *every* workspace, and every
+  referral reaching `Closed-Confirmed` derived `Follow-up-Required`. On the 100-referral demo seed
+  that was 30 of 100 presenting as needing follow-up.
+- The `Resolved` arm was unreachable. A workspace someone had set to `Resolved` by hand would
+  decline the proposal as `manual` before the branch was ever consulted — so the rule claimed to
+  distinguish two cases while only ever producing one, the wrong one.
+
+The lesson worth keeping: "concrete and testable" is not the same as "correct". A rule phrased over
+the very column it is deciding will pass its unit tests and still describe nothing real.
+
+`Follow-up-Required` remains reachable deliberately — by a person setting it, and by PRD-28/PRD-22
+once they have something to report. It is not reachable from a protocol event alone, which is right:
+closing the loop is not by itself evidence that internal work is outstanding.
+
+When PRD-28 or PRD-22 adds a source that needs a query, give the function an async sibling and OR the
+two together; do not fork the rule.
 
 Migration: `0012_add_referral_workspaces.sql`. Confirmed free after `0011` (PRD-17). The numbers
 quoted in PRD-19 … PRD-30 are indicative only and get assigned when each is implemented.
@@ -396,9 +411,9 @@ values.
   nothing, and emits `workspace.work_status_proposal_declined`
 - `proposeWorkStatus()` declines with `declinedReason: 'protected'` from `Exception` and from
   `Follow-up-Required` even when the flag is false
-- `proposeWorkStatus()` for `Closed-Confirmed` resolves to `Follow-up-Required` when
-  `hasOpenInternalItems()` is true and `Resolved` when it is false — the branch is inside the
-  function, not the caller
+- `proposeWorkStatus()` for `Closed-Confirmed` resolves to `Resolved` in Phase 1, and never derives
+  `Follow-up-Required` from a protocol event alone — the branch is inside the function, not the
+  caller, and gains its second answer with PRD-28/PRD-22
 - `resyncWorkStatus()` clears the flag and applies the current mapping
 - `setWorkStatus()` emits `workspace.work_status_changed` with correct from/to and actor, and sets
   `workStatusIsManual: true`
@@ -472,3 +487,21 @@ rule with the `work_status_is_manual` flag plus `resyncWorkStatus()`, making the
 reachable; gave `hasOpenInternalItems()` a concrete Phase-1 definition; corrected the auto-decline
 behaviour from a forward dependency on PRD-28 to the truth that no workspace exists; moved the
 closure branch inside `proposeWorkStatus()` and gave it an actor; specified backfill derivation.
+
+**Version:** 1.2 — corrections found by implementing, and by running the result against the
+100-referral demo seed rather than only against unit tests:
+
+- **`hasOpenInternalItems()` is `false` in Phase 1**, not `workStatus !== 'Resolved'`. The original
+  definition was true for every workspace, so every referral reaching `Closed-Confirmed` derived
+  `Follow-up-Required` — 30 of 100 seeded referrals — and the `Resolved` arm was unreachable behind
+  the `manual` decline. `Follow-up-Required` is now reachable by a person and by PRD-28/PRD-22, not
+  from a protocol event alone.
+- **Backfill re-derives stale workspaces**, not only missing ones. `seed-full-demo.ts` advances all
+  100 referrals with direct `db.update()` calls, so no proposal reaches their workspaces and every
+  one sat at `Triage`; the original backfill skipped them all as "already present", defeating the
+  derive-don't-default decision it was written to serve. Result is now
+  `{created, updated, skipped}`.
+- **`same-status` is checked before the flags** in the proposal path. A proposal asking for the
+  status a workspace already holds is a no-op whatever else is true of it; reporting it as
+  `protected` claimed a defence that did not happen and spent an audit row saying so. This is what
+  makes a repeated backfill idempotent rather than merely harmless.

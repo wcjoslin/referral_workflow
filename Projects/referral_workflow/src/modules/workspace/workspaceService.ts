@@ -158,15 +158,26 @@ export async function getWorkspaceByReferralId(referralId: number): Promise<Work
 /**
  * Whether this workspace still has internal work outstanding.
  *
- * PHASE-1 DEFINITION, deliberately concrete so it is testable on day one:
- * anything other than `Resolved` counts as open. Evaluated against the status
- * BEFORE a closure proposal is applied — reading the current status to decide
- * what to propose is not circular, because the proposal is about the next value
- * and the check is about the present one.
+ * PHASE-1 DEFINITION: always false, because Phase 1 has nothing that can BE an
+ * open internal item. The sources are an unresolved exception (PRD-28) and an
+ * unacknowledged mention (PRD-22), and neither exists yet.
  *
- * Later PRDs OR additional sources in here without changing any caller:
- * an unresolved `workspace_exceptions` row (PRD-28), an unacknowledged mention
- * (PRD-22). Each of those PRDs owns adding its clause and its test.
+ * This replaces the first definition, `workStatus !== Resolved`, which was
+ * wrong in a way only visible once real data existed. Nothing in Phase 1 ever
+ * sets `Resolved`, so that test was true for every workspace, and every
+ * referral reaching `Closed-Confirmed` derived `Follow-up-Required` — 30 of the
+ * 100 demo referrals did. Worse, the `Resolved` branch was unreachable: a
+ * workspace someone had set to `Resolved` by hand would decline the proposal as
+ * `manual` before the branch was consulted. So the rule claimed to distinguish
+ * two cases and in practice only ever produced one, the wrong one.
+ *
+ * `Follow-up-Required` stays reachable deliberately — by a person setting it,
+ * and by PRD-28/PRD-22 once they have something to report. It is not reachable
+ * from a protocol event alone, which is correct: closing the loop is not by
+ * itself evidence that internal work is outstanding.
+ *
+ * When PRD-28 or PRD-22 adds a source that needs a query, give this function an
+ * async sibling and OR the two in hasOpenInternalItems(); do not fork the rule.
  */
 export async function hasOpenInternalItems(workspaceId: number): Promise<boolean> {
   const workspace = await getWorkspace(workspaceId);
@@ -179,12 +190,12 @@ export async function hasOpenInternalItems(workspaceId: number): Promise<boolean
  * resolveProposedStatus() does not need a second read — and, more importantly,
  * so there is exactly ONE definition of "open" for a later PRD to extend.
  *
- * When PRD-28 or PRD-22 add a source that requires a query, give this function
- * an async sibling and have hasOpenInternalItems() OR the two together; do not
- * fork the rule.
+ * The parameter is unused in Phase 1 and kept on purpose: PRD-28 and PRD-22 add
+ * clauses that read the row, and the signature is what every caller is already
+ * written against.
  */
-function workspaceHasOpenItems(workspace: Workspace): boolean {
-  return workspace.workStatus !== WorkStatus.RESOLVED;
+function workspaceHasOpenItems(_workspace: Workspace): boolean {
+  return false;
 }
 
 // ── Creation ──────────────────────────────────────────────────────────────────
@@ -334,7 +345,9 @@ function resolveProposedStatus(workspace: Workspace, protocolState: ReferralStat
   if (protocolState === ReferralState.CLOSED_CONFIRMED) {
     // The protocol lifecycle has closed. If internal work is still outstanding
     // the workspace stays visible as Follow-up-Required — the external state is
-    // never reopened to represent internal work.
+    // never reopened to represent internal work. In Phase 1 nothing can be
+    // outstanding (see workspaceHasOpenItems), so this resolves; the branch is
+    // kept because PRD-28 and PRD-22 give it a second answer.
     return workspaceHasOpenItems(workspace) ? WorkStatus.FOLLOW_UP_REQUIRED : WorkStatus.RESOLVED;
   }
   return PROTOCOL_WORK_STATUS[protocolState];
@@ -365,10 +378,16 @@ async function applyProposal(
     return { applied: false, workStatus: workspace.workStatus, proposed, declinedReason };
   };
 
+  // 'same-status' is checked FIRST, before the flags. A proposal that asks for
+  // the status the workspace already holds is a no-op whatever else is true of
+  // it — reporting that as 'protected' or 'manual' would claim something was
+  // defended when nothing was, and would spend an audit row doing it. It also
+  // makes a repeated backfill genuinely idempotent rather than merely
+  // harmless.
+  if (workspace.workStatus === proposed) return decline('same-status');
   if (workspace.archivedAt !== null) return decline('archived');
   if (PROPOSAL_PROTECTED.includes(workspace.workStatus)) return decline('protected');
   if (workspace.workStatusIsManual) return decline('manual');
-  if (workspace.workStatus === proposed) return decline('same-status');
 
   // The mapping can propose a status the machine disallows from here (for
   // instance a late protocol event against a Resolved workspace). Treat that as
@@ -498,17 +517,39 @@ export async function archiveWorkspace(workspaceId: number, actor: string): Prom
 // ── Backfill ──────────────────────────────────────────────────────────────────
 
 export interface BackfillResult {
+  /** Referrals that had no workspace; one was created and its status derived. */
   created: number;
+  /** Existing workspaces whose status was stale against the protocol and re-derived. */
+  updated: number;
+  /** Existing workspaces left untouched — already correct, manual, protected or archived. */
   skipped: number;
 }
 
 /**
- * Creates workspaces for referrals that predate this feature.
+ * Brings every referral's workspace into line with its protocol state.
  *
- * Idempotent on `referral_id`. Each backfilled workspace derives its work status
- * from the advisory mapping against that referral's CURRENT protocol state,
- * written as mapping-set (`workStatusIsManual: false`) so the advisory rule
- * behaves correctly from then on.
+ * Two jobs, not one:
+ *
+ *   - a referral with no workspace gets one, its status derived from the mapping
+ *   - a referral whose workspace is STALE gets that status re-derived
+ *
+ * The second job is why this is not simply "create the missing rows". A
+ * workspace goes stale whenever `referrals.state` is written without a proposal
+ * reaching the workspace — `seed-full-demo.ts` advances all 100 demo referrals
+ * with direct `db.update()` calls, so without this every seeded workspace would
+ * sit at `Triage` no matter how far its referral had actually progressed. That
+ * is the exact misrepresentation the derive-don't-default decision below exists
+ * to prevent, so skipping existing rows would have defeated it.
+ *
+ * Re-deriving goes through the ordinary proposal path, so it cannot overwrite a
+ * status a person set (`manual`), an `Exception` or `Follow-up-Required`
+ * (`protected`), or an archived workspace — those are reported as skipped.
+ *
+ * Idempotent, and quietly so: a second run proposes what each workspace already
+ * holds, which declines as `same-status` and writes no audit row.
+ *
+ * Derived statuses are written as mapping-set (`workStatusIsManual: false`) so
+ * the advisory rule behaves correctly from then on.
  *
  * Setting everything to `Triage` was considered and rejected: it would
  * misrepresent a hundred seeded referrals as untriaged and make the queue views
@@ -519,17 +560,26 @@ export async function backfillWorkspaces(): Promise<BackfillResult> {
   const rows = await db.select({ id: referrals.id, state: referrals.state }).from(referrals);
 
   let created = 0;
+  let updated = 0;
   let skipped = 0;
 
   for (const referral of rows) {
+    const state = referral.state as ReferralState;
     const existing = await getWorkspaceByReferralId(referral.id);
+
     if (existing) {
-      skipped += 1;
+      // Stale, not correct — re-derive. applyProposal decides whether it may.
+      const { applied } = await applyProposal(
+        existing,
+        resolveProposedStatus(existing, state),
+        'system',
+      );
+      if (applied) updated += 1;
+      else skipped += 1;
       continue;
     }
 
     const workspace = await createWorkspace(referral.id);
-    const state = referral.state as ReferralState;
     const proposed = resolveProposedStatus(workspace, state);
     if (proposed !== workspace.workStatus) {
       await applyProposal(workspace, proposed, 'system');
@@ -537,5 +587,5 @@ export async function backfillWorkspaces(): Promise<BackfillResult> {
     created += 1;
   }
 
-  return { created, skipped };
+  return { created, updated, skipped };
 }

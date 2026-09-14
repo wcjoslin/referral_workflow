@@ -1,0 +1,766 @@
+<!--
+  PRD-19 — Workspace Shell.
+
+  The operational surface for one referral: who owns it, what happens next, what
+  is available to read, what has happened. Deliberately a second page rather than
+  a rewrite of /referrals/:id/review — the review page stays the focused clinical
+  disposition screen, and this is free to grow panels without compromising it.
+
+  Panel contract: each panel is a .card with a stable container id and one render
+  function that owns only its own DOM. PRD-21 through PRD-25 each fill one
+  reserved slot without touching the rest of the page.
+-->
+<meta charset="utf-8" />
+<title>Workspace</title>
+<style>
+  :root {
+    --color-nav-bg: #0d2d3a;
+    --color-brand: #009aab;
+    --color-brand-hover: #007d8a;
+    --color-bg-page: #f0f2f5;
+    --color-text: #212529;
+    --color-text-muted: #6c757d;
+    --color-border: #dee2e6;
+    --color-card: #fff;
+    --color-table-header: #f0f2f4;
+    --color-badge-pending: #fff3cd;
+    --color-badge-pending-text: #664d03;
+    --color-badge-accepted: #d1e7dd;
+    --color-badge-accepted-text: #0a3622;
+    --color-badge-declined: #f8d7da;
+    --color-badge-declined-text: #58151c;
+    --color-priority: #dc3545;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--color-bg-page);
+    color: var(--color-text);
+  }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 24px 16px 64px; }
+  a { color: var(--color-brand); }
+
+  .card {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  .card h2 {
+    margin: 0 0 14px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .field { margin-bottom: 10px; }
+  .label {
+    display: block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-text-muted);
+    margin-bottom: 3px;
+  }
+  .value { font-size: 0.9rem; }
+  .value.empty { color: var(--color-text-muted); font-style: italic; }
+
+  /* ── 360X protocol status: the filled pill used everywhere else ──────────── */
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+  .badge-received     { background: #e9ecef; color: #495057; }
+  .badge-acknowledged { background: #cff4fc; color: #055160; }
+  .badge-accepted     { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+  .badge-pending      { background: var(--color-badge-pending); color: var(--color-badge-pending-text); }
+  .badge-declined     { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
+  .badge-scheduled    { background: #d0efff; color: #0c63e4; }
+  .badge-encounter    { background: #e2d9f3; color: #3d0a91; }
+  .badge-closed       { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+  .badge-confirmed    { background: #badbcc; color: #0a3622; font-style: italic; }
+
+  /*
+    ── Work status: an OUTLINED chip with a leading glyph ────────────────────
+    AC5 is explicit that these must not read as two instances of the same pill.
+    Square corners, a border rather than a fill, and a glyph — so the two status
+    dimensions are never confused at a glance.
+  */
+  .ws-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    border: 1.5px solid currentColor;
+    background: transparent;
+    font-size: 0.75rem;
+    font-weight: 700;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  .ws-chip::before { content: '\25C7'; font-size: 0.7rem; }
+  .ws-triage             { color: #6c757d; }
+  .ws-in-progress        { color: #0c63e4; }
+  .ws-waiting-external   { color: #997404; }
+  .ws-waiting-internal   { color: #6f42c1; }
+  .ws-follow-up-required { color: #bd5800; }
+  .ws-exception          { color: var(--color-priority); }
+  .ws-resolved           { color: #0a7d4b; }
+
+  .status-pair { display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-start; }
+  .status-block { min-width: 190px; }
+  .status-explain { font-size: 0.72rem; color: var(--color-text-muted); margin-top: 5px; max-width: 260px; line-height: 1.45; }
+  .status-meta { font-size: 0.7rem; color: var(--color-text-muted); margin-top: 4px; }
+
+  .hdr-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+  .hdr-title { font-size: 1.3rem; font-weight: 700; margin: 0 0 3px; }
+  .hdr-sub { font-size: 0.82rem; color: var(--color-text-muted); }
+  .hdr-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px 20px;
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .banner { border-radius: 6px; padding: 10px 14px; font-size: 0.85rem; margin-bottom: 14px; }
+  .banner-archived { background: #e9ecef; color: #495057; border-left: 4px solid #6c757d; }
+  .banner-exception { background: var(--color-badge-declined); color: var(--color-badge-declined-text); border-left: 4px solid var(--color-priority); }
+  .banner-priority { background: var(--color-badge-pending); color: var(--color-badge-pending-text); border-left: 4px solid #ffc107; }
+
+  .btn {
+    font-size: 0.8rem;
+    padding: 5px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+  .btn:hover:not(:disabled) { background: #f1f3f5; }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn-primary { background: var(--color-brand); border-color: var(--color-brand); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--color-brand-hover); }
+  select.ctl {
+    font-size: 0.8rem;
+    padding: 5px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: #fff;
+  }
+  .ctl-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .msg { font-size: 0.78rem; margin-top: 8px; min-height: 1em; }
+  .msg.ok { color: #0a7d4b; }
+  .msg.err { color: var(--color-priority); }
+
+  .cols { display: grid; grid-template-columns: 1fr; gap: 16px; }
+  .cols.with-viewer { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+  @media (max-width: 980px) { .cols.with-viewer { grid-template-columns: 1fr; } }
+  .viewer-col { position: sticky; top: 76px; align-self: start; }
+
+  /* ── Protocol timeline, ported from the review page ─────────────────────── */
+  .tl { display: flex; align-items: flex-start; overflow-x: auto; padding: 4px 0 2px; }
+  .tl-step { display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 90px; position: relative; }
+  .tl-dot { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--color-border); background: var(--color-card); display: flex; align-items: center; justify-content: center; z-index: 1; font-size: 0.7rem; font-weight: 700; color: #adb5bd; }
+  .tl-dot.active { border-color: #198754; background: #198754; color: #fff; }
+  .tl-dot.current { border-color: #0d6efd; background: #0d6efd; color: #fff; box-shadow: 0 0 0 4px rgba(13,110,253,.25); }
+  .tl-dot.declined { border-color: var(--color-priority); background: var(--color-priority); color: #fff; }
+  .tl-dot.noshown { border-color: #fd7e14; background: #fd7e14; color: #fff; }
+  .tl-label { font-size: 0.72rem; font-weight: 600; color: var(--color-text-muted); margin-top: 6px; text-align: center; }
+  .tl-connector { position: absolute; top: 14px; left: 50%; width: 100%; height: 3px; background: var(--color-border); z-index: 0; }
+  .tl-connector.active { background: #198754; }
+  .tl-step:last-child .tl-connector { display: none; }
+
+  /* ── Message thread, ported from the review page ────────────────────────── */
+  .thread-container { display: flex; flex-direction: column; gap: 0; }
+  .thread-count { font-size: 0.75rem; font-weight: 400; color: var(--color-text-muted); margin-left: 6px; }
+  .thread-entry { border-left: 4px solid var(--color-border); padding: 12px 16px; cursor: pointer; transition: background 0.15s; }
+  .thread-entry:not(:last-child) { border-bottom: 1px solid var(--color-border); }
+  .thread-entry:hover { background: #f8f9fa; }
+  .thread-entry.inbound { border-left-color: #198754; }
+  .thread-entry.outbound { border-left-color: #0d6efd; }
+  .thread-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .thread-arrow { font-size: 0.7rem; color: var(--color-text-muted); transition: transform 0.15s; min-width: 12px; }
+  .thread-entry.expanded .thread-arrow { transform: rotate(90deg); }
+  .thread-dir-badge { font-size: 0.68rem; font-weight: 700; padding: 1px 6px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .thread-dir-badge.inbound { background: #d1e7dd; color: #0a3622; }
+  .thread-dir-badge.outbound { background: #cfe2ff; color: #084298; }
+  .thread-type { font-size: 0.82rem; font-weight: 600; color: var(--color-text); }
+  .thread-time { font-size: 0.75rem; color: #999; margin-left: auto; white-space: nowrap; }
+  .thread-ack { font-size: 0.68rem; font-weight: 600; padding: 1px 6px; border-radius: 3px; }
+  .thread-ack.acked { background: #d1e7dd; color: #0a3622; }
+  .thread-ack.pending { background: #fff3cd; color: #664d03; }
+  .thread-summary { font-size: 0.85rem; color: var(--color-text-muted); margin-top: 4px; }
+  .thread-body { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--color-border); }
+  .thread-entry.expanded .thread-body { display: block; }
+  .thread-body-text { font-size: 0.88rem; white-space: pre-wrap; line-height: 1.6; background: #f8f9fa; padding: 12px; border-radius: 6px; max-height: 300px; overflow-y: auto; }
+  .thread-body-hl7 { font-family: 'Courier New', monospace; font-size: 0.78rem; white-space: pre-wrap; background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; max-height: 300px; overflow-y: auto; }
+  .thread-no-content { font-size: 0.82rem; color: #999; font-style: italic; }
+
+  .document-list { list-style: none; margin: 0; padding: 0; }
+  .document-list li { padding: 8px 0; border-bottom: 1px solid var(--color-border); font-size: 0.85rem; display: flex; gap: 10px; align-items: baseline; }
+  .document-list li:last-child { border-bottom: none; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-size: 0.75rem; background: var(--color-table-header); border: 1px solid var(--color-border); border-radius: 12px; padding: 2px 9px; }
+
+  /* Reserved panels. Rendered, not absent — so the layout is the real layout. */
+  .slot-empty {
+    font-size: 0.82rem;
+    color: var(--color-text-muted);
+    background: repeating-linear-gradient(45deg, #fafbfc, #fafbfc 8px, #f4f6f8 8px, #f4f6f8 16px);
+    border: 1px dashed var(--color-border);
+    border-radius: 6px;
+    padding: 16px;
+    text-align: center;
+  }
+  .slot-tag {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin-left: auto;
+  }
+  #ccdaContainer { width: 100%; min-height: 560px; border: none; }
+</style>
+
+<!--__NAV__-->
+
+<div class="wrap">
+  <div id="wsBanners"></div>
+  <div class="card" id="wsHeader"></div>
+
+  <div class="cols" id="wsCols">
+    <div>
+      <div class="card" id="wsTimeline"></div>
+      <div class="card" id="wsConversation"></div>
+      <div class="card" id="wsThread"></div>
+      <div class="card" id="wsActivity"></div>
+    </div>
+    <div class="viewer-col" id="wsSide">
+      <div class="card" id="wsOwner"></div>
+      <div class="card" id="wsParticipants"></div>
+      <div class="card" id="wsRouting"></div>
+      <div class="card" id="wsClinical"></div>
+      <div class="card" id="wsDocuments"></div>
+      <div class="card" id="wsPriorAuth"></div>
+      <div class="card" id="wsCcdaPanel"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  /*__WORKSPACE_DATA__*/
+</script>
+<script>
+(function () {
+  'use strict';
+
+  var P = window.__WORKSPACE_DATA__;
+  var ws = P.workspace;
+  var ref = P.referral;
+
+  // Every interpolated database string goes through this. Several existing views
+  // interpolate unescaped; this page does not add to that.
+  function esc(str) {
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  /** AC2: an absent value is an explicit empty state, never blank or undefined. */
+  function orEmpty(value, placeholder) {
+    if (value === null || value === undefined || value === '') {
+      return '<span class="value empty">' + esc(placeholder || '—') + '</span>';
+    }
+    return '<span class="value">' + esc(value) + '</span>';
+  }
+
+  function field(label, value, placeholder) {
+    return '<div class="field"><span class="label">' + esc(label) + '</span>' +
+      orEmpty(value, placeholder) + '</div>';
+  }
+
+  function protocolBadge(state) {
+    var map = {
+      'Received': 'received', 'Acknowledged': 'acknowledged', 'Accepted': 'accepted',
+      'Pending-Information': 'pending', 'Declined': 'declined', 'Scheduled': 'scheduled',
+      'No-Show': 'pending', 'Encounter': 'encounter', 'Closed': 'closed',
+      'Closed-Confirmed': 'confirmed', 'Consult': 'encounter'
+    };
+    return '<span class="badge badge-' + (map[state] || 'received') + '">' + esc(state) + '</span>';
+  }
+
+  function workChip(status) {
+    var cls = 'ws-' + String(status).toLowerCase();
+    return '<span class="ws-chip ' + cls + '">' + esc(status) + '</span>';
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return null;
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    return d.toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  }
+
+  function fmtDay(iso) {
+    if (!iso) return null;
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? null : d.toLocaleDateString();
+  }
+
+  // ── Banners ───────────────────────────────────────────────────────────────
+
+  function renderBanners() {
+    var out = '';
+    if (ws.archivedAt) {
+      out += '<div class="banner banner-archived"><strong>Archived</strong> ' +
+        esc(fmtDate(ws.archivedAt) || '') +
+        ' — this workspace is read-only. The 360X status is unaffected by archival.</div>';
+    }
+    if (ws.workStatus === 'Exception') {
+      out += '<div class="banner banner-exception"><strong>Exception</strong> — ' +
+        esc(ws.exceptionReason || 'no reason recorded') + '</div>';
+    }
+    if (ref.priorityFlag) {
+      out += '<div class="banner banner-priority"><strong>Priority</strong> — ' +
+        'flagged for expedited handling.</div>';
+    }
+    document.getElementById('wsBanners').innerHTML = out;
+  }
+
+  // ── Header (AC1, AC2, AC5, AC6, AC7, AC7a, AC8) ───────────────────────────
+
+  function renderHeader() {
+    var patientName = (P.patient.firstName + ' ' + P.patient.lastName).trim();
+    var readOnly = !!ws.archivedAt;
+
+    // AC7: only transitions the machine permits from the current status.
+    var opts = (ws.allowedWorkStatuses || []).map(function (s) {
+      return '<option value="' + esc(s) + '">' + esc(s) + '</option>';
+    }).join('');
+
+    var manualNote = ws.workStatusIsManual
+      ? 'Held by ' + esc(ws.workStatusSetBy || 'someone') +
+        (ws.workStatusSetAt ? ' on ' + esc(fmtDate(ws.workStatusSetAt) || '') : '') +
+        '. The protocol mapping will not change it.'
+      : 'Following the 360X protocol mapping.';
+
+    // AC7a: the resync action exists exactly when a person is holding the status.
+    // Without it the UI can reach a state it cannot leave.
+    var resyncBtn = (ws.workStatusIsManual && !readOnly)
+      ? '<button class="btn" id="btnResync" title="Clear the manual hold and re-apply the protocol mapping">' +
+        '↻ Follow protocol again</button>'
+      : '';
+
+    document.getElementById('wsHeader').innerHTML =
+      '<div class="hdr-top">' +
+        '<div>' +
+          '<h1 class="hdr-title">' + esc(patientName || 'Unknown patient') + '</h1>' +
+          '<div class="hdr-sub">DOB ' + esc(P.patient.dateOfBirth || '—') +
+            ' · Referral #' + esc(ref.id) + ' · Workspace #' + esc(ws.id) + '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;align-items:center;">' +
+          '<a class="btn" href="/referrals/' + encodeURIComponent(ref.id) + '/review">' +
+            'Clinical disposition screen →</a>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="status-pair" style="margin-top:18px;">' +
+        '<div class="status-block">' +
+          '<span class="label">360X Status</span>' +
+          protocolBadge(ref.state) +
+          '<div class="status-explain">What the counterparty has been told. Externally ' +
+            'authoritative — it changes only through protocol actions, never from this page.</div>' +
+        '</div>' +
+        '<div class="status-block">' +
+          '<span class="label">Work Status</span>' +
+          workChip(ws.workStatus) +
+          '<div class="status-explain">Internal processing state. Ours alone; the counterparty ' +
+            'never sees it.</div>' +
+          '<div class="status-meta">' + manualNote + '</div>' +
+          (readOnly ? '' :
+            '<div class="ctl-row">' +
+              '<select class="ctl" id="workStatusSelect">' +
+                '<option value="">Change to…</option>' + opts +
+              '</select>' +
+              '<input class="ctl" id="workStatusReason" placeholder="Reason (optional)" ' +
+                'style="min-width:170px;" />' +
+              '<button class="btn btn-primary" id="btnSetStatus">Set</button>' +
+              resyncBtn +
+            '</div>') +
+          '<div class="msg" id="statusMsg"></div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="hdr-grid">' +
+        field('Reason for referral', ref.reasonForReferral) +
+        field('Initiating organization', ref.referrerAddress) +
+        field('Receiving department', ref.routingDepartment) +
+        field('Owner', ws.ownerDisplayName, 'Unassigned') +
+        field('Queue', ws.queueName, 'Unassigned') +
+        field('Next action', ws.nextAction, 'None set') +
+        field('Due', fmtDay(ws.nextActionDueAt), 'No due date') +
+        field('360X referral id', ws.externalReferralId) +
+        field('Received', fmtDate(ref.createdAt)) +
+        (ref.state === 'Declined' ? field('Decline reason', ref.declineReason) : '') +
+      '</div>';
+
+    if (!readOnly) {
+      document.getElementById('btnSetStatus').addEventListener('click', setStatus);
+      var rb = document.getElementById('btnResync');
+      if (rb) rb.addEventListener('click', resync);
+    }
+  }
+
+  function showMsg(text, ok) {
+    var el = document.getElementById('statusMsg');
+    el.className = 'msg ' + (ok ? 'ok' : 'err');
+    el.textContent = text;
+  }
+
+  async function post(url, body) {
+    var res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+    var json = await res.json().catch(function () { return {}; });
+    return { ok: res.ok, status: res.status, json: json };
+  }
+
+  async function setStatus() {
+    var select = document.getElementById('workStatusSelect');
+    var next = select.value;
+    if (!next) { showMsg('Pick a status first.', false); return; }
+
+    var btn = document.getElementById('btnSetStatus');
+    btn.disabled = true;
+    showMsg('Saving…', true);
+
+    var reason = document.getElementById('workStatusReason').value.trim();
+    var r = await post('/api/workspaces/' + encodeURIComponent(ws.id) + '/work-status',
+      reason ? { workStatus: next, reason: reason } : { workStatus: next });
+
+    if (r.ok) {
+      showMsg('Work status set to ' + next + '.', true);
+      location.reload();
+      return;
+    }
+    btn.disabled = false;
+    var detail = r.json && r.json.allowedWorkStatuses
+      ? ' Allowed from here: ' + r.json.allowedWorkStatuses.join(', ') + '.'
+      : '';
+    showMsg((r.json && r.json.error ? r.json.error : 'Failed to set work status.') + detail, false);
+  }
+
+  async function resync() {
+    var btn = document.getElementById('btnResync');
+    btn.disabled = true;
+    showMsg('Re-applying the protocol mapping…', true);
+
+    var r = await post('/api/workspaces/' + encodeURIComponent(ws.id) + '/resync');
+    if (r.ok) { location.reload(); return; }
+    btn.disabled = false;
+    showMsg((r.json && r.json.error) || 'Failed to resync.', false);
+  }
+
+  // ── Protocol timeline (AC9) ───────────────────────────────────────────────
+
+  function renderTimeline() {
+    // The branch a referral actually took, not a single canonical path — the
+    // review page's journey timeline makes the same distinction.
+    var base = ['Received', 'Acknowledged'];
+    var state = ref.state;
+    var path;
+
+    if (state === 'Declined') {
+      path = base.concat(['Declined']);
+    } else if (state === 'Pending-Information') {
+      path = base.concat(['Pending-Information']);
+    } else if (state === 'Consult') {
+      path = base.concat(['Accepted', 'Consult', 'Closed', 'Closed-Confirmed']);
+    } else if (state === 'No-Show') {
+      path = base.concat(['Accepted', 'Scheduled', 'No-Show']);
+    } else {
+      path = base.concat(['Accepted', 'Scheduled', 'Encounter', 'Closed', 'Closed-Confirmed']);
+    }
+
+    var idx = path.indexOf(state);
+    var steps = path.map(function (label, i) {
+      var cls = 'tl-dot';
+      if (label === 'Declined' && state === 'Declined') cls += ' declined';
+      else if (label === 'No-Show' && state === 'No-Show') cls += ' noshown';
+      else if (idx >= 0 && i === idx) cls += ' current';
+      else if (idx >= 0 && i < idx) cls += ' active';
+
+      var conn = (idx >= 0 && i < idx) ? ' active' : '';
+      return '<div class="tl-step">' +
+        '<div class="tl-connector' + conn + '"></div>' +
+        '<div class="' + cls + '">' + (idx >= 0 && i < idx ? '✓' : String(i + 1)) + '</div>' +
+        '<div class="tl-label">' + esc(label) + '</div>' +
+      '</div>';
+    }).join('');
+
+    document.getElementById('wsTimeline').innerHTML =
+      '<h2>360X Protocol Journey</h2><div class="tl">' + steps + '</div>' +
+      '<div class="status-explain" style="max-width:none;margin-top:10px;">' +
+        'The externally authoritative lifecycle. Work status is tracked separately and ' +
+        'does not appear here.</div>';
+  }
+
+  // ── Message thread (AC10) — same endpoints, unchanged ─────────────────────
+
+  function formatMessageType(type) {
+    var map = {
+      ReferralCCDA: 'Referral C-CDA', RRI: 'RRI Response', SIU: 'Scheduling Notice',
+      InterimUpdate: 'Interim Update', ConsultNote: 'Consult Note',
+      ConsultRequest: 'Consultation Request', NoShowNotification: 'No-Show Notice',
+      InfoRequest: 'Info Request', InfoReply: 'Info Reply', ACK: 'Acknowledgment',
+      MDN: 'Delivery Notification'
+    };
+    return map[type] || type;
+  }
+
+  async function loadThread() {
+    var host = document.getElementById('wsThread');
+    host.innerHTML = '<h2>Exchanged Messages <span class="thread-count" id="threadCount"></span></h2>' +
+      '<div id="threadLoading" class="thread-no-content">Loading…</div>' +
+      '<div class="thread-container" id="threadContainer" style="display:none;"></div>';
+
+    var container = document.getElementById('threadContainer');
+    var loading = document.getElementById('threadLoading');
+
+    try {
+      var res = await fetch('/api/referrals/' + encodeURIComponent(ref.id) + '/thread');
+      if (!res.ok) throw new Error('thread fetch failed');
+      var json = await res.json();
+      var thread = json.thread || [];
+
+      loading.style.display = 'none';
+      container.style.display = 'flex';
+      document.getElementById('threadCount').textContent = '(' + thread.length + ')';
+
+      if (thread.length === 0) {
+        container.innerHTML = '<div class="thread-no-content">No messages recorded for this referral.</div>';
+        return;
+      }
+
+      thread.forEach(function (msg) {
+        var entry = document.createElement('div');
+        entry.className = 'thread-entry ' + msg.direction;
+
+        var ackBadge = '';
+        if (msg.ackStatus && msg.direction === 'outbound') {
+          ackBadge = '<span class="thread-ack ' +
+            (msg.ackStatus === 'Acknowledged' ? 'acked' : 'pending') + '">' +
+            (msg.ackStatus === 'Acknowledged' ? '✓ ACK\'d' : '⏳ Pending') + '</span>';
+        }
+
+        var ts = typeof msg.createdAt === 'number'
+          ? new Date(msg.createdAt * 1000) : new Date(msg.createdAt);
+
+        entry.innerHTML =
+          '<div class="thread-header">' +
+            '<span class="thread-arrow">▶</span>' +
+            '<span class="thread-dir-badge ' + msg.direction + '">' +
+              (msg.direction === 'inbound' ? 'IN' : 'OUT') + '</span>' +
+            '<span class="thread-type">' + esc(formatMessageType(msg.messageType)) + '</span>' +
+            ackBadge +
+            '<span class="thread-time">' + esc(ts.toLocaleString(undefined, {
+              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+            })) + '</span>' +
+          '</div>' +
+          '<div class="thread-summary">' + esc(msg.summary) + '</div>' +
+          '<div class="thread-body"></div>';
+
+        var body = entry.querySelector('.thread-body');
+        entry.addEventListener('click', function () {
+          entry.classList.toggle('expanded');
+          if (entry.classList.contains('expanded') && !body.dataset.loaded) {
+            loadThreadContent(msg, body);
+          }
+        });
+
+        container.appendChild(entry);
+      });
+    } catch (err) {
+      loading.textContent = 'Failed to load message thread.';
+      console.error('[Workspace/Thread]', err);
+    }
+  }
+
+  /** Lazy, one fetch per message, cached by the dataset flag. */
+  async function loadThreadContent(msg, bodyEl) {
+    if (!msg.hasContent) {
+      bodyEl.innerHTML = '<div class="thread-no-content">Content not recorded for this message.</div>';
+      bodyEl.dataset.loaded = '1';
+      return;
+    }
+    bodyEl.innerHTML = '<div class="thread-no-content">Loading content…</div>';
+    try {
+      var res = await fetch('/api/referrals/' + encodeURIComponent(ref.id) +
+        '/thread/' + encodeURIComponent(msg.id) + '/content');
+      if (!res.ok) throw new Error('content fetch failed');
+      var json = await res.json();
+      var isHl7 = /^(MSH|RRI|SIU|ADT|ORU)/.test(String(json.content || '').trim());
+      bodyEl.innerHTML = '<div class="' + (isHl7 ? 'thread-body-hl7' : 'thread-body-text') + '">' +
+        esc(json.content || '(empty)') + '</div>';
+      bodyEl.dataset.loaded = '1';
+    } catch (err) {
+      bodyEl.innerHTML = '<div class="thread-no-content">Failed to load content.</div>';
+      console.error('[Workspace/ThreadContent]', err);
+    }
+  }
+
+  // ── Routing, clinical, prior auth ─────────────────────────────────────────
+
+  function renderRouting() {
+    var equip = (ref.routingEquipment || []).length
+      ? '<div class="chips">' + ref.routingEquipment.map(function (id) {
+          var match = (P.resources || []).filter(function (r) { return r.id === id; })[0];
+          return '<span class="chip">' + esc(match ? match.name : id) + '</span>';
+        }).join('') + '</div>'
+      : '<span class="value empty">None assigned</span>';
+
+    document.getElementById('wsRouting').innerHTML =
+      '<h2>Routing</h2>' +
+      field('Department', ref.routingDepartment) +
+      '<div class="field"><span class="label">Equipment &amp; resources</span>' + equip + '</div>' +
+      (ref.appointmentDate ? field('Appointment', fmtDate(ref.appointmentDate)) : '') +
+      (ref.appointmentLocation ? field('Location', ref.appointmentLocation) : '') +
+      (ref.scheduledProvider ? field('Provider', ref.scheduledProvider) : '') +
+      (P.assessment && P.assessment.suggestedDepartment
+        ? '<div class="field"><span class="label">AI suggestion</span><span class="value">' +
+          esc(P.assessment.suggestedDepartment) + '</span></div>'
+        : '');
+  }
+
+  function clinicalList(arr) {
+    if (!Array.isArray(arr) || arr.length === 0) {
+      return '<span class="value empty">None recorded</span>';
+    }
+    return '<div class="chips">' + arr.slice(0, 12).map(function (item) {
+      var name = typeof item === 'string' ? item
+        : (item && (item.name || item.display || item.description)) || JSON.stringify(item);
+      return '<span class="chip">' + esc(name) + '</span>';
+    }).join('') + (arr.length > 12 ? '<span class="chip">+' + (arr.length - 12) + ' more</span>' : '') +
+    '</div>';
+  }
+
+  function renderClinical() {
+    var cd = P.clinicalData;
+    if (!cd) {
+      document.getElementById('wsClinical').innerHTML =
+        '<h2>Clinical Data</h2><span class="value empty">No structured clinical data on file.</span>';
+      return;
+    }
+    document.getElementById('wsClinical').innerHTML =
+      '<h2>Clinical Data</h2>' +
+      '<div class="field"><span class="label">Problems</span>' + clinicalList(cd.problems) + '</div>' +
+      '<div class="field"><span class="label">Medications</span>' + clinicalList(cd.medications) + '</div>' +
+      '<div class="field"><span class="label">Allergies</span>' + clinicalList(cd.allergies) + '</div>' +
+      '<div class="field"><span class="label">Results</span>' + clinicalList(cd.results) + '</div>';
+  }
+
+  function renderPriorAuth() {
+    var rows = P.priorAuth || [];
+    var body = rows.length === 0
+      ? '<span class="value empty">No prior authorization requests linked.</span>'
+      : '<ul class="document-list">' + rows.map(function (r) {
+          return '<li><strong>' + esc(r.serviceCode) + '</strong>' +
+            '<span>' + esc(r.insurerName) + '</span>' +
+            '<span style="margin-left:auto;color:var(--color-text-muted);">' +
+              esc(r.state) + ' · ' + esc(fmtDay(r.createdAt) || '') + '</span></li>';
+        }).join('') + '</ul>';
+    document.getElementById('wsPriorAuth').innerHTML = '<h2>Prior Authorization</h2>' + body;
+  }
+
+  // ── C-CDA pane (AC11) ─────────────────────────────────────────────────────
+
+  function renderCcda() {
+    var panel = document.getElementById('wsCcdaPanel');
+    if (!ref.hasCcda) {
+      // AC11: no empty pane. The panel is removed and the grid stays one column.
+      panel.parentNode.removeChild(panel);
+      return;
+    }
+    document.getElementById('wsCols').classList.add('with-viewer');
+    panel.innerHTML = '<h2>Referral Document (C-CDA)</h2>' +
+      '<iframe id="ccdaContainer" title="C-CDA document"></iframe>';
+
+    var frame = document.getElementById('ccdaContainer');
+    frame.srcdoc =
+      '<!doctype html><html><head><meta charset="utf-8">' +
+      '<link rel="stylesheet" href="/static/ccdaview/ccdaview.css">' +
+      '</head><body><div id="root"></div>' +
+      '<script src="/static/ccdaview/ccdaview.js"><\/script>' +
+      '<script>' +
+      'fetch("/referrals/' + encodeURIComponent(ref.id) + '/ccda.xml")' +
+      '.then(function(r){return r.text();})' +
+      '.then(function(xml){' +
+      'if (window.CcdaView && window.CcdaView.render) { window.CcdaView.render(document.getElementById("root"), xml); }' +
+      'else { var pre = document.createElement("pre"); pre.style.cssText="white-space:pre-wrap;font-size:11px;padding:12px;"; pre.textContent = xml; document.getElementById("root").appendChild(pre); }' +
+      '}).catch(function(e){ document.getElementById("root").textContent = "Failed to load document."; });' +
+      '<\/script></body></html>';
+  }
+
+  // ── Reserved panels (AC12, AC13) ──────────────────────────────────────────
+
+  function renderSlot(containerId, title, prd, description) {
+    document.getElementById(containerId).innerHTML =
+      '<h2>' + esc(title) + '<span class="slot-tag">' + esc(prd) + '</span></h2>' +
+      '<div class="slot-empty">' + esc(description) + '</div>';
+  }
+
+  function renderSlots() {
+    if (!P.slots.owner) {
+      renderSlot('wsOwner', 'Ownership', 'PRD-21',
+        'Claim, assign and release this workspace. Owner is shown in the header meanwhile.');
+    }
+    if (!P.slots.participants) {
+      renderSlot('wsParticipants', 'Parties & Participants', 'PRD-24',
+        'The organizations and people involved, with their Direct addresses.');
+    }
+    if (!P.slots.conversation) {
+      renderSlot('wsConversation', 'Conversation', 'PRD-22',
+        'Threaded discussion between both parties, with mentions.');
+    }
+    if (!P.slots.documents) {
+      renderSlot('wsDocuments', 'Documents', 'PRD-23',
+        'The shared document collection, beyond the inbound referral C-CDA.');
+    }
+    if (!P.slots.activity) {
+      renderSlot('wsActivity', 'Activity History', 'PRD-25',
+        'Every state change, proposal and message, resolved to who did it.');
+    }
+  }
+
+  // ── Boot ──────────────────────────────────────────────────────────────────
+
+  document.title = 'Workspace #' + ws.id + ' — ' +
+    (P.patient.lastName || 'Referral ' + ref.id);
+
+  renderBanners();
+  renderHeader();
+  renderTimeline();
+  renderRouting();
+  renderClinical();
+  renderPriorAuth();
+  renderCcda();
+  renderSlots();
+  loadThread();
+})();
+</script>

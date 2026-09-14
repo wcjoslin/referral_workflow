@@ -33,6 +33,7 @@ import { accept, decline, ReferralNotFoundError as DispositionNotFoundError } fr
 import { getCachedAssessment } from './modules/prd02/referralService';
 import { scheduleReferral, ReferralNotFoundError, SchedulingConflictError } from './modules/prd03/schedulingService';
 import { getResources, getDepartments } from './modules/prd03/resourceCalendar';
+import { embedJson } from './util/htmlSafe';
 import { markEncounterComplete, ReferralNotFoundError as EncounterNotFoundError } from './modules/prd05/encounterService';
 import { generateAndSend, ReferralNotFoundError as ConsultNotFoundError } from './modules/prd04/consultNoteService';
 import { markNoShow, ReferralNotFoundError as NoShowNotFoundError } from './modules/prd11/noShowService';
@@ -42,8 +43,26 @@ import {
   clinicianSlugFor,
   listUsers,
   tryGetActingUser,
+  formatActor,
 } from './modules/workspace/identityService';
-import { backfillWorkspaces, proposeForReferral } from './modules/workspace/workspaceService';
+import {
+  backfillWorkspaces,
+  proposeForReferral,
+  getWorkspace,
+  setWorkStatus,
+  resyncWorkStatus,
+  WorkspaceNotFoundError,
+} from './modules/workspace/workspaceService';
+import {
+  buildWorkspacePayload,
+  listWorkspaceRows,
+  workspaceIdForReferral,
+} from './modules/workspace/workspaceView';
+import {
+  InvalidWorkStatusTransitionError,
+  allowedTransitions,
+  isValidState as isValidWorkStatus,
+} from './state/workStatusMachine';
 import { InvalidStateTransitionError, ReferralState, transition as referralTransition } from './state/referralStateMachine';
 import { InvalidClaimsStateTransitionError } from './state/claimsStateMachine';
 import { InvalidPriorAuthStateTransitionError } from './state/priorAuthStateMachine';
@@ -117,6 +136,7 @@ const NAV_HTML = `<style>
 <nav style="background:var(--color-nav-bg);padding:12px 24px;display:flex;gap:24px;align-items:center;position:sticky;top:0;z-index:100;box-shadow:0 2px 4px rgba(0,0,0,0.4);">
   <span style="color:#fff;font-weight:700;font-size:0.95rem;letter-spacing:0.02em;">360X Referral</span>
   <a href="/" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;margin-left:8px;">Home</a>
+  <a href="/workspaces" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Workspaces</a>
   <a href="/overview" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Overview</a>
   <a href="/claims" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Claims</a>
   <a href="/prior-auth" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Prior Auth</a>
@@ -213,6 +233,49 @@ function injectNav(html: string): string {
   return html.replace('<!--__NAV__-->', NAV_HTML);
 }
 
+// ── PRD-19 workspace route helpers ───────────────────────────────────────────
+
+/** The `:id` path param as a positive integer, or null when it is not one. */
+function parseWorkspaceId(req: Request): number | null {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const parsed = parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+/**
+ * The acting user as a workflow_events actor string, falling back to 'system'
+ * on an install with no users seeded. `message` is trusted caller-side copy,
+ * never user input.
+ */
+async function actingActor(req: Request): Promise<string> {
+  const user = await tryGetActingUser(req);
+  return user ? formatActor(user) : 'system';
+}
+
+
+/** A 404 body that matches the app's chrome instead of dumping a stack trace. */
+function notFoundPage(message: string): string {
+  return injectNav(
+    `<meta charset="utf-8" /><title>Not found</title>
+<style>
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+         background:#f0f2f5; color:#212529; }
+  .box { max-width:620px; margin:64px auto; background:#fff; border:1px solid #dee2e6;
+         border-radius:8px; padding:28px 32px; }
+  h1 { font-size:1.2rem; margin:0 0 10px; }
+  p { font-size:0.9rem; color:#6c757d; line-height:1.6; }
+  code { background:#f0f2f4; padding:1px 5px; border-radius:3px; font-size:0.85rem; }
+  a { color:#009aab; }
+</style>
+<!--__NAV__-->
+<div class="box">
+  <h1>Not found</h1>
+  <p>${message}</p>
+  <p><a href="/workspaces">&larr; All workspaces</a></p>
+</div>`,
+  );
+}
+
 /**
  * Resolves the clinician string to record for an action (PRD-17).
  *
@@ -254,7 +317,7 @@ app.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__DASHBOARD_DATA__*/',
-      `window.__DASHBOARD_DATA__ = ${JSON.stringify({
+      `window.__DASHBOARD_DATA__ = ${embedJson({
         items,
         departments: getDepartments(),
         // PRD-17: the per-row clinician pickers that replaced the free-text inputs.
@@ -277,8 +340,9 @@ app.get('/health', (_req: Request, res: Response) => {
 // ── Workspaces (PRD-18) ──────────────────────────────────────────────────────
 
 /**
- * Creates workspaces for referrals that predate PRD-18. Idempotent on
- * referral_id; also available as `npm run backfill:workspaces`.
+ * Brings every referral's workspace into line with its protocol state: creates
+ * the missing ones, re-derives the stale ones. Idempotent; also available as
+ * `npm run backfill:workspaces`.
  *
  * A maintenance endpoint for the demo, not part of the workspace UI (PRD-19).
  */
@@ -290,6 +354,198 @@ app.post('/api/workspaces/backfill', async (_req: Request, res: Response, next: 
     next(err);
   }
 });
+
+/**
+ * PRD-19 — the flat workspace index.
+ *
+ * Unfiltered and unscoped on purpose. PRD-20 adds queue grouping, the tab
+ * vocabulary and allQueuesAccess scoping, and may replace this page outright.
+ */
+app.get('/workspaces', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rows = await listWorkspaceRows();
+    const templatePath = path.join(__dirname, 'views', 'workspaceIndex.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__WORKSPACE_ROWS__*/',
+      `window.__WORKSPACE_ROWS__ = ${embedJson(rows)};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * PRD-19 — the workspace shell for one referral.
+ *
+ * A non-numeric or unknown id is a 404 page, not a stack trace (AC4).
+ */
+app.get('/workspaces/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).send(notFoundPage('That workspace id is not a number.'));
+      return;
+    }
+
+    const payload = await buildWorkspacePayload(workspaceId, await tryGetActingUser(req));
+    if (!payload) {
+      res.status(404).send(notFoundPage(`No workspace #${workspaceId}.`));
+      return;
+    }
+
+    const templatePath = path.join(__dirname, 'views', 'workspaceDetail.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__WORKSPACE_DATA__*/',
+      `window.__WORKSPACE_DATA__ = ${embedJson(payload)};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** The payload behind the page, for tests and for any later client. */
+app.get('/api/workspaces/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    const payload = await buildWorkspacePayload(workspaceId, await tryGetActingUser(req));
+    if (!payload) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Sets the work status by hand. Marks the workspace manual, so the protocol
+ * mapping stops moving it until resync.
+ *
+ * NOTE there is deliberately no endpoint here that writes `referrals.state`
+ * (AC8) — the 360X status changes only through protocol actions.
+ */
+app.post(
+  '/api/workspaces/:id/work-status',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      if (workspaceId === null) {
+        res.status(404).json({ error: 'Workspace not found' });
+        return;
+      }
+
+      const body = (req.body ?? {}) as { workStatus?: unknown; reason?: unknown };
+      const requested = typeof body.workStatus === 'string' ? body.workStatus : '';
+      if (!isValidWorkStatus(requested)) {
+        res.status(400).json({ error: `Not a work status: ${requested || '(missing)'}` });
+        return;
+      }
+
+      const workspace = await getWorkspace(workspaceId);
+      if (!workspace) {
+        res.status(404).json({ error: 'Workspace not found' });
+        return;
+      }
+      if (workspace.archivedAt !== null) {
+        res.status(409).json({ error: 'This workspace is archived and is read-only.' });
+        return;
+      }
+
+      const actor = await actingActor(req);
+      const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : undefined;
+
+      // `requested` is already narrowed to WorkStatus by the isValidWorkStatus guard.
+      const updated = await setWorkStatus(workspaceId, requested, actor, reason);
+      res.json({ success: true, workStatus: updated.workStatus });
+    } catch (err) {
+      // A disallowed transition is the caller asking for something the machine
+      // forbids, not a server fault — 409 with what IS reachable from here.
+      if (err instanceof InvalidWorkStatusTransitionError) {
+        const workspaceId = parseWorkspaceId(req);
+        const workspace = workspaceId === null ? null : await getWorkspace(workspaceId);
+        res.status(409).json({
+          error: err.message,
+          allowedWorkStatuses: workspace ? allowedTransitions(workspace.workStatus) : [],
+        });
+        return;
+      }
+      if (err instanceof WorkspaceNotFoundError) {
+        res.status(404).json({ error: 'Workspace not found' });
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+/**
+ * Clears the manual hold and re-applies the protocol mapping (PRD-18's escape
+ * hatch). Without this a single override would freeze the work status for the
+ * life of the workspace — the UI could reach a state it cannot leave.
+ */
+app.post('/api/workspaces/:id/resync', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    const updated = await resyncWorkStatus(workspaceId, await actingActor(req));
+    res.json({ success: true, workStatus: updated.workStatus });
+  } catch (err) {
+    if (err instanceof WorkspaceNotFoundError) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    next(err);
+  }
+});
+
+/**
+ * Referral-centric convenience link, so a caller does not need to know the
+ * workspace id. Distinct from every existing /referrals/:id/* route.
+ */
+app.get(
+  '/referrals/:referralId/workspace',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const raw = Array.isArray(req.params.referralId)
+        ? req.params.referralId[0]
+        : req.params.referralId;
+      const referralId = parseInt(raw, 10);
+      if (isNaN(referralId)) {
+        res.status(404).send(notFoundPage('That referral id is not a number.'));
+        return;
+      }
+      const workspaceId = await workspaceIdForReferral(referralId);
+      if (workspaceId === null) {
+        res
+          .status(404)
+          .send(
+            notFoundPage(
+              `Referral #${referralId} has no workspace. If it predates PRD-18, run ` +
+                `<code>npm run backfill:workspaces</code>.`,
+            ),
+          );
+        return;
+      }
+      res.redirect(302, `/workspaces/${workspaceId}`);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Identity (PRD-17) ─────────────────────────────────────────────────────────
 
@@ -420,7 +676,7 @@ app.get('/referrals/:id/review', async (req: Request, res: Response, next: NextF
     };
 
     // Inject data as a JSON block the page script can read
-    const jsonString = JSON.stringify(pageData);
+    const jsonString = embedJson(pageData);
     console.log(`[ReferralReview] Referral #${referralId} hasCcda=${pageData.hasCcda}, priorAuth=${paRequests.length} records, JSON length=${jsonString.length}`);
     const html = template.replace(
       '/*__PAGE_DATA__*/',
@@ -727,7 +983,7 @@ app.get('/scheduler/queue', async (_req: Request, res: Response, next: NextFunct
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__QUEUE_DATA__*/',
-      `window.__QUEUE_DATA__ = ${JSON.stringify(items)};`,
+      `window.__QUEUE_DATA__ = ${embedJson(items)};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -758,7 +1014,7 @@ app.get('/referrals/:id/schedule', async (req: Request, res: Response, next: Nex
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__SCHEDULE_DATA__*/',
-      `window.__SCHEDULE_DATA__ = ${JSON.stringify({
+      `window.__SCHEDULE_DATA__ = ${embedJson({
         referralId,
         patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
         referral,
@@ -842,7 +1098,7 @@ app.get('/referrals/:id/encounter', async (req: Request, res: Response, next: Ne
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__ENCOUNTER_DATA__*/',
-      `window.__ENCOUNTER_DATA__ = ${JSON.stringify({
+      `window.__ENCOUNTER_DATA__ = ${embedJson({
         referralId,
         patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
         referral,
@@ -987,7 +1243,7 @@ app.get('/referrals/:id/consult-note', async (req: Request, res: Response, next:
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__CONSULT_DATA__*/',
-      `window.__CONSULT_DATA__ = ${JSON.stringify({
+      `window.__CONSULT_DATA__ = ${embedJson({
         referralId,
         patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
         referral,
@@ -1131,7 +1387,7 @@ app.get('/messages', async (_req: Request, res: Response, next: NextFunction) =>
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__HISTORY_DATA__*/',
-      `window.__HISTORY_DATA__ = ${JSON.stringify({ messages })};`,
+      `window.__HISTORY_DATA__ = ${embedJson({ messages })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1166,7 +1422,7 @@ app.get('/rules/admin', async (_req: Request, res: Response, next: NextFunction)
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__RULES_DATA__*/',
-      `window.__RULES_DATA__ = ${JSON.stringify({ skills: skillStats })};`,
+      `window.__RULES_DATA__ = ${embedJson({ skills: skillStats })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1260,7 +1516,7 @@ app.get('/rules/:name', async (req: Request, res: Response, next: NextFunction) 
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__EDIT_DATA__*/',
-      `window.__EDIT_DATA__ = ${JSON.stringify({ skill, body, assets, references })};`,
+      `window.__EDIT_DATA__ = ${embedJson({ skill, body, assets, references })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1396,7 +1652,7 @@ app.get('/rules/:name/history', async (req: Request, res: Response, next: NextFu
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__HISTORY_DATA__*/',
-      `window.__HISTORY_DATA__ = ${JSON.stringify({ skillName: nameParam, executions })};`,
+      `window.__HISTORY_DATA__ = ${embedJson({ skillName: nameParam, executions })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1624,7 +1880,7 @@ app.get('/claims', async (_req: Request, res: Response, next: NextFunction) => {
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__CLAIMS_DATA__*/',
-      `window.__CLAIMS_DATA__ = ${JSON.stringify({ items })};`,
+      `window.__CLAIMS_DATA__ = ${embedJson({ items })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1657,7 +1913,7 @@ app.get('/claims/:id', async (req: Request, res: Response, next: NextFunction) =
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__CLAIMS_DETAIL__*/',
-      `window.__CLAIMS_DETAIL__ = ${JSON.stringify({
+      `window.__CLAIMS_DETAIL__ = ${embedJson({
         request,
         patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
         responses,
@@ -1726,7 +1982,7 @@ app.get('/prior-auth', async (_req: Request, res: Response, next: NextFunction) 
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__PA_QUEUE_DATA__*/',
-      `window.__PA_QUEUE_DATA__ = ${JSON.stringify({ items: enriched })};`,
+      `window.__PA_QUEUE_DATA__ = ${embedJson({ items: enriched })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1752,7 +2008,7 @@ app.get('/prior-auth/new', async (req: Request, res: Response, next: NextFunctio
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__PA_FORM_DATA__*/',
-      `window.__PA_FORM_DATA__ = ${JSON.stringify(formData)};`,
+      `window.__PA_FORM_DATA__ = ${embedJson(formData)};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1830,7 +2086,7 @@ app.get('/prior-auth/:id', async (req: Request, res: Response, next: NextFunctio
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__PA_DETAIL_DATA__*/',
-      `window.__PA_DETAIL_DATA__ = ${JSON.stringify(detail)};`,
+      `window.__PA_DETAIL_DATA__ = ${embedJson(detail)};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -2162,7 +2418,7 @@ app.get('/analytics', (_req: Request, res: Response, next: NextFunction) => {
     const template = fs.readFileSync(path.join(__dirname, 'views', 'analytics.html'), 'utf-8');
     const html = template.replace(
       '/*__ANALYTICS_DATA__*/',
-      `window.__ANALYTICS_DATA__ = ${JSON.stringify({
+      `window.__ANALYTICS_DATA__ = ${embedJson({
         eventCount,
         filterOptions,
         kpis: getKpis(defaultFilters),

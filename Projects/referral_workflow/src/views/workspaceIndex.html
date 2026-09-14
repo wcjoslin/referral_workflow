@@ -1,0 +1,254 @@
+<!--
+  PRD-19 — the flat workspace index.
+
+  Exists so the "Workspaces" nav entry has a destination and the detail page is
+  reachable (AC15). Deliberately NOT PRD-20's queue view: no tabs, no filters, no
+  queue grouping, no assignment, no allQueuesAccess scoping. PRD-20 may replace
+  this page outright rather than extend it.
+
+  The one affordance beyond listing is a client-side text filter, because 100
+  demo rows are unreadable without it — it filters what is already on the page
+  and issues no queries.
+-->
+<meta charset="utf-8" />
+<title>Workspaces</title>
+<style>
+  :root {
+    --color-nav-bg: #0d2d3a;
+    --color-brand: #009aab;
+    --color-brand-hover: #007d8a;
+    --color-bg-page: #f0f2f5;
+    --color-text: #212529;
+    --color-text-muted: #6c757d;
+    --color-border: #dee2e6;
+    --color-card: #fff;
+    --color-table-header: #f0f2f4;
+    --color-badge-pending: #fff3cd;
+    --color-badge-pending-text: #664d03;
+    --color-badge-accepted: #d1e7dd;
+    --color-badge-accepted-text: #0a3622;
+    --color-badge-declined: #f8d7da;
+    --color-badge-declined-text: #58151c;
+    --color-priority: #dc3545;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--color-bg-page);
+    color: var(--color-text);
+  }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 24px 16px 64px; }
+  a { color: var(--color-brand); }
+
+  .card {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .sub { font-size: 0.82rem; color: var(--color-text-muted); margin-bottom: 18px; }
+  .note {
+    font-size: 0.78rem;
+    color: var(--color-text-muted);
+    background: var(--color-table-header);
+    border-left: 3px solid var(--color-border);
+    border-radius: 4px;
+    padding: 9px 12px;
+    margin-bottom: 16px;
+  }
+
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+  .badge-received     { background: #e9ecef; color: #495057; }
+  .badge-acknowledged { background: #cff4fc; color: #055160; }
+  .badge-accepted     { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+  .badge-pending      { background: var(--color-badge-pending); color: var(--color-badge-pending-text); }
+  .badge-declined     { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
+  .badge-scheduled    { background: #d0efff; color: #0c63e4; }
+  .badge-encounter    { background: #e2d9f3; color: #3d0a91; }
+  .badge-closed       { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+  .badge-confirmed    { background: #badbcc; color: #0a3622; font-style: italic; }
+
+  /* Same outlined-chip treatment as the detail page, for the same reason. */
+  .ws-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 8px; border-radius: 4px;
+    border: 1.5px solid currentColor; background: transparent;
+    font-size: 0.72rem; font-weight: 700;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    white-space: nowrap;
+  }
+  .ws-chip::before { content: '\25C7'; font-size: 0.66rem; }
+  .ws-triage             { color: #6c757d; }
+  .ws-in-progress        { color: #0c63e4; }
+  .ws-waiting-external   { color: #997404; }
+  .ws-waiting-internal   { color: #6f42c1; }
+  .ws-follow-up-required { color: #bd5800; }
+  .ws-exception          { color: var(--color-priority); }
+  .ws-resolved           { color: #0a7d4b; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+  thead th {
+    background: var(--color-table-header);
+    text-align: left;
+    padding: 9px 10px;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text-muted);
+    border-bottom: 1px solid var(--color-border);
+    white-space: nowrap;
+  }
+  tbody td { padding: 9px 10px; border-bottom: 1px solid var(--color-border); vertical-align: middle; }
+  tbody tr:hover { background: #f8f9fa; }
+  tbody tr.archived { opacity: 0.55; }
+  .muted { color: var(--color-text-muted); font-style: italic; }
+  .manual-mark {
+    font-size: 0.62rem; font-weight: 700; color: #6f42c1;
+    border: 1px solid #6f42c1; border-radius: 3px; padding: 0 3px; margin-left: 5px;
+  }
+  .prio { color: var(--color-priority); font-weight: 700; }
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .stat {
+    background: var(--color-card); border: 1px solid var(--color-border);
+    border-radius: 6px; padding: 8px 14px; min-width: 96px;
+  }
+  .stat-n { font-size: 1.15rem; font-weight: 700; }
+  .stat-l { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); }
+  #filter {
+    font-size: 0.85rem; padding: 7px 10px; border: 1px solid var(--color-border);
+    border-radius: 4px; min-width: 260px; margin-bottom: 14px;
+  }
+</style>
+
+<!--__NAV__-->
+
+<div class="wrap">
+  <h1>Workspaces</h1>
+  <div class="sub" id="sub"></div>
+  <div class="note">
+    A flat list of every workspace. Shared queues, tab filters, ownership scoping and
+    assignment arrive with PRD-20 &mdash; this page exists so the workspace is reachable.
+  </div>
+
+  <div class="stats" id="stats"></div>
+  <input id="filter" type="search" placeholder="Filter by patient, department or status&hellip;" />
+
+  <div class="card" style="padding:0;overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Patient</th>
+          <th>Department</th>
+          <th>360X Status</th>
+          <th>Work Status</th>
+          <th>Owner</th>
+          <th>Updated</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  /*__WORKSPACE_ROWS__*/
+</script>
+<script>
+(function () {
+  'use strict';
+
+  var rows = window.__WORKSPACE_ROWS__ || [];
+
+  function esc(str) {
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function protocolBadge(state) {
+    var map = {
+      'Received': 'received', 'Acknowledged': 'acknowledged', 'Accepted': 'accepted',
+      'Pending-Information': 'pending', 'Declined': 'declined', 'Scheduled': 'scheduled',
+      'No-Show': 'pending', 'Encounter': 'encounter', 'Closed': 'closed',
+      'Closed-Confirmed': 'confirmed', 'Consult': 'encounter'
+    };
+    return '<span class="badge badge-' + (map[state] || 'received') + '">' + esc(state) + '</span>';
+  }
+
+  function workChip(status) {
+    return '<span class="ws-chip ws-' + String(status).toLowerCase() + '">' + esc(status) + '</span>';
+  }
+
+  function fmtDate(iso) {
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  }
+
+  document.getElementById('sub').textContent =
+    rows.length + (rows.length === 1 ? ' workspace' : ' workspaces') + ', most recently updated first.';
+
+  // Counts by work status, in the machine's own order.
+  var order = ['Triage', 'In-Progress', 'Waiting-External', 'Waiting-Internal',
+               'Follow-up-Required', 'Exception', 'Resolved'];
+  var counts = {};
+  rows.forEach(function (r) { counts[r.workStatus] = (counts[r.workStatus] || 0) + 1; });
+  document.getElementById('stats').innerHTML = order
+    .filter(function (s) { return counts[s]; })
+    .map(function (s) {
+      return '<div class="stat"><div class="stat-n">' + counts[s] + '</div>' +
+        '<div class="stat-l">' + esc(s) + '</div></div>';
+    }).join('') || '<div class="stat"><div class="stat-n">0</div><div class="stat-l">None</div></div>';
+
+  function render(filter) {
+    var needle = String(filter || '').toLowerCase().trim();
+    var shown = needle
+      ? rows.filter(function (r) {
+          return (r.patientName + ' ' + r.routingDepartment + ' ' +
+                  r.protocolState + ' ' + r.workStatus + ' ' +
+                  (r.ownerDisplayName || '')).toLowerCase().indexOf(needle) !== -1;
+        })
+      : rows;
+
+    if (shown.length === 0) {
+      document.getElementById('rows').innerHTML =
+        '<tr><td colspan="7" class="muted" style="padding:20px;text-align:center;">' +
+        (rows.length === 0
+          ? 'No workspaces yet. Seed the demo data, then run <code>npm run backfill:workspaces</code>.'
+          : 'No workspaces match that filter.') +
+        '</td></tr>';
+      return;
+    }
+
+    document.getElementById('rows').innerHTML = shown.map(function (r) {
+      var href = '/workspaces/' + encodeURIComponent(r.workspaceId);
+      return '<tr class="' + (r.archived ? 'archived' : '') + '">' +
+        '<td>' + (r.priorityFlag ? '<span class="prio" title="Priority">●</span> ' : '') +
+          '<a href="' + href + '">' + esc(r.patientName || 'Unknown') + '</a>' +
+          (r.archived ? ' <span class="muted">(archived)</span>' : '') + '</td>' +
+        '<td>' + esc(r.routingDepartment) + '</td>' +
+        '<td>' + protocolBadge(r.protocolState) + '</td>' +
+        '<td>' + workChip(r.workStatus) +
+          (r.workStatusIsManual
+            ? '<span class="manual-mark" title="Set by a person; the protocol mapping will not change it">HELD</span>'
+            : '') + '</td>' +
+        '<td>' + (r.ownerDisplayName
+          ? esc(r.ownerDisplayName)
+          : '<span class="muted">Unassigned</span>') + '</td>' +
+        '<td style="white-space:nowrap;color:var(--color-text-muted);">' + esc(fmtDate(r.updatedAt)) + '</td>' +
+        '<td style="white-space:nowrap;"><a href="' + href + '">Open →</a></td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  var input = document.getElementById('filter');
+  input.addEventListener('input', function () { render(input.value); });
+  render('');
+})();
+</script>
