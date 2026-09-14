@@ -11,12 +11,19 @@ import * as path from 'path';
 import { processInboundMessage } from '../src/modules/prd01/messageProcessor';
 import { ingestReferral } from '../src/modules/prd02/referralService';
 import { buildRawEmail } from '../src/demoScenarios';
+import { seedUsers } from '../src/modules/workspace/userRoster';
 
 const FIXTURE = path.resolve(__dirname, '../tests/fixtures/sample-referral.xml');
 const cdaXml = fs.readFileSync(FIXTURE, 'utf-8');
 const PORT = process.env.PORT ?? '3000';
 
 async function main(): Promise<void> {
+  // PRD-17: the staff roster. Idempotent on email, so re-running is safe.
+  // This script otherwise performs no direct inserts — it is a wrapper over the
+  // real ingest pipeline — so seeding users is a new capability here.
+  const { created, skipped } = await seedUsers();
+  console.log(`Seeded staff roster: ${created} created, ${skipped} already present.`);
+
   console.log('Seeding demo referral...\n');
 
   const rawEmail = buildRawEmail(cdaXml);

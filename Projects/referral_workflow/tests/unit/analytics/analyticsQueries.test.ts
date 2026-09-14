@@ -20,6 +20,17 @@ jest.mock('../../../src/db', () => {
 
   const sqlite = new Database(':memory:');
   sqlite.exec(`
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      display_name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      direct_address TEXT,
+      job_role TEXT NOT NULL,
+      legacy_clinician_id TEXT,
+      all_queues_access INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL
+    );
     CREATE TABLE patients (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       first_name TEXT NOT NULL,
@@ -103,7 +114,7 @@ function sqlite(): import('better-sqlite3').Database {
 }
 
 function clearTables(): void {
-  sqlite().exec('DELETE FROM workflow_events; DELETE FROM referrals; DELETE FROM patients;');
+  sqlite().exec('DELETE FROM workflow_events; DELETE FROM referrals; DELETE FROM patients; DELETE FROM users;');
 }
 
 const NOW = new Date('2026-04-11T12:00:00Z');
@@ -332,6 +343,21 @@ describe('analyticsQueries', () => {
       insertEvent('referral.accepted', 'referral', 10, 'clinician:dr-chen', 'Accepted');
       insertEvent('referral.received', 'referral', 11, 'system', 'Received', undefined, undefined, 0);
       insertEvent('referral.declined', 'referral', 11, 'clinician:dr-patel', 'Declined', undefined, { denialReason: 'Capacity unavailable' });
+
+      // PRD-17: clinician filter options resolve through users.legacy_clinician_id,
+      // so these two slugs need a person to resolve to.
+      sqlite()
+        .prepare(
+          `INSERT INTO users (display_name, email, job_role, legacy_clinician_id, created_at)
+           VALUES (?, ?, 'clinician', ?, 0)`,
+        )
+        .run('Dr. Emily Chen, MD', 'echen@specialist.example.org', 'dr-chen');
+      sqlite()
+        .prepare(
+          `INSERT INTO users (display_name, email, job_role, legacy_clinician_id, created_at)
+           VALUES (?, ?, 'clinician', ?, 0)`,
+        )
+        .run('Dr. Raj Patel, MD', 'rpatel@specialist.example.org', 'dr-patel');
     });
 
     it('getFilterOptions() returns populated arrays after data is inserted', () => {
@@ -340,6 +366,8 @@ describe('analyticsQueries', () => {
       expect(opts.departments).toContain('Neurology');
       expect(opts.clinicians).toContain('dr-chen');
       expect(opts.clinicians).toContain('dr-patel');
+      // PRD-17 AC13: options are labelled with display names.
+      expect(opts.clinicianLabels['dr-chen']).toBe('Dr. Emily Chen, MD');
       expect(opts.states).toContain('Accepted');
       expect(opts.denialReasons).toContain('Capacity unavailable');
     });

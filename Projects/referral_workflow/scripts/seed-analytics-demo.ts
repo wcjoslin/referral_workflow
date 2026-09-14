@@ -18,6 +18,7 @@
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import { config } from '../src/config';
+import { CLINICIAN_SLUGS, seedUsers } from '../src/modules/workspace/userRoster';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -72,7 +73,9 @@ const DEPARTMENTS = [
   'Oncology', 'Gastroenterology', 'General Surgery',
 ];
 
-const CLINICIANS = ['dr-chen', 'dr-rodriguez', 'dr-patel', 'dr-kim'];
+// PRD-17: the same four slugs the staff roster defines, so this dataset and the
+// users table describe the same people.
+const CLINICIANS = [...CLINICIAN_SLUGS];
 
 // Acceptance rates per clinician (probability of accepting a referral)
 const CLINICIAN_ACCEPT_RATE: Record<string, number> = {
@@ -126,6 +129,11 @@ const STATE_DISTRIBUTION = [
 
 async function main(): Promise<void> {
   console.log('Seeding analytics demo data...\n');
+
+  // PRD-17: staff roster first, so the clinician slugs this dataset uses resolve
+  // to people and the analytics Clinician filter can label them.
+  const users = await seedUsers();
+  console.log(`Staff roster: ${users.created} created, ${users.skipped} already present.\n`);
 
   const dbPath = config.database.url === ':memory:' ? './referral.db' : config.database.url;
   const sqlite = new Database(dbPath);

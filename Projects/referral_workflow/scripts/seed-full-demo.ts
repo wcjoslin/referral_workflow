@@ -24,6 +24,7 @@ import { db } from '../src/db';
 import { referrals, priorAuthRequests, priorAuthResponses } from '../src/db/schema';
 import { ReferralState } from '../src/state/referralStateMachine';
 import { PriorAuthState } from '../src/state/priorAuthStateMachine';
+import { PROVIDER_NAMES, seedUsers } from '../src/modules/workspace/userRoster';
 
 const FIXTURES_DIR = path.resolve(__dirname, '../tests/fixtures');
 
@@ -50,12 +51,6 @@ const LOCATIONS: Record<string, string> = {
   Gastroenterology: 'GI Clinic — Suite 120',
 };
 
-const PROVIDER_NAMES: Record<string, string> = {
-  'dr-chen': 'Dr. Emily Chen, MD',
-  'dr-patel': 'Dr. Raj Patel, MD',
-  'dr-rodriguez': 'Dr. Carlos Rodriguez, MD',
-  'dr-kim': 'Dr. Sarah Kim, MD',
-};
 
 const PA_SERVICE_CODES: Record<string, { code: string; display: string }> = {
   Cardiology: { code: '93306', display: 'Echocardiography' },
@@ -659,6 +654,11 @@ async function main(): Promise<void> {
   console.log('Clearing previous seed data...');
   await clearSeedData();
   console.log('Cleared.\n');
+
+  // PRD-17: staff roster. Not cleared by clearSeedData() — users are not
+  // scenario data, and the seeding is idempotent on email.
+  const users = await seedUsers();
+  console.log(`Staff roster: ${users.created} created, ${users.skipped} already present.\n`);
 
   console.log(`Running ${SCENARIOS.length} scenarios:\n`);
 

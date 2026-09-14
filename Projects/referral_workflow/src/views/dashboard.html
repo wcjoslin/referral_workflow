@@ -224,6 +224,23 @@
 
   // ── Preview rendering ─────────────────────────────────────────────────────────
 
+  // ── Clinician picker options (PRD-17) ──────────────────────────────────────
+  // Replaced the per-row free-text Clinician ID inputs, which had their own
+  // placeholder convention ("DR001") distinct from the review page's.
+  function clinicianOptions() {
+    const users = (window.__DASHBOARD_DATA__ && window.__DASHBOARD_DATA__.users) || [];
+    const actingUser = window.__DASHBOARD_DATA__ && window.__DASHBOARD_DATA__.actingUser;
+    const actingUserId = actingUser ? actingUser.id : null;
+    if (!users.length) return '<option value="">No users seeded</option>';
+    return users
+      .map(function (u) {
+        return '<option value="' + u.id + '"' +
+          (u.id === actingUserId ? ' selected' : '') + '>' +
+          esc(u.displayName) + ' \u00b7 ' + esc(u.jobRole) + '</option>';
+      })
+      .join('');
+  }
+
   function esc(str) {
     return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
@@ -389,8 +406,8 @@
       content = `
         <div class="action-form-row">
           <div class="action-field">
-            <label>Clinician ID</label>
-            <input type="text" id="clinId-${id}" placeholder="e.g. DR001" style="width:130px" />
+            <label>Clinician</label>
+            <select id="clinId-${id}" style="width:220px">${clinicianOptions()}</select>
           </div>
           <button class="btn-act btn-accept" onclick="submitAcceptDash(${id})">Accept Referral</button>
           <button class="btn-act btn-decline" onclick="toggleDeclineForm(${id})">Decline ▼</button>
@@ -474,8 +491,8 @@
       content = `
         <div class="action-form-row">
           <div class="action-field">
-            <label>Clinician ID</label>
-            <input type="text" id="clinId-${id}" placeholder="e.g. DR001" style="width:130px" />
+            <label>Clinician</label>
+            <select id="clinId-${id}" style="width:220px">${clinicianOptions()}</select>
           </div>
           <button class="btn-act btn-accept" onclick="submitConsultResolveDash(${id})">Confirm Consultation</button>
         </div>
@@ -506,13 +523,13 @@
   }
 
   async function submitAcceptDash(id) {
-    const clinicianId = (document.getElementById('clinId-' + id) || {}).value || '';
-    if (!clinicianId.trim()) { setActionMsg(id, 'Please enter a Clinician ID.', true); return; }
+    const userId = Number((document.getElementById('clinId-' + id) || {}).value);
+    if (!userId) { setActionMsg(id, 'Please select the deciding clinician.', true); return; }
     try {
       const resp = await fetch('/referrals/' + id + '/disposition', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision: 'Accept', clinicianId }),
+        body: JSON.stringify({ decision: 'Accept', userId }),
       });
       const body = await resp.json();
       if (!resp.ok || !body.success) throw new Error(body.error || 'Request failed');
@@ -524,15 +541,15 @@
   }
 
   async function submitDeclineDash(id) {
-    const clinicianId = (document.getElementById('clinId-' + id) || {}).value || '';
+    const userId = Number((document.getElementById('clinId-' + id) || {}).value);
     const declineReason = (document.getElementById('declineReason-' + id) || {}).value || '';
-    if (!clinicianId.trim()) { setActionMsg(id, 'Please enter a Clinician ID.', true); return; }
+    if (!userId) { setActionMsg(id, 'Please select the deciding clinician.', true); return; }
     if (!declineReason) { setActionMsg(id, 'Please select a decline reason.', true); return; }
     try {
       const resp = await fetch('/referrals/' + id + '/disposition', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision: 'Decline', clinicianId, declineReason }),
+        body: JSON.stringify({ decision: 'Decline', userId, declineReason }),
       });
       const body = await resp.json();
       if (!resp.ok || !body.success) throw new Error(body.error || 'Request failed');
@@ -598,13 +615,13 @@
   }
 
   async function submitConsultResolveDash(id) {
-    const clinicianId = (document.getElementById('clinId-' + id) || {}).value || '';
-    if (!clinicianId.trim()) { setActionMsg(id, 'Please enter a Clinician ID.', true); return; }
+    const userId = Number((document.getElementById('clinId-' + id) || {}).value);
+    if (!userId) { setActionMsg(id, 'Please select the confirming clinician.', true); return; }
     try {
       const resp = await fetch('/referrals/' + id + '/consult/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clinicianId }),
+        body: JSON.stringify({ userId }),
       });
       const body = await resp.json();
       if (!resp.ok || !body.success) throw new Error(body.error || 'Request failed');

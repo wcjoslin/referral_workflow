@@ -37,6 +37,12 @@ import { markEncounterComplete, ReferralNotFoundError as EncounterNotFoundError 
 import { generateAndSend, ReferralNotFoundError as ConsultNotFoundError } from './modules/prd04/consultNoteService';
 import { markNoShow, ReferralNotFoundError as NoShowNotFoundError } from './modules/prd11/noShowService';
 import { markConsult, resolveConsult, ReferralNotFoundError as ConsultStateNotFoundError } from './modules/prd11/consultService';
+import {
+  ACTING_USER_COOKIE,
+  clinicianSlugFor,
+  listUsers,
+  tryGetActingUser,
+} from './modules/workspace/identityService';
 import { InvalidStateTransitionError, ReferralState, transition as referralTransition } from './state/referralStateMachine';
 import { InvalidClaimsStateTransitionError } from './state/claimsStateMachine';
 import { InvalidPriorAuthStateTransitionError } from './state/priorAuthStateMachine';
@@ -117,6 +123,12 @@ const NAV_HTML = `<style>
   <a href="/rules/admin" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Skills</a>
   <a href="/walkthrough" style="color:#20c997;text-decoration:none;font-size:0.88rem;font-weight:600;">Walkthrough</a>
   <a href="/demo" style="color:#ffc107;text-decoration:none;font-size:0.88rem;font-weight:600;">Demo Launcher</a>
+  <label style="margin-left:auto;display:flex;align-items:center;gap:6px;color:#adb5bd;font-size:0.8rem;">
+    Acting as
+    <select id="actingUserSelect" style="background:#12404f;color:#fff;border:1px solid #1d5a6d;border-radius:4px;padding:4px 8px;font-size:0.82rem;max-width:230px;">
+      <option value="">Loading…</option>
+    </select>
+  </label>
 </nav>
 <script>
 (function() {
@@ -131,15 +143,104 @@ const NAV_HTML = `<style>
     }
   });
 })();
+
+// Acting-user selector (PRD-17).
+//
+// Populated client-side on purpose: injectNav() is a pure string function shared
+// by every view, so fetching here keeps all 21 call sites unchanged.
+//
+// The actingUserId cookie is NOT a credential — this dropdown is the sanctioned
+// way to act as someone else. Attribution, never authorization.
+(function() {
+  const select = document.getElementById('actingUserSelect');
+  if (!select) return;
+
+  function currentCookieUserId() {
+    const match = document.cookie.match(/(?:^|;\\s*)actingUserId=([^;]*)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  }
+
+  fetch('/api/users')
+    .then((r) => r.json())
+    .then((data) => {
+      const users = (data && data.users) || [];
+      if (!users.length) {
+        select.innerHTML = '<option value="">No users seeded</option>';
+        select.disabled = true;
+        select.title = 'Run: npm run seed — to seed the staff roster.';
+        return;
+      }
+      // Mirrors the server fallback: cookie value when it names a known active
+      // user, otherwise the first active user by id.
+      const cookieId = currentCookieUserId();
+      const known = users.some((u) => String(u.id) === cookieId);
+      const selectedId = known ? cookieId : String(users[0].id);
+      select.innerHTML = users
+        .map(function (u) {
+          const label = u.displayName + ' · ' + u.jobRole;
+          return '<option value="' + u.id + '"' +
+            (String(u.id) === selectedId ? ' selected' : '') + '>' +
+            label.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+            '</option>';
+        })
+        .join('');
+    })
+    .catch(() => {
+      select.innerHTML = '<option value="">Unavailable</option>';
+      select.disabled = true;
+    });
+
+  select.addEventListener('change', function () {
+    const userId = Number(select.value);
+    if (!userId) return;
+    fetch('/api/acting-user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: userId }),
+    })
+      .then((r) => r.json())
+      .then((body) => {
+        // Reload so page payloads that embed the acting user pick up the change.
+        if (body && body.success) location.reload();
+      })
+      .catch(() => {});
+  });
+})();
 </script>`;
 
 function injectNav(html: string): string {
   return html.replace('<!--__NAV__-->', NAV_HTML);
 }
 
+/**
+ * Resolves the clinician string to record for an action (PRD-17).
+ *
+ * Accepts either `userId` — what the pickers now send — or the legacy
+ * free-text `clinicianId`, which keeps any older client and the direct service
+ * callers working. A `userId` resolves through clinicianSlugFor(), so the four
+ * seeded clinicians write exactly the historical slugs and analytics continuity
+ * is preserved.
+ *
+ * Returns null when neither is usable, so the caller can 400.
+ */
+async function resolveClinicianId(body: {
+  userId?: unknown;
+  clinicianId?: unknown;
+}): Promise<string | null> {
+  const userId = Number(body.userId);
+  if (Number.isInteger(userId) && userId > 0) {
+    const user = (await listUsers()).find((u) => u.id === userId);
+    return user ? clinicianSlugFor(user) : null;
+  }
+  if (typeof body.clinicianId === 'string' && body.clinicianId.trim()) {
+    return body.clinicianId.trim();
+  }
+  return null;
+}
+
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
-app.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+app.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const allReferrals = await db.select().from(referrals).orderBy(desc(referrals.createdAt));
     const items = await Promise.all(
@@ -152,7 +253,13 @@ app.get('/', async (_req: Request, res: Response, next: NextFunction) => {
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__DASHBOARD_DATA__*/',
-      `window.__DASHBOARD_DATA__ = ${JSON.stringify({ items, departments: getDepartments() })};`,
+      `window.__DASHBOARD_DATA__ = ${JSON.stringify({
+        items,
+        departments: getDepartments(),
+        // PRD-17: the per-row clinician pickers that replaced the free-text inputs.
+        users: await listUsers(),
+        actingUser: await tryGetActingUser(req),
+      })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -164,6 +271,51 @@ app.get('/', async (_req: Request, res: Response, next: NextFunction) => {
 // Health check
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
+});
+
+// ── Identity (PRD-17) ─────────────────────────────────────────────────────────
+
+/**
+ * The staff roster, ordered by id. The first entry is the acting-user default,
+ * mirroring getDefaultActingUser(). Used by the nav selector and the clinician
+ * pickers; later by the owner (PRD-21), participant (PRD-24) and mention
+ * (PRD-22) pickers.
+ */
+app.get('/api/users', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json({ users: await listUsers() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Sets the acting user. Not authentication — see getActingUser() in
+ * identityService.ts. Rejects an unknown or inactive user id so a stale client
+ * cannot park the cookie on someone who no longer exists.
+ */
+app.post('/api/acting-user', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = req.body as { userId?: unknown };
+    const userId = Number(body.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      res.status(400).json({ error: 'userId must be a positive integer' });
+      return;
+    }
+    // One query covers both "unknown" and "inactive": listUsers() is active-only.
+    const user = (await listUsers()).find((u) => u.id === userId);
+    if (!user) {
+      res.status(400).json({ error: `Unknown or inactive user: ${userId}` });
+      return;
+    }
+    res.setHeader(
+      'Set-Cookie',
+      `${ACTING_USER_COOKIE}=${encodeURIComponent(String(userId))}; Path=/; SameSite=Lax; Max-Age=31536000`,
+    );
+    res.json({ success: true, user });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Workflow Overview page
@@ -244,6 +396,9 @@ app.get('/referrals/:id/review', async (req: Request, res: Response, next: NextF
       outboundMessages: messages,
       hasCcda: !!referral.rawCcdaXml,
       priorAuth: paRequests,
+      // PRD-17: the clinician pickers that replaced the free-text inputs.
+      users: await listUsers(),
+      actingUser: await tryGetActingUser(req),
     };
 
     // Inject data as a JSON block the page script can read
@@ -298,14 +453,17 @@ app.post('/referrals/:id/disposition', async (req: Request, res: Response, next:
       return;
     }
 
-    const { decision, clinicianId, declineReason } = req.body as {
+    const body = req.body as {
       decision?: string;
       clinicianId?: string;
+      userId?: number;
       declineReason?: string;
     };
+    const { decision, declineReason } = body;
+    const clinicianId = await resolveClinicianId(body);
 
     if (!decision || !clinicianId) {
-      res.status(400).json({ error: 'decision and clinicianId are required' });
+      res.status(400).json({ error: 'decision and one of userId / clinicianId are required' });
       return;
     }
 
@@ -766,13 +924,15 @@ app.post('/referrals/:id/consult/resolve', async (req: Request, res: Response, n
       return;
     }
 
-    const { clinicianId } = req.body as { clinicianId?: string };
-    if (!clinicianId || clinicianId.trim() === '') {
-      res.status(400).json({ error: 'clinicianId is required' });
+    const clinicianId = await resolveClinicianId(
+      req.body as { userId?: unknown; clinicianId?: unknown },
+    );
+    if (!clinicianId) {
+      res.status(400).json({ error: 'one of userId / clinicianId is required' });
       return;
     }
 
-    await resolveConsult(referralId, clinicianId.trim());
+    await resolveConsult(referralId, clinicianId);
     res.json({ success: true });
   } catch (err) {
     if (err instanceof ConsultStateNotFoundError) {
