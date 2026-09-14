@@ -158,15 +158,26 @@ export async function getWorkspaceByReferralId(referralId: number): Promise<Work
 /**
  * Whether this workspace still has internal work outstanding.
  *
- * PHASE-1 DEFINITION, deliberately concrete so it is testable on day one:
- * anything other than `Resolved` counts as open. Evaluated against the status
- * BEFORE a closure proposal is applied — reading the current status to decide
- * what to propose is not circular, because the proposal is about the next value
- * and the check is about the present one.
+ * PHASE-1 DEFINITION: always false, because Phase 1 has nothing that can BE an
+ * open internal item. The sources are an unresolved exception (PRD-28) and an
+ * unacknowledged mention (PRD-22), and neither exists yet.
  *
- * Later PRDs OR additional sources in here without changing any caller:
- * an unresolved `workspace_exceptions` row (PRD-28), an unacknowledged mention
- * (PRD-22). Each of those PRDs owns adding its clause and its test.
+ * This replaces the first definition, `workStatus !== Resolved`, which was
+ * wrong in a way only visible once real data existed. Nothing in Phase 1 ever
+ * sets `Resolved`, so that test was true for every workspace, and every
+ * referral reaching `Closed-Confirmed` derived `Follow-up-Required` — 30 of the
+ * 100 demo referrals did. Worse, the `Resolved` branch was unreachable: a
+ * workspace someone had set to `Resolved` by hand would decline the proposal as
+ * `manual` before the branch was consulted. So the rule claimed to distinguish
+ * two cases and in practice only ever produced one, the wrong one.
+ *
+ * `Follow-up-Required` stays reachable deliberately — by a person setting it,
+ * and by PRD-28/PRD-22 once they have something to report. It is not reachable
+ * from a protocol event alone, which is correct: closing the loop is not by
+ * itself evidence that internal work is outstanding.
+ *
+ * When PRD-28 or PRD-22 adds a source that needs a query, give this function an
+ * async sibling and OR the two in hasOpenInternalItems(); do not fork the rule.
  */
 export async function hasOpenInternalItems(workspaceId: number): Promise<boolean> {
   const workspace = await getWorkspace(workspaceId);
@@ -179,12 +190,12 @@ export async function hasOpenInternalItems(workspaceId: number): Promise<boolean
  * resolveProposedStatus() does not need a second read — and, more importantly,
  * so there is exactly ONE definition of "open" for a later PRD to extend.
  *
- * When PRD-28 or PRD-22 add a source that requires a query, give this function
- * an async sibling and have hasOpenInternalItems() OR the two together; do not
- * fork the rule.
+ * The parameter is unused in Phase 1 and kept on purpose: PRD-28 and PRD-22 add
+ * clauses that read the row, and the signature is what every caller is already
+ * written against.
  */
-function workspaceHasOpenItems(workspace: Workspace): boolean {
-  return workspace.workStatus !== WorkStatus.RESOLVED;
+function workspaceHasOpenItems(_workspace: Workspace): boolean {
+  return false;
 }
 
 // ── Creation ──────────────────────────────────────────────────────────────────
@@ -334,7 +345,9 @@ function resolveProposedStatus(workspace: Workspace, protocolState: ReferralStat
   if (protocolState === ReferralState.CLOSED_CONFIRMED) {
     // The protocol lifecycle has closed. If internal work is still outstanding
     // the workspace stays visible as Follow-up-Required — the external state is
-    // never reopened to represent internal work.
+    // never reopened to represent internal work. In Phase 1 nothing can be
+    // outstanding (see workspaceHasOpenItems), so this resolves; the branch is
+    // kept because PRD-28 and PRD-22 give it a second answer.
     return workspaceHasOpenItems(workspace) ? WorkStatus.FOLLOW_UP_REQUIRED : WorkStatus.RESOLVED;
   }
   return PROTOCOL_WORK_STATUS[protocolState];

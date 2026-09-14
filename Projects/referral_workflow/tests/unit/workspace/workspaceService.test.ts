@@ -411,17 +411,38 @@ describe('workspaceService', () => {
   // ── The closure branch ────────────────────────────────────────────────────
 
   describe('Closed-Confirmed branch (computed inside proposeWorkStatus)', () => {
-    it('proposes Follow-up-Required when internal work is still open', async () => {
+    it('proposes Resolved — Phase 1 has no source of open internal items', async () => {
       const referralId = insertReferral(ReferralState.CLOSED);
       const workspace = await createWorkspace(referralId);
       await proposeWorkStatus(workspace.id, ReferralState.ACCEPTED); // → In-Progress, mapping-set
 
       const result = await proposeWorkStatus(workspace.id, ReferralState.CLOSED_CONFIRMED);
 
-      expect(result).toMatchObject({ applied: true, workStatus: WorkStatus.FOLLOW_UP_REQUIRED });
+      expect(result).toMatchObject({ applied: true, workStatus: WorkStatus.RESOLVED });
     });
 
-    it('proposes Resolved when nothing internal is outstanding', async () => {
+    it('never derives Follow-up-Required from a protocol event alone', async () => {
+      // Closing the loop is not by itself evidence that internal work is
+      // outstanding. Follow-up-Required is reachable by a person setting it, and
+      // by PRD-28/PRD-22 once they have something to report — not from here.
+      for (const from of [WorkStatus.IN_PROGRESS, WorkStatus.WAITING_EXTERNAL, WorkStatus.TRIAGE]) {
+        const referralId = insertReferral(ReferralState.CLOSED);
+        const workspace = await createWorkspace(referralId);
+        if (from !== WorkStatus.TRIAGE) {
+          await setWorkStatus(workspace.id, from, 'system');
+          sqlite()
+            .prepare(`UPDATE referral_workspaces SET work_status_is_manual = 0 WHERE id = ?`)
+            .run(workspace.id);
+        }
+
+        const result = await proposeWorkStatus(workspace.id, ReferralState.CLOSED_CONFIRMED);
+
+        expect(result.proposed).toBe(WorkStatus.RESOLVED);
+        expect(result.proposed).not.toBe(WorkStatus.FOLLOW_UP_REQUIRED);
+      }
+    });
+
+    it('is a quiet no-op when the workspace is already Resolved', async () => {
       const referralId = insertReferral(ReferralState.CLOSED);
       const workspace = await createWorkspace(referralId);
       await setWorkStatus(workspace.id, WorkStatus.RESOLVED, 'user:1');
@@ -432,6 +453,7 @@ describe('workspaceService', () => {
       const result = await proposeWorkStatus(workspace.id, ReferralState.CLOSED_CONFIRMED);
 
       // Already Resolved, so the branch resolves to Resolved and it is a no-op.
+      expect(result).toMatchObject({ applied: false, declinedReason: 'same-status' });
       expect(result.proposed).toBe(WorkStatus.RESOLVED);
       const after = await getWorkspace(workspace.id);
       expect(after?.workStatus).toBe(WorkStatus.RESOLVED);
@@ -449,7 +471,11 @@ describe('workspaceService', () => {
   // ── hasOpenInternalItems ──────────────────────────────────────────────────
 
   describe('hasOpenInternalItems()', () => {
-    it('is true for every status except Resolved', async () => {
+    it('is false for every status — Phase 1 has nothing that can be an open item', async () => {
+      // The sources are an unresolved exception (PRD-28) and an unacknowledged
+      // mention (PRD-22). Until one of those exists there is nothing to report,
+      // and saying otherwise is what made every closed referral look like it
+      // needed follow-up. Each of those PRDs owns flipping this.
       for (const status of Object.values(WorkStatus)) {
         const referralId = insertReferral();
         const workspace = await createWorkspace(referralId);
@@ -457,8 +483,7 @@ describe('workspaceService', () => {
           await setWorkStatus(workspace.id, status, 'user:1');
         }
 
-        const open = await hasOpenInternalItems(workspace.id);
-        expect(open).toBe(status !== WorkStatus.RESOLVED);
+        await expect(hasOpenInternalItems(workspace.id)).resolves.toBe(false);
       }
     });
 
@@ -687,17 +712,25 @@ describe('workspaceService', () => {
     });
 
     it('leaves a protected status alone, reporting it as skipped', async () => {
-      const referralId = insertReferral(ReferralState.CLOSED_CONFIRMED);
+      const referralId = insertReferral(ReferralState.RECEIVED);
       await backfillWorkspaces();
-      // Closed-Confirmed over an open workspace derives Follow-up-Required,
-      // which is itself protected from further proposals.
-      await expect(getWorkspaceByReferralId(referralId)).resolves.toMatchObject({
-        workStatus: WorkStatus.FOLLOW_UP_REQUIRED,
-      });
+      const workspace = await getWorkspaceByReferralId(referralId);
+      // Exception is protected from proposals. Clear the manual flag so only the
+      // protection can be what declines it.
+      await setWorkStatus(workspace!.id, WorkStatus.EXCEPTION, 'system');
+      sqlite()
+        .prepare(`UPDATE referral_workspaces SET work_status_is_manual = 0 WHERE id = ?`)
+        .run(workspace!.id);
+      sqlite()
+        .prepare(`UPDATE referrals SET state = ? WHERE id = ?`)
+        .run(ReferralState.SCHEDULED, referralId);
 
       const result = await backfillWorkspaces();
 
       expect(result).toEqual({ created: 0, updated: 0, skipped: 1 });
+      await expect(getWorkspaceByReferralId(referralId)).resolves.toMatchObject({
+        workStatus: WorkStatus.EXCEPTION,
+      });
     });
 
     it('writes no audit rows on a second run — idempotent, not merely harmless', async () => {
