@@ -85,6 +85,13 @@
       "when": 1789418512981,
       "tag": "0011_striped_george_stacy",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789420945158,
+      "tag": "0012_flashy_captain_stacy",
+      "breakpoints": true
     }
   ]
 }

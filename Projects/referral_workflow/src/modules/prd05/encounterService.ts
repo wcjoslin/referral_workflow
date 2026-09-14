@@ -17,6 +17,7 @@ import { autoAck } from '../prd06/mockReferrer';
 import { evaluateSkills } from '../prd09/skillEvaluator';
 import { executeSkillAction } from '../prd09/skillActions';
 import { emitEvent } from '../analytics/eventService';
+import { proposeForReferral } from '../workspace/workspaceService';
 import { recordThreadMessage } from '../messaging/threadService';
 
 export class ReferralNotFoundError extends Error {
@@ -56,6 +57,12 @@ export async function markEncounterComplete(opts: EncounterOptions): Promise<voi
       updatedAt: new Date(),
     })
     .where(eq(referrals.id, referralId));
+
+  // PRD-18: advise the workspace immediately after the protocol state is
+  // written and BEFORE any outbound send. The proposal follows from a transition
+  // that is already guarded and committed, so it must not depend on mail
+  // succeeding — after the send it would go stale whenever SMTP fails.
+  await proposeForReferral(referralId, ReferralState.ENCOUNTER);
 
   // Analytics: encounter complete
   void emitEvent({

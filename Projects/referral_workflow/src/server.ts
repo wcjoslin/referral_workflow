@@ -43,6 +43,7 @@ import {
   listUsers,
   tryGetActingUser,
 } from './modules/workspace/identityService';
+import { backfillWorkspaces, proposeForReferral } from './modules/workspace/workspaceService';
 import { InvalidStateTransitionError, ReferralState, transition as referralTransition } from './state/referralStateMachine';
 import { InvalidClaimsStateTransitionError } from './state/claimsStateMachine';
 import { InvalidPriorAuthStateTransitionError } from './state/priorAuthStateMachine';
@@ -271,6 +272,23 @@ app.get('/', async (req: Request, res: Response, next: NextFunction) => {
 // Health check
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
+});
+
+// ── Workspaces (PRD-18) ──────────────────────────────────────────────────────
+
+/**
+ * Creates workspaces for referrals that predate PRD-18. Idempotent on
+ * referral_id; also available as `npm run backfill:workspaces`.
+ *
+ * A maintenance endpoint for the demo, not part of the workspace UI (PRD-19).
+ */
+app.post('/api/workspaces/backfill', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await backfillWorkspaces();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // ── Identity (PRD-17) ─────────────────────────────────────────────────────────
@@ -1476,6 +1494,13 @@ app.post('/referrals/:id/override', async (req: Request, res: Response, next: Ne
           updatedAt: new Date(),
         })
         .where(eq(referrals.id, referralId));
+    }
+
+    // PRD-18: keep the work status in step after an override. Like the
+    // pendingInfoChecker escalation, this route writes `state` directly rather
+    // than through transition() — that bypass is PRD-25's to fix.
+    if (referral && referral.state !== 'Acknowledged') {
+      await proposeForReferral(referralId, ReferralState.ACKNOWLEDGED);
     }
 
     // Clear priority flag if it was set by a skill

@@ -1,0 +1,645 @@
+/**
+ * Unit tests for workspaceService.ts (PRD-18)
+ *
+ * The centre of gravity here is the advisory proposal rule and the dual-status
+ * guarantee: a work status write must never touch `referrals.state`, and a
+ * protocol event must never overwrite a status a person set.
+ */
+
+jest.mock('../../../src/config', () => ({
+  config: {
+    smtp: { host: 'smtp.test', port: 587, user: 'user', password: 'pass' },
+    receiving: { directAddress: 'receiving@specialist.direct' },
+    database: { url: ':memory:' },
+  },
+}));
+
+jest.mock('../../../src/db', () => {
+  const Database = require('better-sqlite3');
+  const { drizzle } = require('drizzle-orm/better-sqlite3');
+  const schema = require('../../../src/db/schema');
+
+  const sqlite = new Database(':memory:');
+  sqlite.exec(`
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      display_name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      direct_address TEXT,
+      job_role TEXT NOT NULL,
+      legacy_clinician_id TEXT,
+      all_queues_access INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE patients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      first_name TEXT NOT NULL,
+      last_name TEXT NOT NULL,
+      date_of_birth TEXT NOT NULL
+    );
+    CREATE TABLE referrals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      patient_id INTEGER NOT NULL,
+      source_message_id TEXT NOT NULL UNIQUE,
+      referrer_address TEXT NOT NULL,
+      reason_for_referral TEXT,
+      state TEXT NOT NULL DEFAULT 'Received',
+      decline_reason TEXT,
+      clinician_id TEXT,
+      appointment_date TEXT,
+      appointment_location TEXT,
+      scheduled_provider TEXT,
+      ai_assessment TEXT,
+      routing_department TEXT NOT NULL DEFAULT 'Unassigned',
+      routing_equipment TEXT,
+      clinical_data TEXT,
+      raw_ccda_xml TEXT,
+      created_at INTEGER NOT NULL,
+      priority_flag INTEGER DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE referral_workspaces (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      referral_id INTEGER NOT NULL UNIQUE,
+      external_referral_id TEXT,
+      correlation_key TEXT,
+      work_status TEXT NOT NULL DEFAULT 'Triage',
+      work_status_is_manual INTEGER NOT NULL DEFAULT 0,
+      work_status_set_by TEXT,
+      work_status_set_at INTEGER,
+      owner_user_id INTEGER,
+      queue_id INTEGER,
+      next_action TEXT,
+      next_action_due_at INTEGER,
+      exception_reason TEXT,
+      archived_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE workflow_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER NOT NULL,
+      from_state TEXT,
+      to_state TEXT,
+      actor TEXT NOT NULL,
+      metadata TEXT,
+      created_at INTEGER NOT NULL
+    );
+  `);
+
+  (global as Record<string, unknown>).__TEST_SQLITE__ = sqlite;
+
+  return { db: drizzle(sqlite, { schema }) };
+});
+
+import { ReferralState } from '../../../src/state/referralStateMachine';
+import { InvalidWorkStatusTransitionError, WorkStatus } from '../../../src/state/workStatusMachine';
+import {
+  WorkspaceAlreadyExistsError,
+  WorkspaceNotArchivableError,
+  WorkspaceNotFoundError,
+  archiveWorkspace,
+  backfillWorkspaces,
+  createWorkspace,
+  getWorkspace,
+  getWorkspaceByReferralId,
+  hasOpenInternalItems,
+  proposeForReferral,
+  proposeWorkStatus,
+  resyncWorkStatus,
+  setWorkStatus,
+} from '../../../src/modules/workspace/workspaceService';
+
+function sqlite(): import('better-sqlite3').Database {
+  return (global as Record<string, unknown>).__TEST_SQLITE__ as import('better-sqlite3').Database;
+}
+
+function clearTables(): void {
+  sqlite().exec(
+    'DELETE FROM workflow_events; DELETE FROM referral_workspaces; DELETE FROM referrals; DELETE FROM patients; DELETE FROM users;',
+  );
+}
+
+let referralSeq = 0;
+
+/** Inserts a referral directly and returns its id. */
+function insertReferral(state: ReferralState = ReferralState.RECEIVED): number {
+  referralSeq += 1;
+  const patient = sqlite()
+    .prepare(`INSERT INTO patients (first_name, last_name, date_of_birth) VALUES (?, ?, ?)`)
+    .run('Test', `Patient${referralSeq}`, '1980-01-01');
+  const result = sqlite()
+    .prepare(
+      `INSERT INTO referrals (patient_id, source_message_id, referrer_address, state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 0, 0)`,
+    )
+    .run(patient.lastInsertRowid, `ws-test-${referralSeq}`, 'ref@hospital.direct', state);
+  return Number(result.lastInsertRowid);
+}
+
+function referralState(referralId: number): string {
+  const row = sqlite().prepare(`SELECT state FROM referrals WHERE id = ?`).get(referralId) as {
+    state: string;
+  };
+  return row.state;
+}
+
+function events(
+  eventType?: string,
+): { event_type: string; actor: string; metadata: string | null }[] {
+  const rows = sqlite()
+    .prepare(
+      `SELECT event_type, from_state, to_state, actor, metadata FROM workflow_events ORDER BY id`,
+    )
+    .all() as { event_type: string; actor: string; metadata: string | null }[];
+  return eventType ? rows.filter((r) => r.event_type === eventType) : rows;
+}
+
+/** emitEvent() is fire-and-forget, so let its insert land before asserting. */
+async function flushEvents(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+describe('workspaceService', () => {
+  beforeEach(() => clearTables());
+
+  // ── Creation ──────────────────────────────────────────────────────────────
+
+  describe('createWorkspace()', () => {
+    it('creates a workspace at Triage with no owner and no manual flag', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+
+      expect(workspace).toMatchObject({
+        referralId,
+        workStatus: WorkStatus.TRIAGE,
+        workStatusIsManual: false,
+        ownerUserId: null,
+        queueId: null,
+        archivedAt: null,
+      });
+    });
+
+    it('emits workspace.created naming system as the actor', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+      await flushEvents();
+
+      const created = events('workspace.created');
+      expect(created).toHaveLength(1);
+      expect(created[0].actor).toBe('system');
+      expect(JSON.parse(created[0].metadata as string)).toMatchObject({
+        workspaceId: workspace.id,
+      });
+    });
+
+    it('rejects a second workspace for the same referral', async () => {
+      const referralId = insertReferral();
+      await createWorkspace(referralId);
+      await expect(createWorkspace(referralId)).rejects.toThrow(WorkspaceAlreadyExistsError);
+    });
+
+    it('is findable by id and by referral id', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+
+      await expect(getWorkspace(workspace.id)).resolves.toMatchObject({ id: workspace.id });
+      await expect(getWorkspaceByReferralId(referralId)).resolves.toMatchObject({
+        id: workspace.id,
+      });
+    });
+
+    it('returns null for unknown or non-integer lookups', async () => {
+      await expect(getWorkspace(9999)).resolves.toBeNull();
+      await expect(getWorkspace(1.5)).resolves.toBeNull();
+      await expect(getWorkspaceByReferralId(9999)).resolves.toBeNull();
+    });
+  });
+
+  // ── The dual-status guarantee ─────────────────────────────────────────────
+
+  describe('dual status independence', () => {
+    it('a work status change leaves referrals.state untouched', async () => {
+      const referralId = insertReferral(ReferralState.ACCEPTED);
+      const workspace = await createWorkspace(referralId);
+
+      await setWorkStatus(workspace.id, WorkStatus.WAITING_INTERNAL, 'user:1');
+
+      expect(referralState(referralId)).toBe(ReferralState.ACCEPTED);
+    });
+
+    it('a protocol proposal leaves referrals.state untouched', async () => {
+      const referralId = insertReferral(ReferralState.ACCEPTED);
+      const workspace = await createWorkspace(referralId);
+
+      await proposeWorkStatus(workspace.id, ReferralState.SCHEDULED);
+
+      // The proposal advises the workspace; it is not what moves the protocol.
+      expect(referralState(referralId)).toBe(ReferralState.ACCEPTED);
+    });
+  });
+
+  // ── setWorkStatus ─────────────────────────────────────────────────────────
+
+  describe('setWorkStatus()', () => {
+    it('guards through the machine and writes nothing on an invalid transition', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+      await setWorkStatus(workspace.id, WorkStatus.RESOLVED, 'user:1');
+
+      await expect(setWorkStatus(workspace.id, WorkStatus.TRIAGE, 'user:1')).rejects.toThrow(
+        InvalidWorkStatusTransitionError,
+      );
+
+      const after = await getWorkspace(workspace.id);
+      expect(after?.workStatus).toBe(WorkStatus.RESOLVED);
+    });
+
+    it('sets the manual flag, the actor and the timestamp', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+
+      const updated = await setWorkStatus(
+        workspace.id,
+        WorkStatus.IN_PROGRESS,
+        'user:7',
+        'picked up',
+      );
+
+      expect(updated.workStatus).toBe(WorkStatus.IN_PROGRESS);
+      expect(updated.workStatusIsManual).toBe(true);
+      expect(updated.workStatusSetBy).toBe('user:7');
+      expect(updated.workStatusSetAt).toBeInstanceOf(Date);
+    });
+
+    it('emits work_status_changed with from, to, actor and the reason', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+      await setWorkStatus(workspace.id, WorkStatus.IN_PROGRESS, 'user:7', 'picked up');
+      await flushEvents();
+
+      const changed = events('workspace.work_status_changed');
+      expect(changed).toHaveLength(1);
+      expect(changed[0].actor).toBe('user:7');
+      expect(JSON.parse(changed[0].metadata as string)).toMatchObject({
+        workspaceId: workspace.id,
+        manual: true,
+        reason: 'picked up',
+      });
+    });
+
+    it('throws for an unknown workspace', async () => {
+      await expect(setWorkStatus(9999, WorkStatus.IN_PROGRESS, 'user:1')).rejects.toThrow(
+        WorkspaceNotFoundError,
+      );
+    });
+  });
+
+  // ── The proposal rule ─────────────────────────────────────────────────────
+
+  describe('proposeWorkStatus()', () => {
+    it('applies when the status was last written by the mapping', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+
+      const result = await proposeWorkStatus(workspace.id, ReferralState.ACCEPTED);
+
+      expect(result).toMatchObject({
+        applied: true,
+        workStatus: WorkStatus.IN_PROGRESS,
+        proposed: WorkStatus.IN_PROGRESS,
+      });
+      const after = await getWorkspace(workspace.id);
+      expect(after?.workStatusIsManual).toBe(false);
+    });
+
+    it('declines with reason "manual" once a person has set the status, and writes nothing', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+      await setWorkStatus(workspace.id, WorkStatus.WAITING_INTERNAL, 'user:1');
+
+      const result = await proposeWorkStatus(workspace.id, ReferralState.SCHEDULED);
+
+      expect(result).toMatchObject({
+        applied: false,
+        declinedReason: 'manual',
+        workStatus: WorkStatus.WAITING_INTERNAL,
+        proposed: WorkStatus.WAITING_EXTERNAL,
+      });
+      const after = await getWorkspace(workspace.id);
+      expect(after?.workStatus).toBe(WorkStatus.WAITING_INTERNAL);
+    });
+
+    it('records the declined proposal so the path is auditable', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+      await setWorkStatus(workspace.id, WorkStatus.WAITING_INTERNAL, 'user:1');
+      await proposeWorkStatus(workspace.id, ReferralState.SCHEDULED);
+      await flushEvents();
+
+      const declined = events('workspace.work_status_proposal_declined');
+      expect(declined).toHaveLength(1);
+      expect(JSON.parse(declined[0].metadata as string)).toMatchObject({
+        proposed: WorkStatus.WAITING_EXTERNAL,
+        current: WorkStatus.WAITING_INTERNAL,
+        declinedReason: 'manual',
+      });
+    });
+
+    it.each([
+      ['Exception', WorkStatus.EXCEPTION],
+      ['Follow-up-Required', WorkStatus.FOLLOW_UP_REQUIRED],
+    ])('declines with "protected" from %s even when the flag is clear', async (_label, status) => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+      // Reach the status through the mapping-free path, then clear the flag so
+      // only the protection can be what declines the proposal.
+      await setWorkStatus(workspace.id, status, 'system');
+      sqlite()
+        .prepare(`UPDATE referral_workspaces SET work_status_is_manual = 0 WHERE id = ?`)
+        .run(workspace.id);
+
+      const result = await proposeWorkStatus(workspace.id, ReferralState.ACCEPTED);
+
+      expect(result).toMatchObject({ applied: false, declinedReason: 'protected' });
+      const after = await getWorkspace(workspace.id);
+      expect(after?.workStatus).toBe(status);
+    });
+
+    it('declines an already-correct status quietly, without spending an audit row', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+
+      const result = await proposeWorkStatus(workspace.id, ReferralState.ACKNOWLEDGED);
+      await flushEvents();
+
+      expect(result).toMatchObject({ applied: false, declinedReason: 'same-status' });
+      expect(events('workspace.work_status_proposal_declined')).toHaveLength(0);
+    });
+
+    it('declines on an archived workspace', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+      await setWorkStatus(workspace.id, WorkStatus.RESOLVED, 'user:1');
+      await archiveWorkspace(workspace.id, 'user:1');
+
+      const result = await proposeWorkStatus(workspace.id, ReferralState.ACCEPTED);
+      expect(result).toMatchObject({ applied: false, declinedReason: 'archived' });
+    });
+
+    it('maps every protocol state to a valid status without throwing', async () => {
+      for (const state of Object.values(ReferralState)) {
+        const referralId = insertReferral(state);
+        const workspace = await createWorkspace(referralId);
+
+        const result = await proposeWorkStatus(workspace.id, state);
+
+        expect(Object.values(WorkStatus)).toContain(result.proposed);
+      }
+    });
+
+    it('throws for an unknown workspace', async () => {
+      await expect(proposeWorkStatus(9999, ReferralState.ACCEPTED)).rejects.toThrow(
+        WorkspaceNotFoundError,
+      );
+    });
+  });
+
+  // ── The closure branch ────────────────────────────────────────────────────
+
+  describe('Closed-Confirmed branch (computed inside proposeWorkStatus)', () => {
+    it('proposes Follow-up-Required when internal work is still open', async () => {
+      const referralId = insertReferral(ReferralState.CLOSED);
+      const workspace = await createWorkspace(referralId);
+      await proposeWorkStatus(workspace.id, ReferralState.ACCEPTED); // → In-Progress, mapping-set
+
+      const result = await proposeWorkStatus(workspace.id, ReferralState.CLOSED_CONFIRMED);
+
+      expect(result).toMatchObject({ applied: true, workStatus: WorkStatus.FOLLOW_UP_REQUIRED });
+    });
+
+    it('proposes Resolved when nothing internal is outstanding', async () => {
+      const referralId = insertReferral(ReferralState.CLOSED);
+      const workspace = await createWorkspace(referralId);
+      await setWorkStatus(workspace.id, WorkStatus.RESOLVED, 'user:1');
+      sqlite()
+        .prepare(`UPDATE referral_workspaces SET work_status_is_manual = 0 WHERE id = ?`)
+        .run(workspace.id);
+
+      const result = await proposeWorkStatus(workspace.id, ReferralState.CLOSED_CONFIRMED);
+
+      // Already Resolved, so the branch resolves to Resolved and it is a no-op.
+      expect(result.proposed).toBe(WorkStatus.RESOLVED);
+      const after = await getWorkspace(workspace.id);
+      expect(after?.workStatus).toBe(WorkStatus.RESOLVED);
+    });
+
+    it('never reopens the protocol state to represent internal work', async () => {
+      const referralId = insertReferral(ReferralState.CLOSED_CONFIRMED);
+      const workspace = await createWorkspace(referralId);
+      await proposeWorkStatus(workspace.id, ReferralState.CLOSED_CONFIRMED);
+
+      expect(referralState(referralId)).toBe(ReferralState.CLOSED_CONFIRMED);
+    });
+  });
+
+  // ── hasOpenInternalItems ──────────────────────────────────────────────────
+
+  describe('hasOpenInternalItems()', () => {
+    it('is true for every status except Resolved', async () => {
+      for (const status of Object.values(WorkStatus)) {
+        const referralId = insertReferral();
+        const workspace = await createWorkspace(referralId);
+        if (status !== WorkStatus.TRIAGE) {
+          await setWorkStatus(workspace.id, status, 'user:1');
+        }
+
+        const open = await hasOpenInternalItems(workspace.id);
+        expect(open).toBe(status !== WorkStatus.RESOLVED);
+      }
+    });
+
+    it('throws for an unknown workspace', async () => {
+      await expect(hasOpenInternalItems(9999)).rejects.toThrow(WorkspaceNotFoundError);
+    });
+  });
+
+  // ── resyncWorkStatus ──────────────────────────────────────────────────────
+
+  describe('resyncWorkStatus()', () => {
+    it('clears the manual flag and applies the mapping for the current protocol state', async () => {
+      const referralId = insertReferral(ReferralState.ACCEPTED);
+      const workspace = await createWorkspace(referralId);
+      await setWorkStatus(workspace.id, WorkStatus.WAITING_INTERNAL, 'user:1');
+
+      const resynced = await resyncWorkStatus(workspace.id, 'user:1');
+
+      expect(resynced.workStatus).toBe(WorkStatus.IN_PROGRESS); // Accepted → In-Progress
+      expect(resynced.workStatusIsManual).toBe(false);
+    });
+
+    it('makes a subsequent proposal apply again — an override is never permanent', async () => {
+      const referralId = insertReferral(ReferralState.ACCEPTED);
+      const workspace = await createWorkspace(referralId);
+      await setWorkStatus(workspace.id, WorkStatus.WAITING_INTERNAL, 'user:1');
+      await expect(proposeWorkStatus(workspace.id, ReferralState.SCHEDULED)).resolves.toMatchObject(
+        { applied: false },
+      );
+
+      await resyncWorkStatus(workspace.id, 'user:1');
+
+      await expect(proposeWorkStatus(workspace.id, ReferralState.SCHEDULED)).resolves.toMatchObject(
+        { applied: true, workStatus: WorkStatus.WAITING_EXTERNAL },
+      );
+    });
+
+    it('emits a resync event', async () => {
+      const referralId = insertReferral(ReferralState.ACCEPTED);
+      const workspace = await createWorkspace(referralId);
+      await resyncWorkStatus(workspace.id, 'user:3');
+      await flushEvents();
+
+      expect(events('workspace.work_status_resynced')).toHaveLength(1);
+    });
+
+    it('throws for an unknown workspace', async () => {
+      await expect(resyncWorkStatus(9999, 'user:1')).rejects.toThrow(WorkspaceNotFoundError);
+    });
+  });
+
+  // ── Archival ──────────────────────────────────────────────────────────────
+
+  describe('archiveWorkspace()', () => {
+    it('succeeds from Resolved and does not alter any protocol field', async () => {
+      const referralId = insertReferral(ReferralState.CLOSED_CONFIRMED);
+      const workspace = await createWorkspace(referralId);
+      await setWorkStatus(workspace.id, WorkStatus.RESOLVED, 'user:1');
+
+      const archived = await archiveWorkspace(workspace.id, 'user:1');
+
+      expect(archived.archivedAt).toBeInstanceOf(Date);
+      expect(archived.workStatus).toBe(WorkStatus.RESOLVED);
+      expect(referralState(referralId)).toBe(ReferralState.CLOSED_CONFIRMED);
+    });
+
+    it('refuses from Follow-up-Required, naming what is still open', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+      await setWorkStatus(workspace.id, WorkStatus.FOLLOW_UP_REQUIRED, 'user:1');
+
+      await expect(archiveWorkspace(workspace.id, 'user:1')).rejects.toThrow(
+        /internal follow-up is still outstanding/,
+      );
+    });
+
+    it('refuses from Triage', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+
+      await expect(archiveWorkspace(workspace.id, 'user:1')).rejects.toThrow(
+        WorkspaceNotArchivableError,
+      );
+    });
+
+    it('is idempotent — archiving twice is a no-op', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+      await setWorkStatus(workspace.id, WorkStatus.RESOLVED, 'user:1');
+      const first = await archiveWorkspace(workspace.id, 'user:1');
+      const second = await archiveWorkspace(workspace.id, 'user:1');
+
+      expect(second.archivedAt?.getTime()).toBe(first.archivedAt?.getTime());
+    });
+  });
+
+  // ── proposeForReferral (the call-site wrapper) ────────────────────────────
+
+  describe('proposeForReferral()', () => {
+    it('advises the workspace for a referral that has one', async () => {
+      const referralId = insertReferral();
+      const workspace = await createWorkspace(referralId);
+
+      await proposeForReferral(referralId, ReferralState.ACCEPTED);
+
+      const after = await getWorkspace(workspace.id);
+      expect(after?.workStatus).toBe(WorkStatus.IN_PROGRESS);
+    });
+
+    it('is silent for a referral with no workspace — a protocol event must not fail', async () => {
+      const referralId = insertReferral();
+      await expect(proposeForReferral(referralId, ReferralState.ACCEPTED)).resolves.toBeUndefined();
+    });
+
+    it('is silent for a referral that does not exist at all', async () => {
+      await expect(proposeForReferral(9999, ReferralState.ACCEPTED)).resolves.toBeUndefined();
+    });
+  });
+
+  // ── Backfill ──────────────────────────────────────────────────────────────
+
+  describe('backfillWorkspaces()', () => {
+    it("derives each work status from the referral's current protocol state", async () => {
+      const accepted = insertReferral(ReferralState.ACCEPTED);
+      const scheduled = insertReferral(ReferralState.SCHEDULED);
+      const declined = insertReferral(ReferralState.DECLINED);
+      const received = insertReferral(ReferralState.RECEIVED);
+
+      const result = await backfillWorkspaces();
+
+      expect(result).toEqual({ created: 4, skipped: 0 });
+      await expect(getWorkspaceByReferralId(accepted)).resolves.toMatchObject({
+        workStatus: WorkStatus.IN_PROGRESS,
+      });
+      await expect(getWorkspaceByReferralId(scheduled)).resolves.toMatchObject({
+        workStatus: WorkStatus.WAITING_EXTERNAL,
+      });
+      await expect(getWorkspaceByReferralId(declined)).resolves.toMatchObject({
+        workStatus: WorkStatus.RESOLVED,
+      });
+      // Received maps to Triage, which is already the creation default.
+      await expect(getWorkspaceByReferralId(received)).resolves.toMatchObject({
+        workStatus: WorkStatus.TRIAGE,
+      });
+    });
+
+    it('records derived statuses as mapping-set, not manual', async () => {
+      const referralId = insertReferral(ReferralState.ACCEPTED);
+      await backfillWorkspaces();
+
+      await expect(getWorkspaceByReferralId(referralId)).resolves.toMatchObject({
+        workStatusIsManual: false,
+      });
+    });
+
+    it('is idempotent on referral_id', async () => {
+      insertReferral(ReferralState.ACCEPTED);
+      insertReferral(ReferralState.SCHEDULED);
+
+      const first = await backfillWorkspaces();
+      const second = await backfillWorkspaces();
+
+      expect(first).toEqual({ created: 2, skipped: 0 });
+      expect(second).toEqual({ created: 0, skipped: 2 });
+    });
+
+    it('does not overwrite a status a person set on a previously backfilled workspace', async () => {
+      const referralId = insertReferral(ReferralState.ACCEPTED);
+      await backfillWorkspaces();
+      const workspace = await getWorkspaceByReferralId(referralId);
+      await setWorkStatus(workspace!.id, WorkStatus.WAITING_INTERNAL, 'user:1');
+
+      await backfillWorkspaces();
+
+      await expect(getWorkspaceByReferralId(referralId)).resolves.toMatchObject({
+        workStatus: WorkStatus.WAITING_INTERNAL,
+      });
+    });
+
+    it('reports nothing to do on an empty database', async () => {
+      await expect(backfillWorkspaces()).resolves.toEqual({ created: 0, skipped: 0 });
+    });
+  });
+});

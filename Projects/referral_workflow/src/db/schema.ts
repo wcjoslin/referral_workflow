@@ -123,6 +123,63 @@ export const workflowEvents = sqliteTable(
   }),
 );
 
+// ── Referral Workspace (PRD-18) ─────────────────────────────────────────────
+//
+// One row per referral, holding the INTERNAL collaboration state. Deliberately
+// its own table rather than columns on `referrals`: the referral row is the
+// protocol record, and keeping internal state separate is what makes the
+// "never silently overwrite one with the other" rule enforceable in review.
+export const referralWorkspaces = sqliteTable(
+  'referral_workspaces',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    referralId: integer('referral_id')
+      .references(() => referrals.id)
+      .notNull()
+      .unique(),
+
+    // Correlation identifiers. Defined here, populated fully by PRD-28.
+    externalReferralId: text('external_referral_id'), // the 360X id preserved across orgs
+    correlationKey: text('correlation_key'), // sender+recipient+patient composite
+
+    // Internal work state. NEVER mirrors referrals.state — see workStatusMachine.ts.
+    workStatus: text('work_status').notNull().default('Triage'),
+
+    // True once any actor has set the work status explicitly through
+    // setWorkStatus(); false when the advisory protocol mapping last wrote it.
+    // This single flag is what makes the mapping advisory: a proposal applies
+    // only when it is false. resyncWorkStatus() clears it.
+    workStatusIsManual: integer('work_status_is_manual', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+
+    // Plain audit detail — who and when. NOT load-bearing for the advisory rule.
+    workStatusSetBy: text('work_status_set_by'),
+    workStatusSetAt: integer('work_status_set_at', { mode: 'timestamp' }),
+
+    // Ownership (PRD-21) and routing (PRD-20).
+    ownerUserId: integer('owner_user_id').references(() => users.id),
+    queueId: integer('queue_id'), // real FK added by PRD-20
+
+    // Next action. Columns here; the values are computed by PRD-26.
+    nextAction: text('next_action'),
+    nextActionDueAt: integer('next_action_due_at', { mode: 'timestamp' }),
+
+    // Exception condition. Status and column here; raised by PRD-28.
+    exceptionReason: text('exception_reason'),
+
+    archivedAt: integer('archived_at', { mode: 'timestamp' }),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    referralIdx: index('idx_referral_workspaces_referral').on(table.referralId),
+    ownerIdx: index('idx_referral_workspaces_owner').on(table.ownerUserId, table.workStatus),
+    queueIdx: index('idx_referral_workspaces_queue').on(table.queueId, table.workStatus),
+    dueIdx: index('idx_referral_workspaces_due').on(table.nextActionDueAt),
+  }),
+);
+
 // ── Referral Message Thread ─────────────────────────────────────────────────
 
 export const referralMessages = sqliteTable(
