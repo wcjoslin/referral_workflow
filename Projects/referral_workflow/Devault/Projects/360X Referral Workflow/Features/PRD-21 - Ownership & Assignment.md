@@ -86,8 +86,8 @@ than an event storm of identical reassignments.
 **AC8:** A "Release" action clears the owner, leaves the owning queue intact, and emits
 `workspace.released` with the previous owner.  
 **AC9:** A released workspace appears in its queue's unassigned view immediately.  
-**AC10:** Release requires a reason when the work status is anything other than `New` or `Triage`, and
-the reason is recorded in the event metadata.
+**AC10:** Release requires a reason when the work status is anything other than `Triage`, and the
+reason is recorded in the event metadata.
 
 ### As a manager, I want to see what is unowned so that nothing sits unclaimed
 
@@ -235,7 +235,7 @@ pre-applied; until PRD-20 ships, it reuses the dashboard table markup.
 - `assignOwner()` to the current owner returns `changed: false`, writes nothing, emits nothing
 - `assignOwner()` with an unknown or inactive user throws `OwnerNotFoundError`
 - `releaseOwnership()` clears the owner, preserves `queue_id`, emits `workspace.released`
-- `releaseOwnership()` without a reason throws in `In-Progress`, succeeds in `New`
+- `releaseOwnership()` without a reason throws in `In-Progress`, succeeds in `Triage`
 - Any ownership call on an archived workspace throws `WorkspaceArchivedError`
 - `getMyWork()` orders by due date ascending with nulls last and excludes archived workspaces
 

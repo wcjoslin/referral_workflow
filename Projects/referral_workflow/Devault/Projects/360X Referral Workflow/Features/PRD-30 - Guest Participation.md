@@ -163,6 +163,13 @@ not served.
   visibility is not a client choice for a guest.
 - Invitation email content must not include clinical detail beyond the patient name and referring
   organization; the referral content lives behind the link, not in the mail.
+- **Known issue for refinement — an invitation may target a named individual.** This PRD invites
+  "a party" at a single `recipientEmail`. Because an organization can provision per-clinician Direct
+  addresses alongside its intake address (see PRD-24), an invitation can reasonably be addressed to
+  a specific person at that party rather than to the organization generally. Resolve when this PRD is
+  refined: whether `workspace_guests` binds to a party alone or to a party plus a specific address,
+  what the audit record names when several people at one party hold separate invitations, and whether
+  revoking one revokes the others. The one-workspace scoping rule is unaffected either way.
 - Rate limiting is out of scope but the absence must be documented as a production gap in the PRD's
   own engineering constraints, so it is not mistaken for a completed control.
 
