@@ -277,8 +277,9 @@ app.get('/health', (_req: Request, res: Response) => {
 // ── Workspaces (PRD-18) ──────────────────────────────────────────────────────
 
 /**
- * Creates workspaces for referrals that predate PRD-18. Idempotent on
- * referral_id; also available as `npm run backfill:workspaces`.
+ * Brings every referral's workspace into line with its protocol state: creates
+ * the missing ones, re-derives the stale ones. Idempotent; also available as
+ * `npm run backfill:workspaces`.
  *
  * A maintenance endpoint for the demo, not part of the workspace UI (PRD-19).
  */

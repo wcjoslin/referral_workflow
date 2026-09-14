@@ -589,7 +589,7 @@ describe('workspaceService', () => {
 
       const result = await backfillWorkspaces();
 
-      expect(result).toEqual({ created: 4, skipped: 0 });
+      expect(result).toEqual({ created: 4, updated: 0, skipped: 0 });
       await expect(getWorkspaceByReferralId(accepted)).resolves.toMatchObject({
         workStatus: WorkStatus.IN_PROGRESS,
       });
@@ -621,8 +621,8 @@ describe('workspaceService', () => {
       const first = await backfillWorkspaces();
       const second = await backfillWorkspaces();
 
-      expect(first).toEqual({ created: 2, skipped: 0 });
-      expect(second).toEqual({ created: 0, skipped: 2 });
+      expect(first).toEqual({ created: 2, updated: 0, skipped: 0 });
+      expect(second).toEqual({ created: 0, updated: 0, skipped: 2 });
     });
 
     it('does not overwrite a status a person set on a previously backfilled workspace', async () => {
@@ -639,7 +639,86 @@ describe('workspaceService', () => {
     });
 
     it('reports nothing to do on an empty database', async () => {
-      await expect(backfillWorkspaces()).resolves.toEqual({ created: 0, skipped: 0 });
+      await expect(backfillWorkspaces()).resolves.toEqual({ created: 0, updated: 0, skipped: 0 });
+    });
+
+    // ── Re-deriving stale workspaces ────────────────────────────────────────
+    //
+    // A workspace goes stale when referrals.state is written without a proposal
+    // reaching it. seed-full-demo.ts does exactly that for all 100 demo
+    // referrals, so this is the ordinary case, not an edge one.
+
+    it('re-derives a workspace left stale by a direct protocol write', async () => {
+      const referralId = insertReferral(ReferralState.RECEIVED);
+      await backfillWorkspaces();
+      await expect(getWorkspaceByReferralId(referralId)).resolves.toMatchObject({
+        workStatus: WorkStatus.TRIAGE,
+      });
+
+      // Advance the protocol the way the seed does — straight to the column.
+      sqlite()
+        .prepare(`UPDATE referrals SET state = ? WHERE id = ?`)
+        .run(ReferralState.SCHEDULED, referralId);
+
+      const result = await backfillWorkspaces();
+
+      expect(result).toEqual({ created: 0, updated: 1, skipped: 0 });
+      await expect(getWorkspaceByReferralId(referralId)).resolves.toMatchObject({
+        workStatus: WorkStatus.WAITING_EXTERNAL,
+        workStatusIsManual: false,
+      });
+    });
+
+    it('counts a manual workspace as skipped rather than re-deriving it', async () => {
+      const referralId = insertReferral(ReferralState.ACCEPTED);
+      await backfillWorkspaces();
+      const workspace = await getWorkspaceByReferralId(referralId);
+      await setWorkStatus(workspace!.id, WorkStatus.WAITING_INTERNAL, 'user:1');
+      sqlite()
+        .prepare(`UPDATE referrals SET state = ? WHERE id = ?`)
+        .run(ReferralState.ENCOUNTER, referralId);
+
+      const result = await backfillWorkspaces();
+
+      expect(result).toEqual({ created: 0, updated: 0, skipped: 1 });
+      await expect(getWorkspaceByReferralId(referralId)).resolves.toMatchObject({
+        workStatus: WorkStatus.WAITING_INTERNAL,
+      });
+    });
+
+    it('leaves a protected status alone, reporting it as skipped', async () => {
+      const referralId = insertReferral(ReferralState.CLOSED_CONFIRMED);
+      await backfillWorkspaces();
+      // Closed-Confirmed over an open workspace derives Follow-up-Required,
+      // which is itself protected from further proposals.
+      await expect(getWorkspaceByReferralId(referralId)).resolves.toMatchObject({
+        workStatus: WorkStatus.FOLLOW_UP_REQUIRED,
+      });
+
+      const result = await backfillWorkspaces();
+
+      expect(result).toEqual({ created: 0, updated: 0, skipped: 1 });
+    });
+
+    it('writes no audit rows on a second run — idempotent, not merely harmless', async () => {
+      insertReferral(ReferralState.ACCEPTED);
+      insertReferral(ReferralState.SCHEDULED);
+      insertReferral(ReferralState.DECLINED);
+      insertReferral(ReferralState.CLOSED_CONFIRMED);
+      await backfillWorkspaces();
+      await flushEvents();
+
+      const before =
+        events('workspace.work_status_changed').length +
+        events('workspace.work_status_proposal_declined').length;
+
+      await backfillWorkspaces();
+      await flushEvents();
+
+      const after =
+        events('workspace.work_status_changed').length +
+        events('workspace.work_status_proposal_declined').length;
+      expect(after).toBe(before);
     });
   });
 });

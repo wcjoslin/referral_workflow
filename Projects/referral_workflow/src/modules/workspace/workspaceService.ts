@@ -365,10 +365,16 @@ async function applyProposal(
     return { applied: false, workStatus: workspace.workStatus, proposed, declinedReason };
   };
 
+  // 'same-status' is checked FIRST, before the flags. A proposal that asks for
+  // the status the workspace already holds is a no-op whatever else is true of
+  // it — reporting that as 'protected' or 'manual' would claim something was
+  // defended when nothing was, and would spend an audit row doing it. It also
+  // makes a repeated backfill genuinely idempotent rather than merely
+  // harmless.
+  if (workspace.workStatus === proposed) return decline('same-status');
   if (workspace.archivedAt !== null) return decline('archived');
   if (PROPOSAL_PROTECTED.includes(workspace.workStatus)) return decline('protected');
   if (workspace.workStatusIsManual) return decline('manual');
-  if (workspace.workStatus === proposed) return decline('same-status');
 
   // The mapping can propose a status the machine disallows from here (for
   // instance a late protocol event against a Resolved workspace). Treat that as
@@ -498,17 +504,39 @@ export async function archiveWorkspace(workspaceId: number, actor: string): Prom
 // ── Backfill ──────────────────────────────────────────────────────────────────
 
 export interface BackfillResult {
+  /** Referrals that had no workspace; one was created and its status derived. */
   created: number;
+  /** Existing workspaces whose status was stale against the protocol and re-derived. */
+  updated: number;
+  /** Existing workspaces left untouched — already correct, manual, protected or archived. */
   skipped: number;
 }
 
 /**
- * Creates workspaces for referrals that predate this feature.
+ * Brings every referral's workspace into line with its protocol state.
  *
- * Idempotent on `referral_id`. Each backfilled workspace derives its work status
- * from the advisory mapping against that referral's CURRENT protocol state,
- * written as mapping-set (`workStatusIsManual: false`) so the advisory rule
- * behaves correctly from then on.
+ * Two jobs, not one:
+ *
+ *   - a referral with no workspace gets one, its status derived from the mapping
+ *   - a referral whose workspace is STALE gets that status re-derived
+ *
+ * The second job is why this is not simply "create the missing rows". A
+ * workspace goes stale whenever `referrals.state` is written without a proposal
+ * reaching the workspace — `seed-full-demo.ts` advances all 100 demo referrals
+ * with direct `db.update()` calls, so without this every seeded workspace would
+ * sit at `Triage` no matter how far its referral had actually progressed. That
+ * is the exact misrepresentation the derive-don't-default decision below exists
+ * to prevent, so skipping existing rows would have defeated it.
+ *
+ * Re-deriving goes through the ordinary proposal path, so it cannot overwrite a
+ * status a person set (`manual`), an `Exception` or `Follow-up-Required`
+ * (`protected`), or an archived workspace — those are reported as skipped.
+ *
+ * Idempotent, and quietly so: a second run proposes what each workspace already
+ * holds, which declines as `same-status` and writes no audit row.
+ *
+ * Derived statuses are written as mapping-set (`workStatusIsManual: false`) so
+ * the advisory rule behaves correctly from then on.
  *
  * Setting everything to `Triage` was considered and rejected: it would
  * misrepresent a hundred seeded referrals as untriaged and make the queue views
@@ -519,17 +547,26 @@ export async function backfillWorkspaces(): Promise<BackfillResult> {
   const rows = await db.select({ id: referrals.id, state: referrals.state }).from(referrals);
 
   let created = 0;
+  let updated = 0;
   let skipped = 0;
 
   for (const referral of rows) {
+    const state = referral.state as ReferralState;
     const existing = await getWorkspaceByReferralId(referral.id);
+
     if (existing) {
-      skipped += 1;
+      // Stale, not correct — re-derive. applyProposal decides whether it may.
+      const { applied } = await applyProposal(
+        existing,
+        resolveProposedStatus(existing, state),
+        'system',
+      );
+      if (applied) updated += 1;
+      else skipped += 1;
       continue;
     }
 
     const workspace = await createWorkspace(referral.id);
-    const state = referral.state as ReferralState;
     const proposed = resolveProposedStatus(workspace, state);
     if (proposed !== workspace.workStatus) {
       await applyProposal(workspace, proposed, 'system');
@@ -537,5 +574,5 @@ export async function backfillWorkspaces(): Promise<BackfillResult> {
     created += 1;
   }
 
-  return { created, skipped };
+  return { created, updated, skipped };
 }
