@@ -11,6 +11,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../../db';
 import { referrals, outboundMessages, skillExecutions } from '../../db/schema';
 import { transition, ReferralState } from '../../state/referralStateMachine';
+import { proposeForReferral } from '../workspace/workspaceService';
 import { decline } from '../prd02/dispositionService';
 import { config } from '../../config';
 import { getSkillCatalog } from './skillLoader';
@@ -94,6 +95,12 @@ export async function checkPendingInfoTimeouts(): Promise<number> {
             updatedAt: new Date(),
           })
           .where(eq(referrals.id, referral.id));
+
+        // PRD-18: keep the work status in step with the protocol state. Note this
+        // path writes `state` directly, bypassing transition() — that bypass is
+        // PRD-25's to fix; the proposal here is independent of it.
+        await proposeForReferral(referral.id, ReferralState.ACKNOWLEDGED);
+
         console.log(`[PendingInfoChecker] Escalated referral #${referral.id} back to Acknowledged with priority flag`);
       }
     } catch (err) {

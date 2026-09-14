@@ -14,6 +14,7 @@ import { referrals, patients, outboundMessages } from '../../db/schema';
 import { config } from '../../config';
 import { transition, ReferralState } from '../../state/referralStateMachine';
 import { emitEvent } from '../analytics/eventService';
+import { proposeForReferral } from '../workspace/workspaceService';
 import { recordThreadMessage } from '../messaging/threadService';
 
 export class ReferralNotFoundError extends Error {
@@ -46,6 +47,12 @@ export async function markNoShow(referralId: number): Promise<void> {
       updatedAt: new Date(),
     })
     .where(eq(referrals.id, referralId));
+
+  // PRD-18: advise the workspace immediately after the protocol state is
+  // written and BEFORE any outbound send. The proposal follows from a transition
+  // that is already guarded and committed, so it must not depend on mail
+  // succeeding — after the send it would go stale whenever SMTP fails.
+  await proposeForReferral(referralId, ReferralState.NO_SHOW);
 
   // Analytics: no-show
   void emitEvent({

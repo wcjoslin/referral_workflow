@@ -18,7 +18,8 @@
     "db:migrate": "ts-node src/db/migrate.ts",
     "seed": "ts-node -r ./scripts/node-polyfill.js scripts/seed-demo.ts",
     "seed:analytics": "ts-node -r ./scripts/node-polyfill.js scripts/seed-analytics-demo.ts",
-    "seed:full-demo": "ts-node -r ./scripts/node-polyfill.js scripts/seed-full-demo.ts"
+    "seed:full-demo": "ts-node -r ./scripts/node-polyfill.js scripts/seed-full-demo.ts",
+    "backfill:workspaces": "ts-node -r ./scripts/node-polyfill.js scripts/backfill-workspaces.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",

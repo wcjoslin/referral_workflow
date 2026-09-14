@@ -25,6 +25,7 @@ import { evaluateSkills } from '../prd09/skillEvaluator';
 import { executeSkillAction } from '../prd09/skillActions';
 import { randomUUID } from 'crypto';
 import { emitEvent } from '../analytics/eventService';
+import { proposeForReferral } from '../workspace/workspaceService';
 import { recordThreadMessage } from '../messaging/threadService';
 
 export class ReferralNotFoundError extends Error {
@@ -74,6 +75,12 @@ async function applyDisposition(
       updatedAt: new Date(),
     })
     .where(eq(referrals.id, referralId));
+
+  // PRD-18: advise the workspace immediately after the protocol state is
+  // written and BEFORE any outbound send. The proposal follows from a transition
+  // that is already guarded and committed, so it must not depend on mail
+  // succeeding — after the send it would go stale whenever SMTP fails.
+  await proposeForReferral(referralId, nextState);
 
   // Build RRI
   const messageControlId = randomUUID();

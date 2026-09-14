@@ -12,6 +12,7 @@ import { referrals, outboundMessages } from '../../db/schema';
 import { transition, ReferralState } from '../../state/referralStateMachine';
 import { AckData } from './ackParser';
 import { emitEvent } from '../analytics/eventService';
+import { proposeForReferral } from '../workspace/workspaceService';
 import { recordThreadMessage, updateThreadAckStatus } from '../messaging/threadService';
 
 export interface AckResult {
@@ -102,6 +103,12 @@ export async function processAck(ackData: AckData): Promise<AckResult> {
           updatedAt: new Date(),
         })
         .where(eq(referrals.id, message.referralId));
+
+      // PRD-18: advise the workspace immediately after the protocol state is
+      // written and BEFORE any outbound send. The proposal follows from a transition
+      // that is already guarded and committed, so it must not depend on mail
+      // succeeding — after the send it would go stale whenever SMTP fails.
+      await proposeForReferral(message.referralId, ReferralState.CLOSED_CONFIRMED);
 
       stateTransitioned = true;
 

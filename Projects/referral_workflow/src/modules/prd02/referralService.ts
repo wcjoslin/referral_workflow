@@ -24,6 +24,7 @@ import { executeSkillAction } from '../prd09/skillActions';
 import { randomUUID } from 'crypto';
 import { eq } from 'drizzle-orm';
 import { emitEvent } from '../analytics/eventService';
+import { createWorkspace } from '../workspace/workspaceService';
 import { recordThreadMessage } from '../messaging/threadService';
 
 // In-memory store for routing assessments, keyed by referralId.
@@ -124,6 +125,15 @@ export async function ingestReferral(processed: ProcessedMessage): Promise<numbe
     actor: 'system',
     metadata: { sourceMessageId: extended.sourceMessageId },
   }).catch((err) => console.error('[EventService]', err));
+
+  // PRD-18: every referral gets a workspace, created in the same operation that
+  // created the referral, so "a referral without a workspace" is not reachable.
+  // Starts at Triage with no owner.
+  //
+  // The auto-decline path deliberately does NOT reach here: autoDecline() writes
+  // no referral row at all, so there is nothing to attach a workspace to.
+  // PRD-28's auto_declined_referrals is what makes those decisions reviewable.
+  await createWorkspace(referral.id);
 
   // Record inbound referral in message thread
   await recordThreadMessage({
