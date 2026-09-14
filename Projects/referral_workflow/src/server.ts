@@ -33,6 +33,7 @@ import { accept, decline, ReferralNotFoundError as DispositionNotFoundError } fr
 import { getCachedAssessment } from './modules/prd02/referralService';
 import { scheduleReferral, ReferralNotFoundError, SchedulingConflictError } from './modules/prd03/schedulingService';
 import { getResources, getDepartments } from './modules/prd03/resourceCalendar';
+import { embedJson } from './util/htmlSafe';
 import { markEncounterComplete, ReferralNotFoundError as EncounterNotFoundError } from './modules/prd05/encounterService';
 import { generateAndSend, ReferralNotFoundError as ConsultNotFoundError } from './modules/prd04/consultNoteService';
 import { markNoShow, ReferralNotFoundError as NoShowNotFoundError } from './modules/prd11/noShowService';
@@ -251,28 +252,6 @@ async function actingActor(req: Request): Promise<string> {
   return user ? formatActor(user) : 'system';
 }
 
-/**
- * Serialises a payload for embedding inside a `<script>` element.
- *
- * `JSON.stringify` alone is NOT safe here. It does not escape `<` or `>`, so a
- * database string containing `</script>` terminates the script element early and
- * everything after it is parsed as HTML — stored XSS. Patient names reach us
- * from inbound C-CDA documents, so this is externally supplied data, not just
- * operator typos.
- *
- * Escaping the three characters as unicode escapes keeps the value a valid JS
- * string literal while making it impossible to break out of the element.
- *
- * NOTE: the older view routes in this file embed `JSON.stringify(...)` directly
- * and have the same hole. Out of PRD-19's scope, recorded as a follow-up rather
- * than fixed here — but no new route may use the unsafe form.
- */
-function embedJson(value: unknown): string {
-  return JSON.stringify(value)
-    .replace(/</g, '\\u003c')
-    .replace(/>/g, '\\u003e')
-    .replace(/&/g, '\\u0026');
-}
 
 /** A 404 body that matches the app's chrome instead of dumping a stack trace. */
 function notFoundPage(message: string): string {
@@ -338,7 +317,7 @@ app.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__DASHBOARD_DATA__*/',
-      `window.__DASHBOARD_DATA__ = ${JSON.stringify({
+      `window.__DASHBOARD_DATA__ = ${embedJson({
         items,
         departments: getDepartments(),
         // PRD-17: the per-row clinician pickers that replaced the free-text inputs.
@@ -697,7 +676,7 @@ app.get('/referrals/:id/review', async (req: Request, res: Response, next: NextF
     };
 
     // Inject data as a JSON block the page script can read
-    const jsonString = JSON.stringify(pageData);
+    const jsonString = embedJson(pageData);
     console.log(`[ReferralReview] Referral #${referralId} hasCcda=${pageData.hasCcda}, priorAuth=${paRequests.length} records, JSON length=${jsonString.length}`);
     const html = template.replace(
       '/*__PAGE_DATA__*/',
@@ -1004,7 +983,7 @@ app.get('/scheduler/queue', async (_req: Request, res: Response, next: NextFunct
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__QUEUE_DATA__*/',
-      `window.__QUEUE_DATA__ = ${JSON.stringify(items)};`,
+      `window.__QUEUE_DATA__ = ${embedJson(items)};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1035,7 +1014,7 @@ app.get('/referrals/:id/schedule', async (req: Request, res: Response, next: Nex
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__SCHEDULE_DATA__*/',
-      `window.__SCHEDULE_DATA__ = ${JSON.stringify({
+      `window.__SCHEDULE_DATA__ = ${embedJson({
         referralId,
         patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
         referral,
@@ -1119,7 +1098,7 @@ app.get('/referrals/:id/encounter', async (req: Request, res: Response, next: Ne
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__ENCOUNTER_DATA__*/',
-      `window.__ENCOUNTER_DATA__ = ${JSON.stringify({
+      `window.__ENCOUNTER_DATA__ = ${embedJson({
         referralId,
         patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
         referral,
@@ -1264,7 +1243,7 @@ app.get('/referrals/:id/consult-note', async (req: Request, res: Response, next:
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__CONSULT_DATA__*/',
-      `window.__CONSULT_DATA__ = ${JSON.stringify({
+      `window.__CONSULT_DATA__ = ${embedJson({
         referralId,
         patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
         referral,
@@ -1408,7 +1387,7 @@ app.get('/messages', async (_req: Request, res: Response, next: NextFunction) =>
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__HISTORY_DATA__*/',
-      `window.__HISTORY_DATA__ = ${JSON.stringify({ messages })};`,
+      `window.__HISTORY_DATA__ = ${embedJson({ messages })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1443,7 +1422,7 @@ app.get('/rules/admin', async (_req: Request, res: Response, next: NextFunction)
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__RULES_DATA__*/',
-      `window.__RULES_DATA__ = ${JSON.stringify({ skills: skillStats })};`,
+      `window.__RULES_DATA__ = ${embedJson({ skills: skillStats })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1537,7 +1516,7 @@ app.get('/rules/:name', async (req: Request, res: Response, next: NextFunction) 
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__EDIT_DATA__*/',
-      `window.__EDIT_DATA__ = ${JSON.stringify({ skill, body, assets, references })};`,
+      `window.__EDIT_DATA__ = ${embedJson({ skill, body, assets, references })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1673,7 +1652,7 @@ app.get('/rules/:name/history', async (req: Request, res: Response, next: NextFu
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__HISTORY_DATA__*/',
-      `window.__HISTORY_DATA__ = ${JSON.stringify({ skillName: nameParam, executions })};`,
+      `window.__HISTORY_DATA__ = ${embedJson({ skillName: nameParam, executions })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1901,7 +1880,7 @@ app.get('/claims', async (_req: Request, res: Response, next: NextFunction) => {
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__CLAIMS_DATA__*/',
-      `window.__CLAIMS_DATA__ = ${JSON.stringify({ items })};`,
+      `window.__CLAIMS_DATA__ = ${embedJson({ items })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -1934,7 +1913,7 @@ app.get('/claims/:id', async (req: Request, res: Response, next: NextFunction) =
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__CLAIMS_DETAIL__*/',
-      `window.__CLAIMS_DETAIL__ = ${JSON.stringify({
+      `window.__CLAIMS_DETAIL__ = ${embedJson({
         request,
         patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
         responses,
@@ -2003,7 +1982,7 @@ app.get('/prior-auth', async (_req: Request, res: Response, next: NextFunction) 
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__PA_QUEUE_DATA__*/',
-      `window.__PA_QUEUE_DATA__ = ${JSON.stringify({ items: enriched })};`,
+      `window.__PA_QUEUE_DATA__ = ${embedJson({ items: enriched })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -2029,7 +2008,7 @@ app.get('/prior-auth/new', async (req: Request, res: Response, next: NextFunctio
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__PA_FORM_DATA__*/',
-      `window.__PA_FORM_DATA__ = ${JSON.stringify(formData)};`,
+      `window.__PA_FORM_DATA__ = ${embedJson(formData)};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -2107,7 +2086,7 @@ app.get('/prior-auth/:id', async (req: Request, res: Response, next: NextFunctio
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__PA_DETAIL_DATA__*/',
-      `window.__PA_DETAIL_DATA__ = ${JSON.stringify(detail)};`,
+      `window.__PA_DETAIL_DATA__ = ${embedJson(detail)};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -2439,7 +2418,7 @@ app.get('/analytics', (_req: Request, res: Response, next: NextFunction) => {
     const template = fs.readFileSync(path.join(__dirname, 'views', 'analytics.html'), 'utf-8');
     const html = template.replace(
       '/*__ANALYTICS_DATA__*/',
-      `window.__ANALYTICS_DATA__ = ${JSON.stringify({
+      `window.__ANALYTICS_DATA__ = ${embedJson({
         eventCount,
         filterOptions,
         kpis: getKpis(defaultFilters),
