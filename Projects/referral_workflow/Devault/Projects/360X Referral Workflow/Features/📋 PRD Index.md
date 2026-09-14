@@ -2,12 +2,12 @@
 title: PRD Index - All Product Requirements
 tags: [prd, features, index]
 up: "[[🎯 PROJECT OVERVIEW]]"
-down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[PRD-12 - Prior Authorization]]", "[[PRD-13 - Department Classification]]", "[[PRD-14 - Analytics Agent (Phase 1)]]", "[[PRD-14 - Analytics Agent (Phase 2)]]", "[[PRD-15 - Analytics Agent AI]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]", "[[Feature - No-Show & Consult Demo Scenarios]]", "[[Feature - Full Demo Seed Expansion (100 Scenarios)]]"]
+down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[PRD-12 - Prior Authorization]]", "[[PRD-13 - Department Classification]]", "[[PRD-14 - Analytics Agent (Phase 1)]]", "[[PRD-14 - Analytics Agent (Phase 2)]]", "[[PRD-15 - Analytics Agent AI]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]", "[[Feature - No-Show & Consult Demo Scenarios]]", "[[Feature - Full Demo Seed Expansion (100 Scenarios)]]", "[[PRD-16 - 360X Referral Collaboration Workspace]]", "[[PRD-17 - Identity & Acting User]]", "[[PRD-18 - Workspace Entity & Dual Status]]", "[[PRD-19 - Workspace Shell]]", "[[PRD-20 - Shared Queues & Queue View]]", "[[PRD-21 - Ownership & Assignment]]", "[[PRD-22 - Referral Conversation]]", "[[PRD-23 - Document Collection]]", "[[PRD-24 - Parties & Participants]]", "[[PRD-25 - Activity History & Audit]]", "[[PRD-26 - Next Action & Due Dates]]", "[[PRD-27 - Notifications]]", "[[PRD-28 - Correlation & Exception Queue]]", "[[PRD-29 - 360X Protocol Gateway]]", "[[PRD-30 - Guest Participation]]"]
 ---
 
 # 📋 PRD Index
 
-Product Requirements Documents for the 360X Referral Workflow project. Each PRD maps to a phase of the closed-loop referral process.
+Product Requirements Documents for the 360X Referral Workflow project. PRD-01 through PRD-15 map to phases of the closed-loop referral process. PRD-16 through PRD-30 form the [[PRD-16 - 360X Referral Collaboration Workspace|Collaboration Workspace epic]], which layers a persistent referral workspace over that protocol core and makes the workspace itself the 360X enablement layer for both parties.
 
 ---
 
@@ -196,23 +196,250 @@ The logical order for PRD development:
 
 ---
 
+### 16. **[[PRD-16 - 360X Referral Collaboration Workspace|PRD-16: 360X Referral Collaboration Workspace]]** 📋
+**Epic.** Turns every recognized 360X referral into a persistent, accountable unit of collaborative work — owner, next action, conversation, documents, participants and a complete history — and makes the workspace itself the 360X enablement layer so neither party needs its own protocol implementation.
+
+- Separate authoritative 360X status from Concord-local work status
+- Referral workspace created automatically from a recognized 360X request
+- Guest participation scoped to a single workspace; protocol artifacts rendered on a party's behalf
+- Parent of PRD-17 through PRD-30; not directly implementable
+- **Prerequisite:** None (children have their own)
+
+**Status:** 📋 Drafting (2026-09-14)
+**Module:** `workspace/`
+
+---
+
+#### Phase 1 — Foundation
+
+### 17. **[[PRD-17 - Identity & Acting User|PRD-17: Identity & Acting User Model]]** 📋
+**The smallest identity layer that unblocks collaboration.** No users table or auth exists today — `referrals.clinician_id` is a free-text input.
+
+- `users` table seeded with demo coordinators, clinicians, schedulers and managers
+- Acting-user selector in the shared nav, persisted in a cookie; no passwords
+- `user:<id>` added to the audit actor vocabulary without breaking analytics parsing
+- **Prerequisite:** None
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`
+
+---
+
+### 18. **[[PRD-18 - Workspace Entity & Dual Status|PRD-18: Workspace Entity & Dual Status Model]]** 📋
+**The structural foundation.** One workspace row per referral, plus a second status dimension that cannot touch the protocol state.
+
+- `referral_workspaces` table: work status, owner, queue, next action, due date, correlation ids
+- `workStatusMachine.ts` following the existing three-export state-machine pattern
+- Protocol→work status mapping is advisory; a manually set work status is never overwritten
+- `Follow-up-Required` resolves the closure conflict — protocol closed, internal work open
+- **Prerequisite:** PRD-17
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`, `state/`
+
+---
+
+#### Phase 2 — Workspace surface & cross-party enablement
+
+### 19. **[[PRD-19 - Workspace Shell|PRD-19: Workspace Shell]]** 📋
+**The page.** A new `/workspaces/:id` surface; `/referrals/:id/review` stays the clinical disposition screen.
+
+- Header: patient, reason, organizations, owner, due date, next action, two distinct status badges
+- Reuses the journey timeline, embedded message thread and C-CDA viewer already built
+- Labelled placeholder slots so PRD-21…29 each land as one self-contained panel
+- **Prerequisite:** PRD-18
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`, `views/`
+
+---
+
+### 21. **[[PRD-21 - Ownership & Assignment|PRD-21: Ownership & Assignment]]** 📋
+**Who owns the next action.** One accountable owner per workspace, or an explicitly visible unassigned state.
+
+- Assign, reassign, claim and release, each with a from→to audit event
+- "My work" view resolving the acting user server-side
+- `referrals.clinician_id` stays the disposition record, not the owner
+- **Prerequisite:** PRD-17, PRD-19
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`
+
+---
+
+### 24. **[[PRD-24 - Parties & Participants|PRD-24: Parties & Participants]]** 📋
+**Who is involved on each side** — and the prerequisite for guest access and the protocol gateway.
+
+- `workspace_parties`: organization, Direct address, party role, protocol mode
+- `workspace_participants`: internal staff as Manager / Collaborator / Viewer
+- Protocol mode resolution: `native-360x`, `workspace-mediated`, `local-only`
+- A party is never a user; the two models stay structurally separate
+- **Prerequisite:** PRD-19
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`
+
+---
+
+### 30. **[[PRD-30 - Guest Participation|PRD-30: Guest Participation & Secure Invitations]]** 📋
+**The other side of the referral, invited in.** Scoped, expiring, revocable access to one workspace.
+
+- Tokenized invitations following the SFT limited-sender/recipient pattern; no passwords
+- A guest sees the header, protocol timeline, shared comments and shared documents — nothing else
+- Guests can comment, upload and make the assertions their party role permits
+- Every guest action and every guest document view audited
+- **Prerequisite:** PRD-24
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`
+
+---
+
+### 29. **[[PRD-29 - 360X Protocol Gateway|PRD-29: 360X Protocol Gateway & Context Authoring]]** 📋
+**The central bet.** The workspace supplies the protocol, so neither party has to implement 360X — a party brings only a Direct address.
+
+- Any participant attaches 360X context to a message or document; the gateway renders the artifact
+- Uses the existing RRI, SIU, C-CDA and MDN builders — no new message-building code
+- Always records, conditionally transmits: `local-only` artifacts still advance state locally
+- Transport identity: Mode A address-on-file by default, Mode B delegated mailbox as the upgrade
+- **Prerequisite:** PRD-24 (PRD-30 for the guest half)
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`
+
+---
+
+#### Phase 3 — Collaboration artifacts
+
+### 22. **[[PRD-22 - Referral Conversation|PRD-22: Referral Conversation (Dual-Visibility)]]** 📋
+**One conversation attached to the referral**, carrying internal notes and shared messages in one thread.
+
+- Per-comment `Internal` / `Shared` visibility; internal is the default, sharing needs confirmation
+- Internal comments are structurally absent from the guest payload, not filtered out of it
+- Edits are versioned, deletions are tombstoned, nothing is hard-deleted
+- **Prerequisite:** PRD-19, PRD-24
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`
+
+---
+
+### 23. **[[PRD-23 - Document Collection|PRD-23: Referral Document Collection]]** 📋
+**Everything clinical on a referral in one list** — as an index over content that already exists, not a second copy.
+
+- `workspace_documents` referencing `raw_ccda_xml`, `referral_messages`, `attachment_responses`, uploads
+- Type, source, sender, received date, protocol relationship, visibility
+- Delivery evidence and human access evidence kept as two distinct facts
+- Upload never transmits; sending requires attaching 360X context
+- **Prerequisite:** PRD-19, PRD-24
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`
+
+---
+
+### 25. **[[PRD-25 - Activity History & Audit|PRD-25: Unified Activity History & Audit]]** 📋
+**The first per-referral reader of the PRD-14 event log**, which has only ever been aggregated.
+
+- Merged feed: system events, user actions, guest actions, comments, documents, delivery receipts
+- Closes real audit gaps — routing changes and disposition overrides emit nothing today
+- Routes the two existing state-machine bypasses through `transition()`
+- Answers the open question: which receipts prove delivery versus human access
+- **Prerequisite:** PRD-14 Phase 1, PRD-19
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`, `analytics/`
+
+---
+
+#### Phase 4 — Operational layer
+
+### 20. **[[PRD-20 - Shared Queues & Queue View|PRD-20: Shared Queues & Referral Queue View]]** 📋
+**Queues as a real entity**, with membership as the least-privilege PHI boundary.
+
+- `queues` + `queue_members`; a user sees the queues they belong to, not every patient
+- Open / Waiting / Exception / Completed tabs with server-side filtering and saved filters
+- Auto-routing from the PRD-13 department classification, with a default triage queue
+- **Prerequisite:** PRD-13, PRD-18
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`, `views/`
+
+---
+
+### 26. **[[PRD-26 - Next Action & Due Dates|PRD-26: Next Action & Due Dates]]** 📋
+**What to do next, by when, and who owes the move.**
+
+- Config-driven next action and due-date offset per (protocol state × work status)
+- "Awaited by us / a named party / nobody", derived from state and outbound ack status
+- Finally connects `prd07/overdueChecker.ts`, which nothing calls today, and generalizes it to workspaces
+- **Prerequisite:** PRD-18, PRD-24
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`
+
+---
+
+### 27. **[[PRD-27 - Notifications|PRD-27: Notifications]]** 📋
+**Telling people things** — there is no notification infrastructure of any kind today.
+
+- The seven triggers from the source document, plus guest invitation and guest activity
+- Recipients resolved from owner, participants and mentions; one `notify()` funnel
+- Guest-eligible types are allow-listed, so a new internal type is invisible to guests by default
+- Email carries a link and no clinical content
+- **Prerequisite:** PRD-24, and each trigger's own PRD
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`
+
+---
+
+### 28. **[[PRD-28 - Correlation & Exception Queue|PRD-28: Correlation, Reconciliation & Exception Queue]]** 📋
+**Stop losing messages.** Unmatched ACKs are dropped today, auto-declines write no row, patients are never deduped.
+
+- `processed_messages` table replacing the `.processed_messages.json` file
+- Every silent failure becomes a visible, workable exception retaining the raw artifact
+- Manual reassociation with full audit — and never an automatic protocol replay
+- Duplicate patients flagged for a human, never auto-merged
+- **Prerequisite:** PRD-18, PRD-20, PRD-29
+
+**Status:** 📋 Drafting
+**Module:** `workspace/`, `prd01/`
+
+---
+
 ## Quick Reference
 
 | PRD | Name | Status | Key Action | Module |
 |-----|------|--------|-----------|--------|
-| [[PRD-01 - Receive & Acknowledge|01]] | Receive & Acknowledge | ✅ | Parse C-CDA, send MDN | `prd01/` |
-| [[PRD-02 - Process & Disposition|02]] | Process & Disposition | ✅ | Validate, clinician decides | `prd02/` |
-| [[PRD-03 - Schedule Patient|03]] | Schedule Patient | ✅ | Assign appointment, send SIU | `prd03/` |
-| [[PRD-04 - Generate Consult Note|04]] | Generate Consult Note | ✅ | Extract notes, send C-CDA | `prd04/` |
-| [[PRD-05 - Patient Encounter|05]] | Patient Encounter | ✅ | Send ADT, update state | `prd05/` |
-| [[PRD-06 - Close Loop|06]] | Close Loop | ✅ | Acknowledge final report | `prd06/` |
-| [[PRD-07 - Ack Tracking|07]] | Ack Tracking | ✅ | Monitor & retry messages | `prd07/` |
-| [[PRD-11 - No-Show & Consult States|11]] | No-Show & Consult States | ✅ | No-show notify + consult confirmation | `prd11/` |
-| [[PRD-12 - Prior Authorization|12]] | Prior Authorization (PAS) | ✅ | FHIR PA submit, payer decisions | `prd12/` |
-| [[PRD-13 - Department Classification|13]] | Department Classification | 🔧 | Route to dept, surface equipment | `prd02/` |
-| [[PRD-14 - Analytics Agent (Phase 1)|14]] | Analytics Agent (Phase 1) | ✅ | Event log, indexes, emission | `analytics/` |
-| [[PRD-14 - Analytics Agent (Phase 2)|14b]] | Analytics Agent (Phase 2) | 🔧 | SQL dashboard, KPI charts, seed data | `analytics/` |
-| [[PRD-15 - Analytics Agent AI|15]] | Analytics Agent AI | 📋 | Anomaly detection, Claude pattern analysis, findings UI | `analytics/` |
+| [[PRD-01 - Receive & Acknowledge\|01]] | Receive & Acknowledge | ✅ | Parse C-CDA, send MDN | `prd01/` |
+| [[PRD-02 - Process & Disposition\|02]] | Process & Disposition | ✅ | Validate, clinician decides | `prd02/` |
+| [[PRD-03 - Schedule Patient\|03]] | Schedule Patient | ✅ | Assign appointment, send SIU | `prd03/` |
+| [[PRD-04 - Generate Consult Note\|04]] | Generate Consult Note | ✅ | Extract notes, send C-CDA | `prd04/` |
+| [[PRD-05 - Patient Encounter\|05]] | Patient Encounter | ✅ | Send ADT, update state | `prd05/` |
+| [[PRD-06 - Close Loop\|06]] | Close Loop | ✅ | Acknowledge final report | `prd06/` |
+| [[PRD-07 - Ack Tracking\|07]] | Ack Tracking | ✅ | Monitor & retry messages | `prd07/` |
+| [[PRD-11 - No-Show & Consult States\|11]] | No-Show & Consult States | ✅ | No-show notify + consult confirmation | `prd11/` |
+| [[PRD-12 - Prior Authorization\|12]] | Prior Authorization (PAS) | ✅ | FHIR PA submit, payer decisions | `prd12/` |
+| [[PRD-13 - Department Classification\|13]] | Department Classification | 🔧 | Route to dept, surface equipment | `prd02/` |
+| [[PRD-14 - Analytics Agent (Phase 1)\|14]] | Analytics Agent (Phase 1) | ✅ | Event log, indexes, emission | `analytics/` |
+| [[PRD-14 - Analytics Agent (Phase 2)\|14b]] | Analytics Agent (Phase 2) | 🔧 | SQL dashboard, KPI charts, seed data | `analytics/` |
+| [[PRD-15 - Analytics Agent AI\|15]] | Analytics Agent AI | 📋 | Anomaly detection, Claude pattern analysis, findings UI | `analytics/` |
+| [[PRD-16 - 360X Referral Collaboration Workspace\|16]] | 360X Collaboration Workspace (Epic) | 📋 | Persistent referral workspace; 360X enablement layer | `workspace/` |
+| [[PRD-17 - Identity & Acting User\|17]] | Identity & Acting User | 📋 | Users table, acting-user picker, `user:<id>` actors | `workspace/` |
+| [[PRD-18 - Workspace Entity & Dual Status\|18]] | Workspace Entity & Dual Status | 📋 | Workspace row, work status machine, closure conflict | `workspace/`, `state/` |
+| [[PRD-19 - Workspace Shell\|19]] | Workspace Shell | 📋 | `/workspaces/:id`, header, dual badges, panel slots | `workspace/`, `views/` |
+| [[PRD-20 - Shared Queues & Queue View\|20]] | Shared Queues & Queue View | 📋 | Queue entity, membership scope, four-tab queue view | `workspace/`, `views/` |
+| [[PRD-21 - Ownership & Assignment\|21]] | Ownership & Assignment | 📋 | Claim, assign, release, My work, audited | `workspace/` |
+| [[PRD-22 - Referral Conversation\|22]] | Referral Conversation | 📋 | One thread, Internal/Shared visibility, versioned | `workspace/` |
+| [[PRD-23 - Document Collection\|23]] | Document Collection | 📋 | Index over existing artifacts, delivery + access evidence | `workspace/` |
+| [[PRD-24 - Parties & Participants\|24]] | Parties & Participants | 📋 | Organizations + Direct address + protocol mode; internal roles | `workspace/` |
+| [[PRD-25 - Activity History & Audit\|25]] | Activity History & Audit | 📋 | Per-referral event reader, merged feed, gaps closed | `workspace/`, `analytics/` |
+| [[PRD-26 - Next Action & Due Dates\|26]] | Next Action & Due Dates | 📋 | Config-driven actions, awaited-by, overdue sweep | `workspace/` |
+| [[PRD-27 - Notifications\|27]] | Notifications | 📋 | Nine triggers, one funnel, guest allow list | `workspace/` |
+| [[PRD-28 - Correlation & Exception Queue\|28]] | Correlation & Exception Queue | 📋 | Idempotent intake, exceptions, manual reassociation | `workspace/`, `prd01/` |
+| [[PRD-29 - 360X Protocol Gateway\|29]] | 360X Protocol Gateway | 📋 | Context authoring, artifact rendering, record-then-transmit | `workspace/` |
+| [[PRD-30 - Guest Participation\|30]] | Guest Participation | 📋 | Scoped invitations, guest view, audited external access | `workspace/` |
 
 ---
 
@@ -230,6 +457,24 @@ PRD-03 (Schedule)
         PRD-06 (Close Loop)
 
 PRD-07 (Ack Tracking) ← Horizontal feature, monitors all outbound messages
+```
+
+### Collaboration Workspace Epic (PRD-16)
+
+```mermaid
+Phase 1  PRD-17 (Identity) ──┬───────────────────────────────┐
+         PRD-18 (Workspace + Dual Status) ──┐                │
+                                            ▼                │
+Phase 2  PRD-19 (Shell) ──► PRD-21 (Ownership)               │
+                       └──► PRD-24 (Parties & Participants) ◄─┘
+                                    ├──► PRD-30 (Guest Participation)
+                                    └──► PRD-29 (Protocol Gateway) ◄── PRD-30
+
+Phase 3  PRD-22 (Conversation) ──┐
+         PRD-23 (Documents) ─────┼──► PRD-25 (Activity & Audit)
+                                 └────┘  (PRD-29 artifacts feed both)
+
+Phase 4  PRD-20 (Queues) · PRD-26 (SLA) · PRD-27 (Notifications) · PRD-28 (Reconciliation)
 ```
 
 ---
