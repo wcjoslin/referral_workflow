@@ -234,8 +234,8 @@
     <div class="card" id="actionCard">
       <h2>Disposition Decision</h2>
       <div class="clinician-field">
-        <label for="clinicianId">Clinician ID</label>
-        <input type="text" id="clinicianId" placeholder="e.g. dr-smith" />
+        <label for="clinicianId">Clinician</label>
+        <select id="clinicianId"></select>
       </div>
       <div class="actions">
         <button class="btn btn-accept" onclick="submitAccept()">Accept Referral</button>
@@ -324,8 +324,8 @@
       </div>
 
       <div class="clinician-field" style="margin-top:4px;">
-        <label for="consultClinicianId">Clinician ID</label>
-        <input type="text" id="consultClinicianId" placeholder="e.g. dr-smith" />
+        <label for="consultClinicianId">Clinician</label>
+        <select id="consultClinicianId"></select>
       </div>
       <div class="actions">
         <button class="btn btn-accept" onclick="submitConsultResolve()">Confirm Consultation</button>
@@ -355,9 +355,39 @@
 <script src="/static/ccdaview/sialia.js"></script>
 
 <script>
+  function esc(str) {
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
   const data = window.__PAGE_DATA__;
   const referralId = data.referralId;
   const currentState = data.referral.state;
+
+  // ── Clinician pickers (PRD-17) ───────────────────────────────────────────
+  // Replaced the free-text Clinician ID inputs. Defaults to the acting user so
+  // a coordinator does not retype who they are at every action.
+  (function populateClinicianPickers() {
+    const users = data.users || [];
+    const actingUserId = data.actingUser ? data.actingUser.id : null;
+    const options = users.length
+      ? users
+          .map(function (u) {
+            const label = esc(u.displayName) + ' \u00b7 ' + esc(u.jobRole);
+            return '<option value="' + u.id + '"' +
+              (u.id === actingUserId ? ' selected' : '') + '>' + label + '</option>';
+          })
+          .join('')
+      : '<option value="">No users seeded — run: npm run seed</option>';
+
+    ['clinicianId', 'consultClinicianId'].forEach(function (id) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.innerHTML = options;
+      el.disabled = users.length === 0;
+    });
+  })();
 
   // ── Referral Journey Timeline ────────────────────────────────────────────
   (function buildTimeline() {
@@ -771,17 +801,17 @@
   }
 
   async function submitAccept() {
-    const clinicianId = document.getElementById('clinicianId').value.trim();
-    if (!clinicianId) { showStatus('Please enter your Clinician ID.', 'error'); return; }
-    await submitDisposition({ decision: 'Accept', clinicianId });
+    const userId = Number(document.getElementById('clinicianId').value);
+    if (!userId) { showStatus('Please select the deciding clinician.', 'error'); return; }
+    await submitDisposition({ decision: 'Accept', userId });
   }
 
   async function submitDecline() {
-    const clinicianId = document.getElementById('clinicianId').value.trim();
+    const userId = Number(document.getElementById('clinicianId').value);
     const declineReason = document.getElementById('declineReasonText').value.trim();
-    if (!clinicianId) { showStatus('Please enter your Clinician ID.', 'error'); return; }
+    if (!userId) { showStatus('Please select the deciding clinician.', 'error'); return; }
     if (!declineReason) { showStatus('Please enter a decline reason.', 'error'); return; }
-    await submitDisposition({ decision: 'Decline', clinicianId, declineReason });
+    await submitDisposition({ decision: 'Decline', userId, declineReason });
   }
 
   async function submitDisposition(body) {
@@ -851,16 +881,16 @@
   }
 
   async function submitConsultResolve() {
-    const clinicianId = document.getElementById('consultClinicianId').value.trim();
-    if (!clinicianId) {
-      showStatusFor('consultConfirmStatus', 'Please enter your Clinician ID.', 'error');
+    const userId = Number(document.getElementById('consultClinicianId').value);
+    if (!userId) {
+      showStatusFor('consultConfirmStatus', 'Please select the confirming clinician.', 'error');
       return;
     }
     try {
       const res = await fetch(`/referrals/${referralId}/consult/resolve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clinicianId }),
+        body: JSON.stringify({ userId }),
       });
       const json = await res.json();
       if (res.ok) {

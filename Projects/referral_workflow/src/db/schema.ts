@@ -1,5 +1,47 @@
 import { index, sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
 
+// ── Internal Staff Identity (PRD-17) ────────────────────────────────────────
+//
+// Real people only. Automation identities (SYSTEM-SKILL-<name>, SYSTEM-TIMEOUT)
+// are NOT rows here — they stay the plain strings that skillActions.ts and
+// pendingInfoChecker.ts already write. Guests (PRD-30) are a separate entity too.
+export const users = sqliteTable(
+  'users',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    displayName: text('display_name').notNull(),
+    email: text('email').notNull().unique(),
+
+    // This user's own Direct address within the organisation's domain. Nullable,
+    // because an organisation provisions addresses at whatever granularity it
+    // chooses — individual, departmental or organizational are all normal in
+    // Direct — and most non-clinical staff have none. ADDITIVE to
+    // config.receiving.directAddress (the organizational intake address), never a
+    // replacement for it. Read by PRD-29 as the outbound sender/author identity
+    // when senderIdentityMode is 'individual'; ignored when it is 'organization'.
+    directAddress: text('direct_address'),
+
+    // Descriptive only. No code path may branch on this to decide access — that
+    // is allQueuesAccess. A `jobRole ===` comparison guarding data access is a bug.
+    jobRole: text('job_role').notNull(), // 'coordinator' | 'clinician' | 'scheduler' | 'manager'
+
+    // The historical referrals.clinician_id slug this person was recorded as,
+    // e.g. 'dr-chen'. Lets this table and the existing demo data describe the same
+    // people, and is what the analytics Clinician filter resolves its labels
+    // through. Nullable: most staff have no historical slug.
+    legacyClinicianId: text('legacy_clinician_id'),
+
+    // Explicit grant of the PRD-20 see-all-queues scope. Never inferred from jobRole.
+    allQueuesAccess: integer('all_queues_access', { mode: 'boolean' }).notNull().default(false),
+
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    legacyIdx: index('idx_users_legacy_clinician').on(table.legacyClinicianId),
+  }),
+);
+
 export const patients = sqliteTable('patients', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   firstName: text('first_name').notNull(),

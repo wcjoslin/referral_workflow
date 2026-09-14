@@ -151,10 +151,16 @@
   var opts = data.filterOptions;
 
   // ── Render filter panel ───────────────────────────────────────────────────
-  function buildSelect(id, label, values, filterKey) {
+  // `labels` is optional: when given, an option's text comes from labels[value]
+  // (PRD-17 labels the Clinician filter with display names) while the submitted
+  // value stays the raw filter value, so filtering behaviour is unchanged.
+  function buildSelect(id, label, values, filterKey, labels) {
     if (!values || values.length === 0) return '';
     var options = '<option value="">All</option>' +
-      values.map(function(v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join('');
+      values.map(function(v) {
+        var text = (labels && labels[v]) ? labels[v] : v;
+        return '<option value="' + esc(v) + '">' + esc(text) + '</option>';
+      }).join('');
     return '<div class="filter-group">' +
       '<span class="filter-label">' + label + '</span>' +
       '<select class="filter-select" id="filter-' + id + '" data-key="' + filterKey + '">' + options + '</select>' +
@@ -168,7 +174,7 @@
   var filterPanelHtml = '<div class="filter-panel">' +
     '<div class="filter-row">' +
       buildSelect('dept', 'Department', opts.departments, 'department') +
-      buildSelect('clinician', 'Clinician', opts.clinicians, 'clinicianId') +
+      buildSelect('clinician', 'Clinician', opts.clinicians, 'clinicianId', opts.clinicianLabels) +
       buildSelect('state', 'State', opts.states, 'state') +
       buildSelect('payer', 'Payer', opts.payers, 'payer') +
       buildSelect('skill', 'Skill', opts.skills, 'skillName') +

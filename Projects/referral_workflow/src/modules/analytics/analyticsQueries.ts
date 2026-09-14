@@ -93,7 +93,17 @@ function combine(...parts: (SQL | null)[]): SQL {
 
 export interface FilterOptions {
   departments: string[];
+  /**
+   * Clinician filter values — still the raw `referrals.clinician_id` slugs, so
+   * the filter itself is unchanged. Restricted to slugs that resolve to an active
+   * user (PRD-17), which is what keeps automation identities
+   * (SYSTEM-SKILL-<name>, SYSTEM-TIMEOUT) out of what is presented as a person
+   * picker. A historical slug with no matching user is simply absent here; the
+   * referral data behind it is untouched.
+   */
   clinicians: string[];
+  /** Display name per clinician slug, for labelling the picker. */
+  clinicianLabels: Record<string, string>;
   states: string[];
   payers: string[];
   skills: string[];
@@ -109,12 +119,18 @@ export function getFilterOptions(): FilterOptions {
     )
     .map((r) => r.v);
 
-  const clinicians = db
-    .all<{ v: string }>(
-      sql`SELECT DISTINCT clinician_id AS v FROM referrals
-          WHERE clinician_id IS NOT NULL ORDER BY v`,
-    )
-    .map((r) => r.v);
+  // Inner join to users: excludes SYSTEM-* and any slug with no seeded person,
+  // without a second query or a string prefix test.
+  const clinicianRows = db.all<{ v: string; label: string }>(
+    sql`SELECT DISTINCT r.clinician_id AS v, u.display_name AS label
+        FROM referrals r
+        JOIN users u ON u.legacy_clinician_id = r.clinician_id AND u.active = 1
+        WHERE r.clinician_id IS NOT NULL
+        ORDER BY u.display_name`,
+  );
+  const clinicians = clinicianRows.map((r) => r.v);
+  const clinicianLabels: Record<string, string> = {};
+  for (const row of clinicianRows) clinicianLabels[row.v] = row.label;
 
   const states = db
     .all<{ v: string }>(sql`SELECT DISTINCT state AS v FROM referrals ORDER BY v`)
@@ -145,7 +161,7 @@ export function getFilterOptions(): FilterOptions {
     )
     .map((r) => r.v);
 
-  return { departments, clinicians, states, payers, skills, denialReasons };
+  return { departments, clinicians, clinicianLabels, states, payers, skills, denialReasons };
 }
 
 // ── KPI Cards ────────────────────────────────────────────────────────────────
