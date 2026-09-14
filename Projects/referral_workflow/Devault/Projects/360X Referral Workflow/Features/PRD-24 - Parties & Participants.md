@@ -134,6 +134,15 @@ Viewers included and parties excluded — parties are notified only through PRD-
   PRD-30 lets them act.
 - Direct addresses are compared case-insensitively and stored as received. Add a lowercase index
   expression rather than normalising on write, so the original form is preserved for the audit record.
+- **Known issue for refinement — a party can hold several Direct addresses.** An organization
+  receives a domain or subdomain from its HISP and provisions addresses at whatever granularity it
+  chooses: an organizational intake address, departmental addresses, and per-clinician addresses,
+  often all at once. The single nullable `direct_address` column and its single index below model
+  exactly one, which is wrong. Resolve when this PRD is refined: either a `party_addresses` child
+  table, or a designated primary on the party plus a secondary table. Whichever is chosen, the model
+  needs a rule for which address is the party's canonical intake, because PRD-29's send-to routing
+  depends on it. Internal users have their own addresses on `users.direct_address` (PRD-17); that is
+  additive to the organization's, not a substitute for it.
 - `referrals.referrer_address` remains the protocol reply-to. The party row is derived from it, not a
   replacement for it — the existing outbound paths keep reading the referral column.
 - Protocol mode has exactly the three values in the epic. Do not add a fourth for "fax" — a fax-only

@@ -132,6 +132,27 @@ per-party attribute resolved at send time, never baked into a stored artifact. M
 Mode B is a configuration change plus credential storage, and credential storage is deliberately out
 of scope here.
 
+### Known issues for refinement — Direct address cardinality and sender identity
+
+Three gaps, all stemming from this PRD assuming a party has exactly one Direct address. A party can
+hold an organizational intake address, departmental addresses and per-clinician addresses at once.
+
+1. **Send-to routing is unspecified.** This PRD says an artifact is "addressed to the other party's
+   Direct address" — singular. With several, it needs a rule. Proposed: reply to the address the
+   inbound message actually arrived from, falling back to the party's designated intake address, and
+   recorded on the assertion so the audit trail names where it went. Depends on PRD-24 resolving the
+   cardinality first.
+2. **Sender identity is configurable per organization**, and this PRD does not yet branch on it.
+   Proposed `config.workspace.senderIdentityMode: 'individual' | 'organization'`. Under
+   `individual`, the acting internal user's own `users.direct_address` (PRD-17) is the
+   sender/author, falling back to `config.receiving.directAddress` when they have none — which one
+   seeded clinician deliberately does not, so the fallback is exercised. Under `organization`,
+   outbound always uses the organizational address and the individual is named as author inside the
+   payload only. Both branches need tests; real deployments differ, so neither is the "wrong" one.
+3. **Per-individual sending does not change who signs transport.** Under Mode A the licensed party's
+   HISP still signs, whichever address appears as sender in the payload. State that explicitly so
+   `senderIdentityMode: 'individual'` is not mistaken for non-repudiation of that individual.
+
 ---
 
 ## User Stories & Acceptance Criteria

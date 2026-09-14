@@ -146,6 +146,11 @@ do not — and every child PRD that touches outbound data must carry a test asse
 
 ## Feature map
 
+**Refinement status.** PRD-17 and PRD-18 are refined and Ready for Dev. PRD-19 … PRD-30 are first
+drafts at Drafting; the migration numbers they quote are indicative and get assigned when each is
+implemented, and PRD-20, PRD-24, PRD-29 and PRD-30 carry known-issue notes recorded during the
+PRD-17/18 refinement.
+
 | PRD | Feature | Phase | Module |
 |---|---|---|---|
 | [[PRD-17 - Identity & Acting User\|PRD-17]] | Identity & Acting User Model | 1 — Foundation | `workspace/` |
@@ -226,6 +231,7 @@ Carried from the source document's risk table; each is assigned to the PRD that 
 | How is a completed protocol lifecycle with open internal follow-up represented? | PRD-18, PRD-26 |
 | What enforces least-privilege access to PHI in queues and workspaces? | PRD-20, PRD-30 |
 | Whose Direct identity signs an artifact rendered on a party's behalf? | PRD-29 |
+| How many Direct addresses does a party have, and which is canonical for sending? | PRD-24, then PRD-29 and PRD-30 |
 | How are duplicate, late, unmatched and contradictory messages reconciled? | PRD-28 |
 
 ---

@@ -76,16 +76,18 @@ The primary goal of this feature is to:
 
 **AC1:** A user belonging to one or more queues sees only workspaces in those queues by default.  
 **AC2:** A user belonging to no queue sees an explanatory empty state, not every workspace.  
-**AC3:** A user with the `all-queues` access level — for a manager or the demo operator — can see all
-queues, and that level is explicit rather than implied by an empty membership list.  
+**AC3:** A user with `users.allQueuesAccess` set — for a manager or the demo operator — can see all
+queues. The grant is an explicit column (PRD-17), never inferred from `jobRole` or from an empty
+membership list.  
 **AC4:** Queue scoping is enforced server-side; a client cannot request a queue it does not belong to
 and receive data.
 
 ### As a care coordinator, I want a referral queue organised by what needs attention so that I can work top-down
 
 **AC5:** The queue view has four tabs: Open, Waiting, Exception, Completed, mapped from work status —
-Open (`New`, `Triage`, `In-Progress`), Waiting (`Waiting-External`, `Waiting-Internal`), Exception
-(`Exception`), Completed (`Resolved`, `Follow-up-Required` shown with a distinct marker).  
+Open (`Triage`, `In-Progress`), Waiting (`Waiting-External`, `Waiting-Internal`), Exception
+(`Exception`), Completed (`Resolved`, `Follow-up-Required` shown with a distinct marker). Workspaces
+nobody has picked up are surfaced by the unassigned-owner filter, not by a separate status.  
 **AC6:** Each tab shows a count, and the counts are computed within the user's queue scope.  
 **AC7:** Rows show patient, both statuses, owner, party organization, next action and due date, with
 overdue rows visibly marked.  
@@ -196,15 +198,24 @@ export const savedFilters = sqliteTable(
 ```
 
 Exactly one queue has `isDefault: true`; enforce it in the service and assert it in a test.
-`users.jobRole === 'manager'` grants the `all-queues` scope, which keeps AC3 explicit without a
-second permissions table.
+The see-all-queues scope is granted by `users.allQueuesAccess` (PRD-17) — an explicit boolean, not a
+`jobRole` comparison. `jobRole` is descriptive only; branching on it for data access is a defect.
+
+**Known issue for refinement — department vocabulary is inconsistent.** Queue seeding derives
+departments from `getDepartments()` in `src/modules/prd03/resourceCalendar.ts`, which yields eight
+(Cardiology, Endocrinology, Gastroenterology, General, Imaging, Neurology, Orthopedics, Physical
+Therapy). But `scripts/seed-analytics-demo.ts` uses six, of which `Oncology` and `General Surgery`
+are **not** in the catalogue, while `Imaging`, `Physical Therapy`, `Endocrinology` and `General` never
+appear in seeds. Seeding one queue per catalogue department therefore leaves seeded referrals whose
+department matches no queue. Resolve when this PRD is refined: reconcile the vocabularies, or rely on
+the default triage queue and accept it.
 
 ```typescript
 // src/modules/workspace/queueService.ts — new
 export type QueueTab = 'open' | 'waiting' | 'exception' | 'completed';
 
 export const TAB_WORK_STATUSES: Record<QueueTab, WorkStatus[]> = {
-  open:      [WorkStatus.NEW, WorkStatus.TRIAGE, WorkStatus.IN_PROGRESS],
+  open:      [WorkStatus.TRIAGE, WorkStatus.IN_PROGRESS],
   waiting:   [WorkStatus.WAITING_EXTERNAL, WorkStatus.WAITING_INTERNAL],
   exception: [WorkStatus.EXCEPTION],
   completed: [WorkStatus.RESOLVED, WorkStatus.FOLLOW_UP_REQUIRED],
