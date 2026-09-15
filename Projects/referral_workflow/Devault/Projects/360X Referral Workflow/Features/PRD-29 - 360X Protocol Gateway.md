@@ -5,7 +5,7 @@ prev: "[[PRD-28 - Correlation & Exception Queue]]"
 
 # PRD-29: 360X Protocol Gateway & Context Authoring
 
-**Status:** Ready for Dev  
+**Status:** Implemented  
 **Team:** Clinical Workflow & Interoperability  
 **Module:** `workspace/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -560,3 +560,21 @@ exercised by `Dr. Sarah Kim`, who has no address in the seed roster on purpose. 
 resolves to their own party's address, since the setting concerns our staff.
 
 **Also corrected:** migration is 0015, not the indicative 0018.
+
+**Version:** 1.2 — Implemented. Built as specified at v1.1. Two things implementation settled and
+one the tests caught:
+
+- **`buildAck()`'s first version was unreadable by its own parser.** It used a bare `\r` segment
+  terminator, which the HL7 standard specifies; `parseAck()` splits on `/\r?\n/`, so the message
+  arrived as one undivided line with no MSA segment. The round-trip test that justified adding the
+  builder caught it on its first run. Now `\r\n`, matching `buildRri()` and `buildSiu()` — a
+  message nothing in this codebase can read is not more correct.
+- **`cancel`'s specified states were illegal.** The assertion table gave "any non-terminal →
+  Declined"; the state machine permits only `Acknowledged` and `Pending-Information`. The catalog was
+  narrowed rather than the machine widened, and a property test over the whole catalog now asserts
+  every declared transition is legal. **Gap recorded:** withdrawing an already-scheduled referral has
+  no legal transition today, which is a real modelling gap belonging to the state machine's own PRD.
+- **`needs-information` renders an RRI with `AR`.** An information request is a rejection of the
+  referral *as submitted*; the distinction from a decline lives in the reason text and the protocol
+  state, not in the artifact. Stated because the assertion table implied a separate info-request
+  artifact and `infoRequestService` is a full-flow service the gateway does not call.
