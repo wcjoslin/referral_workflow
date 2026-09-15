@@ -231,7 +231,7 @@ Carried from the source document's risk table; each is assigned to the PRD that 
 | How is a completed protocol lifecycle with open internal follow-up represented? | PRD-18, PRD-26 |
 | What enforces least-privilege access to PHI in queues and workspaces? | PRD-20, PRD-30 |
 | Whose Direct identity signs an artifact rendered on a party's behalf? | PRD-29 |
-| How many Direct addresses does a party have, and which is canonical for sending? | PRD-24, then PRD-29 and PRD-30 |
+| ~~How many Direct addresses does a party have, and which is canonical for sending?~~ **Answered in PRD-24 v1.1:** several — a canonical intake address on the party plus a `party_addresses` row per address observed. PRD-29 sends to the inbound address, falling back to intake. | PRD-24 ✅, then PRD-29 and PRD-30 |
 | How are duplicate, late, unmatched and contradictory messages reconciled? | PRD-28 |
 
 ---

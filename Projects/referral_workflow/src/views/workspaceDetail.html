@@ -171,6 +171,37 @@
   .msg.ok { color: #0a7d4b; }
   .msg.err { color: var(--color-priority); }
 
+  /* ── Parties & participants (PRD-24) ──────────────────────────────────────── */
+  .party { border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  .party-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .party-name { font-size: 0.95rem; font-weight: 600; }
+  .party-role {
+    font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 2px 7px; border-radius: 4px; background: #e9ecef; color: #495057;
+  }
+  .party-role.initiating { background: #cff4fc; color: #055160; }
+  .party-role.receiving { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+  .tag {
+    font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 2px 6px; border-radius: 4px; background: #fff3cd; color: #664d03;
+  }
+  .tag.verified { background: #d1e7dd; color: #0a3622; }
+  .tag.assumed { background: #e9ecef; color: #495057; }
+  .party-addr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: var(--color-text-muted); margin-top: 4px; word-break: break-all; }
+  .party-mode { font-size: 0.78rem; margin-top: 6px; line-height: 1.5; }
+  .party-extra { font-size: 0.74rem; color: var(--color-text-muted); margin-top: 6px; line-height: 1.5; }
+  .plist { list-style: none; padding: 0; margin: 4px 0 0; }
+  .plist li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--color-border); flex-wrap: wrap; }
+  .plist li:first-child { border-top: none; }
+  .p-name { font-size: 0.88rem; font-weight: 600; }
+  .p-meta { font-size: 0.74rem; color: var(--color-text-muted); }
+  .p-role { font-size: 0.7rem; font-weight: 700; padding: 2px 7px; border-radius: 4px; background: #e9ecef; color: #495057; }
+  .p-spacer { flex: 1; }
+  .btn-x { background: none; border: none; color: var(--color-text-muted); cursor: pointer; font-size: 0.95rem; padding: 2px 6px; line-height: 1; }
+  .btn-x:hover { color: var(--color-priority); }
+  .subhead { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); margin: 16px 0 6px; }
+  .empty-note { font-size: 0.8rem; color: var(--color-text-muted); font-style: italic; }
+
   .cols { display: grid; grid-template-columns: 1fr; gap: 16px; }
   .cols.with-viewer { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
   @media (max-width: 980px) { .cols.with-viewer { grid-template-columns: 1fr; } }
@@ -280,12 +311,22 @@
         empty placeholder panels.
       -->
       <div class="card" id="wsOwner"></div>
+      <!--
+        Parties & participants also sits in the MAIN column, but for a different
+        reason than ownership above. Ownership moved because it is the primary
+        ACTION and was buried. This panel is mostly reference material, which
+        would normally justify the side column — except AC1's whole story is
+        "see who I am dealing with WITHOUT opening the raw message", and in the
+        single-column collapse the side column stacks after the message thread,
+        which can run to any length. Reference material you are meant to see on
+        arrival cannot live below an unbounded list.
+      -->
+      <div class="card" id="wsParticipants"></div>
       <div class="card" id="wsConversation"></div>
       <div class="card" id="wsThread"></div>
       <div class="card" id="wsActivity"></div>
     </div>
     <div class="viewer-col" id="wsSide">
-      <div class="card" id="wsParticipants"></div>
       <div class="card" id="wsRouting"></div>
       <div class="card" id="wsClinical"></div>
       <div class="card" id="wsDocuments"></div>
@@ -861,14 +902,234 @@
     renderOwner();
   }
 
+  // ── Parties & participants (PRD-24) ───────────────────────────────────────
+
+  /**
+   * Plain-language protocol mode (AC5). Deliberately describes CONSEQUENCE
+   * rather than restating the enum: "native-360x" tells a coordinator nothing,
+   * "artifacts go straight to their system" tells them what will happen when
+   * they act.
+   */
+  var MODE_TEXT = {
+    'native-360x': 'Their own system speaks 360X \u2014 artifacts are delivered straight to it.',
+    'workspace-mediated': 'They have a Direct address but no 360X system, so they work inside this workspace and we render conformant artifacts to that address.',
+    'local-only': 'No Direct address on file, so updates stay local \u2014 artifacts are still generated and stored, but nothing is transmitted.'
+  };
+
+  var MODE_LABEL = {
+    'native-360x': 'Speaks 360X',
+    'workspace-mediated': 'Works in this workspace',
+    'local-only': 'Local only'
+  };
+
+  /** Active users for the add-participant picker. */
+  var rosterUsers = [];
+
+  function renderParties() {
+    var parties = P.parties || [];
+    var participants = P.participants || [];
+    var readOnly = !!P.workspace.archivedAt;
+
+    var partyHtml = parties.length === 0
+      // An empty parties list is a signal, not a normal state: seeding runs on
+      // creation, so emptiness means this workspace predates PRD-24 and the
+      // backfill has not been run. Say that rather than showing nothing.
+      ? '<div class="empty-note">No parties recorded. This workspace was created before ' +
+        'parties existed \u2014 run <code>npm run backfill:parties</code>.</div>'
+      : parties.map(function (p) {
+          var verified = p.capabilityVerifiedAt
+            ? '<span class="tag verified" title="Confirmed by a real exchange">verified</span>'
+            : '<span class="tag assumed" title="Not yet confirmed by an actual exchange">assumed</span>';
+
+          // Only addresses BEYOND the canonical intake are worth listing; the
+          // intake address is already shown on its own line above.
+          var extra = (p.addresses || []).filter(function (a) {
+            return !p.directAddress || a.address.toLowerCase() !== p.directAddress.toLowerCase();
+          });
+
+          var modeCtl = readOnly ? '' :
+            '<div class="ctl-row">' +
+              '<select class="ctl party-mode-sel" data-party="' + esc(p.id) + '">' +
+                Object.keys(MODE_LABEL).map(function (m) {
+                  return '<option value="' + esc(m) + '"' + (p.protocolMode === m ? ' selected' : '') + '>' +
+                    esc(MODE_LABEL[m]) + '</option>';
+                }).join('') +
+              '</select>' +
+              '<button class="btn party-mode-btn" data-party="' + esc(p.id) + '">Set mode</button>' +
+            '</div>';
+
+          return '<div class="party">' +
+            '<div class="party-top">' +
+              '<span class="party-role ' + esc(p.partyRole) + '">' + esc(p.partyRole) + '</span>' +
+              '<span class="party-name">' + esc(p.orgName) + '</span>' +
+              (p.orgNameVerified ? '' : '<span class="tag" title="Derived from the address domain, not confirmed">unverified name</span>') +
+              verified +
+            '</div>' +
+            '<div class="party-addr">' + (p.directAddress ? esc(p.directAddress) : 'no Direct address') + '</div>' +
+            '<div class="party-mode">' + esc(MODE_TEXT[p.protocolMode] || p.protocolMode) + '</div>' +
+            (extra.length === 0 ? '' :
+              '<div class="party-extra">Also seen using: ' +
+              extra.map(function (a) { return esc(a.address); }).join(', ') + '</div>') +
+            (p.contactName ? '<div class="party-extra">Contact: ' + esc(p.contactName) + '</div>' : '') +
+            modeCtl +
+          '</div>';
+        }).join('');
+
+    var listHtml = participants.length === 0
+      ? '<div class="empty-note">Nobody else is on this referral yet.</div>'
+      : '<ul class="plist">' + participants.map(function (m) {
+          return '<li>' +
+            '<span class="p-name">' + esc(m.displayName) + '</span>' +
+            '<span class="p-role">' + esc(m.role) + '</span>' +
+            (m.isOwner ? '<span class="tag verified" title="The accountable owner">owner</span>' : '') +
+            (m.inactive ? '<span class="tag" title="No longer active">inactive</span>' : '') +
+            '<span class="p-meta">' + esc(m.jobRole) + '</span>' +
+            '<span class="p-spacer"></span>' +
+            // AC10: the owner cannot be removed, so no button is offered rather
+            // than offering one that 409s.
+            (readOnly || m.isOwner ? '' :
+              '<button class="btn-x" data-remove="' + esc(m.userId) + '" title="Remove from this referral">\u00D7</button>') +
+          '</li>';
+        }).join('') + '</ul>';
+
+    var addCtl = readOnly ? '' :
+      '<div class="ctl-row">' +
+        '<select class="ctl" id="pAddUser"><option value="">Add somebody\u2026</option>' +
+          rosterUsers.filter(function (u) {
+            return !participants.some(function (m) { return m.userId === u.id; });
+          }).map(function (u) {
+            return '<option value="' + esc(u.id) + '">' + esc(u.displayName) + ' \u00B7 ' + esc(u.jobRole) + '</option>';
+          }).join('') +
+        '</select>' +
+        '<select class="ctl" id="pAddRole">' +
+          '<option value="Collaborator">Collaborator</option>' +
+          '<option value="Manager">Manager</option>' +
+          '<option value="Viewer">Viewer</option>' +
+        '</select>' +
+        '<button class="btn" id="pAddBtn">Add</button>' +
+      '</div>';
+
+    document.getElementById('wsParticipants').innerHTML =
+      '<h2>Parties &amp; Participants</h2>' +
+      '<div class="subhead" style="margin-top:2px;">Organizations on this referral</div>' +
+      partyHtml +
+      '<div class="subhead">People here who are involved</div>' +
+      listHtml +
+      addCtl +
+      '<div class="msg" id="pMsg"></div>' +
+      // Stated on the page, not just in the code: somebody will otherwise
+      // assume Viewer is a permission.
+      '<div class="party-extra">Roles describe involvement and drive notifications. They are ' +
+      'not access control yet \u2014 queue membership (PRD-20) and guest scoping (PRD-30) are what ' +
+      'will enforce who can see what.</div>';
+
+    if (readOnly) return;
+
+    Array.prototype.forEach.call(document.querySelectorAll('.party-mode-btn'), function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-party');
+        var sel = document.querySelector('.party-mode-sel[data-party="' + id + '"]');
+        if (sel) setMode(id, sel.value);
+      });
+    });
+
+    var addBtn = document.getElementById('pAddBtn');
+    if (addBtn) addBtn.addEventListener('click', function () {
+      var u = document.getElementById('pAddUser');
+      var r = document.getElementById('pAddRole');
+      if (!u.value) { pMsg('Pick somebody first.', false); return; }
+      addPerson(Number(u.value), r.value);
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll('[data-remove]'), function (btn) {
+      btn.addEventListener('click', function () {
+        removePerson(Number(btn.getAttribute('data-remove')));
+      });
+    });
+  }
+
+  function pMsg(text, ok) {
+    var el = document.getElementById('pMsg');
+    if (!el) return;
+    el.className = 'msg ' + (ok ? 'ok' : 'err');
+    el.textContent = text;
+  }
+
+  async function setMode(partyId, mode) {
+    try {
+      var res = await fetch('/api/workspaces/' + ws.id + '/parties/' + partyId + '/protocol-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ protocolMode: mode })
+      });
+      var json = await res.json();
+      if (!res.ok) { pMsg(json.error || 'Could not set the mode.', false); return; }
+      await reloadParties();
+      pMsg('Protocol mode updated.', true);
+    } catch (err) {
+      pMsg('Could not set the mode: ' + err.message, false);
+    }
+  }
+
+  async function addPerson(userId, role) {
+    try {
+      var res = await fetch('/api/workspaces/' + ws.id + '/participants', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: userId, role: role })
+      });
+      var json = await res.json();
+      if (!res.ok) { pMsg(json.error || 'Could not add them.', false); return; }
+      await reloadParties();
+      pMsg('Added.', true);
+    } catch (err) {
+      pMsg('Could not add them: ' + err.message, false);
+    }
+  }
+
+  async function removePerson(userId) {
+    try {
+      var res = await fetch('/api/workspaces/' + ws.id + '/participants/' + userId, { method: 'DELETE' });
+      var json = await res.json();
+      if (!res.ok) { pMsg(json.error || 'Could not remove them.', false); return; }
+      await reloadParties();
+      pMsg('Removed. Anything they wrote is kept.', true);
+    } catch (err) {
+      pMsg('Could not remove them: ' + err.message, false);
+    }
+  }
+
+  /** Re-reads both lists from the server rather than patching them locally. */
+  async function reloadParties() {
+    try {
+      var both = await Promise.all([
+        fetch('/api/workspaces/' + ws.id + '/parties').then(function (r) { return r.json(); }),
+        fetch('/api/workspaces/' + ws.id + '/participants').then(function (r) { return r.json(); })
+      ]);
+      P.parties = both[0].parties || [];
+      P.participants = both[1].participants || [];
+    } catch (err) {
+      console.warn('[Workspace/Parties]', err);
+    }
+    renderParties();
+  }
+
+  async function loadRoster() {
+    try {
+      var res = await fetch('/api/users');
+      var json = await res.json();
+      rosterUsers = json.users || json || [];
+    } catch (err) {
+      rosterUsers = [];
+      console.warn('[Workspace/Parties]', err);
+    }
+    renderParties();
+  }
+
   function renderSlots() {
     if (!P.slots.owner) {
       renderSlot('wsOwner', 'Ownership', 'PRD-21',
         'Claim, assign and release this workspace. Owner is shown in the header meanwhile.');
-    }
-    if (!P.slots.participants) {
-      renderSlot('wsParticipants', 'Parties & Participants', 'PRD-24',
-        'The organizations and people involved, with their Direct addresses.');
     }
     if (!P.slots.conversation) {
       renderSlot('wsConversation', 'Conversation', 'PRD-22',
@@ -898,6 +1159,7 @@
   renderCcda();
   renderSlots();
   if (P.slots.owner) loadOwnerUsers();
+  if (P.slots.participants) { renderParties(); loadRoster(); }
   loadThread();
 })();
 </script>

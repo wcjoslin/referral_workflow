@@ -71,6 +71,25 @@ import {
   releaseOwnership,
 } from './modules/workspace/assignmentService';
 import {
+  AddressAlreadyClaimedError,
+  NoDirectAddressError,
+  PartyNotFoundError,
+  backfillParties,
+  getParties,
+  isProtocolMode,
+  setProtocolMode,
+  updateParty,
+} from './modules/workspace/partyService';
+import {
+  CannotRemoveOwnerError,
+  ParticipantUserNotFoundError,
+  WorkspaceNotFoundError as ParticipantWorkspaceNotFoundError,
+  addParticipant,
+  getParticipants,
+  isParticipantRole,
+  removeParticipant,
+} from './modules/workspace/participantService';
+import {
   InvalidWorkStatusTransitionError,
   allowedTransitions,
   isValidState as isValidWorkStatus,
@@ -667,6 +686,211 @@ app.get('/api/my-work', async (req: Request, res: Response, next: NextFunction) 
     next(err);
   }
 });
+
+// ── Parties & Participants (PRD-24) ──────────────────────────────────────────
+
+/**
+ * Maps a PRD-24 service error to its status code, returning true when it
+ * handled one. Shared by all six routes below: five `instanceof` chains copied
+ * into five handlers is how one of them quietly ends up short a case, and a
+ * missed case here is a 500 on a perfectly ordinary refusal.
+ */
+function sendPartyError(err: unknown, res: Response): boolean {
+  if (err instanceof PartyNotFoundError || err instanceof ParticipantWorkspaceNotFoundError) {
+    res.status(404).json({ error: err.message });
+    return true;
+  }
+  // 409 rather than 400: the request was well-formed, the current state refused
+  // it. A client that retries after fixing the state will succeed.
+  if (err instanceof NoDirectAddressError || err instanceof AddressAlreadyClaimedError) {
+    res.status(409).json({ error: err.message });
+    return true;
+  }
+  if (err instanceof CannotRemoveOwnerError) {
+    res.status(409).json({ error: err.message });
+    return true;
+  }
+  if (err instanceof ParticipantUserNotFoundError) {
+    res.status(400).json({ error: err.message });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Seeds parties for workspaces that already exist. Idempotent, and re-derives
+ * rather than skipping — see backfillParties() for why that distinction is the
+ * whole point of this endpoint. Also `npm run backfill:parties`.
+ */
+app.post('/api/workspaces/backfill-parties', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json({ success: true, ...(await backfillParties()) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/workspaces/:id/parties', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    res.json({ parties: await getParties(workspaceId) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Edits a party's name, canonical intake address or contact.
+ *
+ * Note it does NOT take protocolMode: that has its own endpoint because it
+ * carries its own refusal (a mode other than local-only needs an address) and
+ * its own audit event. Folding them together would make one request able to
+ * fail for two unrelated reasons.
+ */
+app.patch(
+  '/api/workspaces/:id/parties/:partyId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      const partyId = Number(req.params.partyId);
+      if (workspaceId === null || !Number.isInteger(partyId) || partyId <= 0) {
+        res.status(404).json({ error: 'Party not found' });
+        return;
+      }
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const patch: { orgName?: string; directAddress?: string; contactName?: string } = {};
+      if (typeof body.orgName === 'string') patch.orgName = body.orgName;
+      if (typeof body.directAddress === 'string') patch.directAddress = body.directAddress;
+      if (typeof body.contactName === 'string') patch.contactName = body.contactName;
+
+      if (Object.keys(patch).length === 0) {
+        res.status(400).json({
+          error: 'Send at least one of orgName, directAddress or contactName as a string.',
+          received: Object.keys(body),
+        });
+        return;
+      }
+
+      const party = await updateParty(partyId, patch, await actingActor(req));
+      res.json({ success: true, party });
+    } catch (err) {
+      if (!sendPartyError(err, res)) next(err);
+    }
+  },
+);
+
+app.post(
+  '/api/workspaces/:id/parties/:partyId/protocol-mode',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      const partyId = Number(req.params.partyId);
+      if (workspaceId === null || !Number.isInteger(partyId) || partyId <= 0) {
+        res.status(404).json({ error: 'Party not found' });
+        return;
+      }
+
+      const body = (req.body ?? {}) as { protocolMode?: unknown };
+      const requested = body.protocolMode;
+      if (typeof requested !== 'string' || !isProtocolMode(requested)) {
+        res.status(400).json({
+          error: 'protocolMode must be one of native-360x, workspace-mediated, local-only.',
+          received: requested,
+        });
+        return;
+      }
+
+      const party = await setProtocolMode(partyId, requested, await actingActor(req));
+      res.json({ success: true, party });
+    } catch (err) {
+      if (!sendPartyError(err, res)) next(err);
+    }
+  },
+);
+
+app.get(
+  '/api/workspaces/:id/participants',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      if (workspaceId === null) {
+        res.status(404).json({ error: 'Workspace not found' });
+        return;
+      }
+      res.json({ participants: await getParticipants(workspaceId) });
+    } catch (err) {
+      if (!sendPartyError(err, res)) next(err);
+    }
+  },
+);
+
+/** Idempotent on userId: an existing participant has their role updated. */
+app.post(
+  '/api/workspaces/:id/participants',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      if (workspaceId === null) {
+        res.status(404).json({ error: 'Workspace not found' });
+        return;
+      }
+
+      const body = (req.body ?? {}) as { userId?: unknown; role?: unknown };
+      if (typeof body.userId !== 'number' || !Number.isInteger(body.userId)) {
+        res.status(400).json({ error: 'userId must be an integer.', received: body.userId });
+        return;
+      }
+      if (typeof body.role !== 'string' || !isParticipantRole(body.role)) {
+        res.status(400).json({
+          error: 'role must be one of Manager, Collaborator, Viewer.',
+          received: body.role,
+        });
+        return;
+      }
+
+      const actor = await tryGetActingUser(req);
+      if (!actor) {
+        res.status(401).json({ error: 'No acting user. Seed users before adding participants.' });
+        return;
+      }
+
+      const participant = await addParticipant(workspaceId, body.userId, body.role, actor);
+      res.json({ success: true, participant });
+    } catch (err) {
+      if (!sendPartyError(err, res)) next(err);
+    }
+  },
+);
+
+app.delete(
+  '/api/workspaces/:id/participants/:userId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      const userId = Number(req.params.userId);
+      if (workspaceId === null || !Number.isInteger(userId) || userId <= 0) {
+        res.status(404).json({ error: 'Participant not found' });
+        return;
+      }
+
+      const actor = await tryGetActingUser(req);
+      if (!actor) {
+        res.status(401).json({ error: 'No acting user. Seed users first.' });
+        return;
+      }
+
+      await removeParticipant(workspaceId, userId, actor);
+      res.json({ success: true });
+    } catch (err) {
+      if (!sendPartyError(err, res)) next(err);
+    }
+  },
+);
 
 /**
  * The C-CDA viewer as its own document, for the workspace page's iframe.

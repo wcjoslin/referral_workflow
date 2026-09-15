@@ -92,6 +92,13 @@
       "when": 1789420945158,
       "tag": "0012_flashy_captain_stacy",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1789494910121,
+      "tag": "0013_soft_proudstar",
+      "breakpoints": true
     }
   ]
 }

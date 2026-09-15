@@ -275,13 +275,15 @@ The logical order for PRD development:
 ### 24. **[[PRD-24 - Parties & Participants|PRD-24: Parties & Participants]]** 📋
 **Who is involved on each side** — and the prerequisite for guest access and the protocol gateway.
 
-- `workspace_parties`: organization, Direct address, party role, protocol mode
+- `workspace_parties`: organization, canonical intake Direct address, party role, protocol mode
+- `party_addresses`: every address observed from a party, so one org's several addresses resolve to one
 - `workspace_participants`: internal staff as Manager / Collaborator / Viewer
 - Protocol mode resolution: `native-360x`, `workspace-mediated`, `local-only`
 - A party is never a user; the two models stay structurally separate
+- Settles the Direct address cardinality question the epic left open for PRD-24/29/30
 - **Prerequisite:** PRD-19
 
-**Status:** 📋 Drafting
+**Status:** ✅ Shipped (2026-09-15). Doc at v1.1.
 **Module:** `workspace/`
 
 ---
@@ -438,7 +440,7 @@ The logical order for PRD development:
 | [[PRD-21 - Ownership & Assignment\|21]] | Ownership & Assignment | ✅ | Claim, assign, release, My work, audited | `workspace/` |
 | [[PRD-22 - Referral Conversation\|22]] | Referral Conversation | 📋 | One thread, Internal/Shared visibility, versioned | `workspace/` |
 | [[PRD-23 - Document Collection\|23]] | Document Collection | 📋 | Index over existing artifacts, delivery + access evidence | `workspace/` |
-| [[PRD-24 - Parties & Participants\|24]] | Parties & Participants | 📋 | Organizations + Direct address + protocol mode; internal roles | `workspace/` |
+| [[PRD-24 - Parties & Participants\|24]] | Parties & Participants | ✅ | Organizations + Direct address + protocol mode; internal roles | `workspace/` |
 | [[PRD-25 - Activity History & Audit\|25]] | Activity History & Audit | 📋 | Per-referral event reader, merged feed, gaps closed | `workspace/`, `analytics/` |
 | [[PRD-26 - Next Action & Due Dates\|26]] | Next Action & Due Dates | 📋 | Config-driven actions, awaited-by, overdue sweep | `workspace/` |
 | [[PRD-27 - Notifications\|27]] | Notifications | 📋 | Nine triggers, one funnel, guest allow list | `workspace/` |

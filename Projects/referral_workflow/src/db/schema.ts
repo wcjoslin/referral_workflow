@@ -1,4 +1,5 @@
-import { index, sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { index, sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 
 // ── Internal Staff Identity (PRD-17) ────────────────────────────────────────
 //
@@ -211,6 +212,147 @@ export const referralMessages = sqliteTable(
 );
 
 // ── Claims Attachment Workflow (X12N 277/275) ─────────────────────────────────
+
+// ── Parties & Participants (PRD-24) ─────────────────────────────────────────
+//
+// Two concepts that must stay structurally separate:
+//
+//   PARTIES are the ORGANIZATIONS on the referral. A party is never a row in
+//   `users` and never a row in `workspace_participants`. That separation is the
+//   concrete mechanism keeping "external organizations are not workspace users"
+//   true even though PRD-30 will let them act.
+//
+//   PARTICIPANTS are internal staff beyond the owner.
+//
+// A party determines where artifacts go and which protocol mode applies. A
+// participant determines who inside this organization sees and does what.
+// Collapsing them is how a system ends up treating a counterparty as a user.
+export const workspaceParties = sqliteTable(
+  'workspace_parties',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workspaceId: integer('workspace_id')
+      .references(() => referralWorkspaces.id)
+      .notNull(),
+
+    // null => provisional, derived from the address domain and flagged unverified.
+    orgName: text('org_name'),
+    orgNameVerified: integer('org_name_verified', { mode: 'boolean' }).notNull().default(false),
+
+    // The party's CANONICAL INTAKE address — what PRD-29 addresses artifacts to.
+    // Every other address this party has been seen using lives in
+    // `party_addresses`; this column is not the full picture, it is the one we
+    // reply to. null => local-only, nothing can be transmitted.
+    directAddress: text('direct_address'),
+
+    partyRole: text('party_role').notNull(), // 'initiating' | 'receiving' | 'other'
+
+    protocolMode: text('protocol_mode').notNull().default('local-only'),
+    // null => auto-resolved rather than chosen by a person.
+    protocolModeSetBy: text('protocol_mode_set_by'),
+    protocolModeSetAt: integer('protocol_mode_set_at', { mode: 'timestamp' }),
+
+    // Written by PRD-29 after an actual successful exchange, which is what
+    // separates a verified capability from an assumed one.
+    capabilityVerifiedAt: integer('capability_verified_at', { mode: 'timestamp' }),
+
+    contactName: text('contact_name'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    workspaceIdx: index('idx_workspace_parties_workspace').on(table.workspaceId, table.partyRole),
+    // Lowercase EXPRESSION index — the first in this schema. Direct addresses
+    // arrive with inconsistent casing but are stored as received so the audit
+    // record keeps the original form, so the match has to be case-folded.
+    addressIdx: index('idx_workspace_parties_address').on(sql`lower(${table.directAddress})`),
+  }),
+);
+
+// Every Direct address ever observed for a party, beyond its canonical intake.
+//
+// WHY THIS TABLE EXISTS: an organization receives a domain or subdomain from its
+// HISP and provisions addresses at whatever granularity it likes — an
+// organizational intake address, departmental addresses, per-clinician
+// addresses, commonly all at once. With one address per party, a follow-up
+// message from a clinician's own address fails to match the party and lands as a
+// correlation exception instead of on the right workspace.
+//
+// It self-populates from recordThreadMessage(), so it needs no admin UI: an
+// organization that provisions a new departmental address simply shows up with
+// it, and the next message from that address matches exactly rather than
+// falling back to the domain.
+export const partyAddresses = sqliteTable(
+  'party_addresses',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    // Denormalised from the party so uniqueness can be scoped per workspace.
+    workspaceId: integer('workspace_id')
+      .references(() => referralWorkspaces.id)
+      .notNull(),
+    partyId: integer('party_id')
+      .references(() => workspaceParties.id)
+      .notNull(),
+
+    address: text('address').notNull(), // stored as received, matched case-folded
+    // 'intake' | 'departmental' | 'individual' | null => unknown. Advisory only;
+    // nothing branches on it, it is for the panel to label rows.
+    addressKind: text('address_kind'),
+
+    // The message that introduced this address. Null for a seeded intake address,
+    // which arrived from the referral rather than from a message.
+    firstSeenMessageId: integer('first_seen_message_id').references(() => referralMessages.id),
+    firstSeenAt: integer('first_seen_at', { mode: 'timestamp' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    partyIdx: index('idx_party_addresses_party').on(table.partyId),
+    // Two parties on one workspace may never claim the same address. Enforced
+    // here rather than on the party row, because this is the table that now
+    // holds every address.
+    uniqueIdx: uniqueIndex('idx_party_addresses_unique').on(
+      table.workspaceId,
+      sql`lower(${table.address})`,
+    ),
+  }),
+);
+
+export const workspaceParticipants = sqliteTable(
+  'workspace_participants',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workspaceId: integer('workspace_id')
+      .references(() => referralWorkspaces.id)
+      .notNull(),
+    userId: integer('user_id')
+      .references(() => users.id)
+      .notNull(),
+
+    // 'Manager' | 'Collaborator' | 'Viewer'.
+    //
+    // STORED, NOT ENFORCED, by PRD-24. Nothing reads this to make an access
+    // decision yet — PRD-20 and PRD-30 are what turn `Viewer` into a security
+    // boundary. Do not assume it is one before then.
+    role: text('role').notNull(),
+
+    addedByUserId: integer('added_by_user_id').references(() => users.id),
+    addedAt: integer('added_at', { mode: 'timestamp' }).notNull(),
+    // Soft removal. A removed participant keeps everything they authored.
+    removedAt: integer('removed_at', { mode: 'timestamp' }),
+  },
+  (table) => ({
+    workspaceIdx: index('idx_workspace_participants_workspace').on(
+      table.workspaceId,
+      table.removedAt,
+    ),
+    userIdx: index('idx_workspace_participants_user').on(table.userId, table.removedAt),
+    // `removed_at` is deliberately NOT part of the key: re-adding a removed
+    // participant revives this row rather than inserting a second. Their
+    // history lives in the participant_added / participant_removed events, so
+    // the table holds current state and the audit log is the record.
+    uniqueIdx: uniqueIndex('idx_workspace_participants_unique').on(table.workspaceId, table.userId),
+  }),
+);
 
 export const attachmentRequests = sqliteTable('attachment_requests', {
   id: integer('id').primaryKey({ autoIncrement: true }),

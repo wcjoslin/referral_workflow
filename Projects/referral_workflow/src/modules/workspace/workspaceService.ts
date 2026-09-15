@@ -20,6 +20,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../db';
 import { referrals, referralWorkspaces } from '../../db/schema';
 import { emitEvent } from '../analytics/eventService';
+import { seedParties } from './partyService';
 import { ReferralState } from '../../state/referralStateMachine';
 import {
   WorkStatus,
@@ -236,6 +237,15 @@ export async function createWorkspace(referralId: number): Promise<Workspace> {
     actor: 'system',
     metadata: { workspaceId: row.id },
   }).catch((err) => console.error('[WorkspaceService]', err));
+
+  // PRD-24: a workspace never exists without its parties. Awaited rather than
+  // fired off, because the parties panel is part of what a freshly created
+  // workspace IS — a workspace that renders before its counterparties exist
+  // would show "Unknown organization" to whoever opened it first.
+  //
+  // NOTE for anyone touching backfillWorkspaces(): this runs on CREATION only.
+  // Existing workspaces are served by backfillParties(), which re-derives.
+  await seedParties(row.id, referralId);
 
   return toWorkspace(row);
 }

@@ -30,6 +30,11 @@ export const config = {
   },
   receiving: {
     directAddress: requireEnv('RECEIVING_DIRECT_ADDRESS'),
+    // PRD-24: the receiving party is OUR organization, so it has a real name.
+    // Without this the only available name would be a guess at our own domain,
+    // which would show our own organization as provisionally named and
+    // unverified on every workspace. Optional so no existing .env breaks.
+    orgName: optionalEnv('RECEIVING_ORG_NAME', 'Specialist Care Group'),
   },
   database: {
     url: optionalEnv('DATABASE_URL', './referral.db'),

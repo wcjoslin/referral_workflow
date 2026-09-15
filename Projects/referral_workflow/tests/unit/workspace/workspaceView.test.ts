@@ -14,7 +14,7 @@
 jest.mock('../../../src/config', () => ({
   config: {
     smtp: { host: 'smtp.test', port: 587, user: 'user', password: 'pass' },
-    receiving: { directAddress: 'receiving@specialist.direct' },
+    receiving: { directAddress: 'receiving@specialist.direct', orgName: 'Specialist Care Group' },
     database: { url: ':memory:' },
   },
 }));
@@ -25,103 +25,7 @@ jest.mock('../../../src/db', () => {
   const schema = require('../../../src/db/schema');
 
   const sqlite = new Database(':memory:');
-  sqlite.exec(`
-    CREATE TABLE users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      display_name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      direct_address TEXT,
-      job_role TEXT NOT NULL,
-      legacy_clinician_id TEXT,
-      all_queues_access INTEGER NOT NULL DEFAULT 0,
-      active INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL
-    );
-    CREATE TABLE patients (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      first_name TEXT NOT NULL,
-      last_name TEXT NOT NULL,
-      date_of_birth TEXT NOT NULL
-    );
-    CREATE TABLE referrals (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      patient_id INTEGER NOT NULL,
-      source_message_id TEXT NOT NULL UNIQUE,
-      referrer_address TEXT NOT NULL,
-      reason_for_referral TEXT,
-      state TEXT NOT NULL DEFAULT 'Received',
-      decline_reason TEXT,
-      clinician_id TEXT,
-      appointment_date TEXT,
-      appointment_location TEXT,
-      scheduled_provider TEXT,
-      ai_assessment TEXT,
-      routing_department TEXT NOT NULL DEFAULT 'Unassigned',
-      routing_equipment TEXT,
-      clinical_data TEXT,
-      raw_ccda_xml TEXT,
-      created_at INTEGER NOT NULL,
-      priority_flag INTEGER DEFAULT 0,
-      updated_at INTEGER NOT NULL
-    );
-    CREATE TABLE referral_workspaces (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      referral_id INTEGER NOT NULL UNIQUE,
-      external_referral_id TEXT,
-      correlation_key TEXT,
-      work_status TEXT NOT NULL DEFAULT 'Triage',
-      work_status_is_manual INTEGER NOT NULL DEFAULT 0,
-      work_status_set_by TEXT,
-      work_status_set_at INTEGER,
-      owner_user_id INTEGER,
-      queue_id INTEGER,
-      next_action TEXT,
-      next_action_due_at INTEGER,
-      exception_reason TEXT,
-      archived_at INTEGER,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-    CREATE TABLE outbound_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      referral_id INTEGER NOT NULL,
-      message_control_id TEXT NOT NULL UNIQUE,
-      message_type TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'Pending',
-      sent_at INTEGER NOT NULL,
-      acknowledged_at INTEGER
-    );
-    CREATE TABLE prior_auth_requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      referral_id INTEGER,
-      patient_id INTEGER NOT NULL,
-      state TEXT NOT NULL DEFAULT 'Draft',
-      claim_json TEXT NOT NULL,
-      bundle_json TEXT,
-      insurer_name TEXT NOT NULL,
-      insurer_id TEXT NOT NULL,
-      service_code TEXT NOT NULL,
-      service_display TEXT,
-      provider_npi TEXT NOT NULL,
-      provider_name TEXT NOT NULL,
-      subscriber_id TEXT,
-      subscription_id TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      submitted_at INTEGER
-    );
-    CREATE TABLE workflow_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      event_type TEXT NOT NULL,
-      entity_type TEXT NOT NULL,
-      entity_id INTEGER NOT NULL,
-      from_state TEXT,
-      to_state TEXT,
-      actor TEXT NOT NULL,
-      metadata TEXT,
-      created_at INTEGER NOT NULL
-    );
-  `);
+  sqlite.exec(require('../../helpers/testSchema').TEST_SCHEMA_DDL);
 
   (global as Record<string, unknown>).__TEST_SQLITE__ = sqlite;
 
@@ -265,7 +169,10 @@ describe('buildWorkspacePayload()', () => {
     expect(payload!.workspace.nextActionDueAt).toBeNull();
     expect(payload!.workspace.exceptionReason).toBeNull();
     expect(payload!.workspace.archivedAt).toBeNull();
-    expect(payload!.parties).toEqual([]);
+    // NOT empty any more: PRD-24 seeds both parties inside createWorkspace, so
+    // a workspace without its counterparties is no longer a reachable state.
+    expect(payload!.parties.map((p) => p.partyRole)).toEqual(['initiating', 'receiving']);
+    expect(payload!.participants).toEqual([]);
     expect(payload!.priorAuth).toEqual([]);
     expect(payload!.clinicalData).toBeNull();
     expect(payload!.assessment).toBeNull();
@@ -438,16 +345,16 @@ describe('buildWorkspacePayload()', () => {
 
     const payload = await buildWorkspacePayload(workspace.id, NOBODY);
 
-    // A slot flips to true exactly when its PRD lands: `owner` did so in PRD-21,
-    // and the remaining four are still placeholders. Asserting the whole object
-    // rather than one key means the next PRD has to come past this test, so a
-    // panel cannot be half-wired — live code behind a flag that says otherwise.
+    // A slot flips to true exactly when its PRD lands: `owner` in PRD-21 and
+    // `participants` in PRD-24, with three still to come. Asserting the whole
+    // object rather than one key means the next PRD has to come past this test,
+    // so a panel cannot be half-wired — live code behind a flag saying otherwise.
     expect(payload!.slots).toEqual({
       owner: true,
+      participants: true,
       conversation: false,
       documents: false,
       activity: false,
-      participants: false,
     });
   });
 

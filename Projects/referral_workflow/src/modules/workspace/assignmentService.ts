@@ -31,6 +31,7 @@ import { ReferralState } from '../../state/referralStateMachine';
 import { WorkStatus } from '../../state/workStatusMachine';
 import { ActingUser, formatActor, getUser } from './identityService';
 import { Workspace, getWorkspace } from './workspaceService';
+import { syncOwnerParticipant } from './participantService';
 
 /** Unknown id, or a user whose `active` flag is false. */
 export class OwnerNotFoundError extends Error {
@@ -158,6 +159,16 @@ export async function assignOwner(
     },
   }).catch((err) => console.error('[AssignmentService]', err));
 
+  // PRD-24 AC10: the owner is a Manager participant. Recorded here rather than
+  // computed when the roster is read, so the roster is a real list instead of a
+  // list plus an implicit extra member every consumer must remember to add.
+  //
+  // AFTER the assignment event, not before, so the activity feed reads
+  // "assigned to X" and then "X added as Manager" rather than the reverse.
+  // A previous owner is deliberately NOT removed — they stay on the roster,
+  // because they really were involved.
+  await syncOwnerParticipant(workspaceId, toUserId, actor);
+
   return {
     workspaceId,
     ownerUserId: toUserId,
@@ -210,6 +221,8 @@ export async function claimOwnership(
       self: true,
     },
   }).catch((err) => console.error('[AssignmentService]', err));
+
+  await syncOwnerParticipant(workspaceId, actor.id, actor);
 
   return {
     workspaceId,
