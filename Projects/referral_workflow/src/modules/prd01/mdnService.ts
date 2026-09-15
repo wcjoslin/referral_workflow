@@ -11,6 +11,28 @@ export interface MdnOptions {
 }
 
 /**
+ * Builds the machine-readable disposition-notification block of an MDN
+ * (RFC 3798 §3.2).
+ *
+ * EXTRACTED from sendMdn() for PRD-29, which needs to RENDER an MDN as a stored
+ * artifact without sending it — a party with no Direct address still gets a
+ * recorded acknowledgement. sendMdn() now calls this, so there is one source of
+ * truth and its behaviour is unchanged.
+ *
+ * Extraction rather than extension: PRD-29 forbids new message-building code,
+ * and moving existing code into a callable function is not new.
+ */
+export function buildMdnReport(originalMessageId: string): string {
+  return [
+    `Reporting-UA: referral-workflow-poc; Node.js`,
+    `Original-Recipient: rfc822; ${config.receiving.directAddress}`,
+    `Final-Recipient: rfc822; ${config.receiving.directAddress}`,
+    `Original-Message-ID: ${originalMessageId}`,
+    `Disposition: automatic-action/MDN-sent-automatically; processed`,
+  ].join('\r\n');
+}
+
+/**
  * Sends an RFC 3798-compliant Message Delivery Notification (MDN) to the
  * original sender of a referral message.
  *
@@ -33,13 +55,7 @@ export async function sendMdn(options: MdnOptions): Promise<void> {
   });
 
   // Part 2: machine-readable disposition-notification block (RFC 3798 §3.2)
-  const dispositionNotification = [
-    `Reporting-UA: referral-workflow-poc; Node.js`,
-    `Original-Recipient: rfc822; ${config.receiving.directAddress}`,
-    `Final-Recipient: rfc822; ${config.receiving.directAddress}`,
-    `Original-Message-ID: ${originalMessageId}`,
-    `Disposition: automatic-action/MDN-sent-automatically; processed`,
-  ].join('\r\n');
+  const dispositionNotification = buildMdnReport(originalMessageId);
 
   await transport.sendMail({
     from: config.receiving.directAddress,

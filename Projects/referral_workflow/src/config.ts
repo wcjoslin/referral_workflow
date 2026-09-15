@@ -47,6 +47,20 @@ export const config = {
     publicBaseUrl: optionalEnv('PUBLIC_BASE_URL', `http://localhost:${optionalEnv('PORT', '3000')}`),
     guestInvitationExpiryHours: parseInt(optionalEnv('GUEST_INVITATION_EXPIRY_HOURS', '336'), 10),
     guestSessionExpiryHours: parseInt(optionalEnv('GUEST_SESSION_EXPIRY_HOURS', '24'), 10),
+    // PRD-29. 'organization' is the default because it is what every outbound
+    // path in this codebase already does — each passes
+    // config.receiving.directAddress as the HL7 sendingFacility — so the
+    // default is a no-op and 'individual' is opt-in. Under 'individual' the
+    // acting user's own users.direct_address becomes the sender, falling back
+    // to the organizational address when they have none.
+    //
+    // This changes the AUTHORSHIP claim, not the transport signature: under
+    // Mode A the licensed party's HISP signs either way. It is not
+    // non-repudiation of the individual.
+    senderIdentityMode:
+      optionalEnv('SENDER_IDENTITY_MODE', 'organization') === 'individual'
+        ? 'individual'
+        : 'organization',
   },
   gemini: {
     apiKey: optionalEnv('GEMINI_API_KEY', ''),

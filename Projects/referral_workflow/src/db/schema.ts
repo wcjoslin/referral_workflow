@@ -444,6 +444,83 @@ export const workspaceGuests = sqliteTable(
   }),
 );
 
+// ── Protocol Assertions (PRD-29) ────────────────────────────────────────────
+//
+// An ASSERTION is a protocol statement a participant makes from inside the
+// workspace — "accept this referral", "here is the consult note". The gateway
+// renders each into a conformant artifact using the EXISTING builders, guarded
+// by referralStateMachine.transition(), and decides whether there is anywhere
+// to send it.
+//
+// The point of the epic: a counterparty needs a Direct address, not a 360X
+// implementation.
+//
+// ALWAYS RECORD, CONDITIONALLY TRANSMIT. The artifact is stored whether or not
+// there is anywhere to send it, so the record is complete even for a party with
+// no Direct address.
+export const workspaceAssertions = sqliteTable(
+  'workspace_assertions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workspaceId: integer('workspace_id')
+      .references(() => referralWorkspaces.id)
+      .notNull(),
+
+    // Client-supplied idempotency key. UNIQUE, which is what makes a
+    // double-clicked button or a reconnecting guest emit one artifact and not
+    // two — enforced by the database rather than by a check-then-insert.
+    assertionKey: text('assertion_key').notNull().unique(),
+    assertionType: text('assertion_type').notNull(),
+
+    // The party this assertion was made ON BEHALF OF, resolved server-side.
+    // Never taken from the request body: that is how a guest would assert as
+    // the other side.
+    assertedByPartyId: integer('asserted_by_party_id')
+      .references(() => workspaceParties.id)
+      .notNull(),
+    assertedByActor: text('asserted_by_actor').notNull(), // 'user:<id>' | 'guest:<id>'
+
+    context: text('context'), // JSON: appointment, LOINC, reason, note
+
+    fromState: text('from_state'),
+    toState: text('to_state'), // null => no protocol transition
+
+    // The rendered artifact's row in `referral_messages`, where the bytes live.
+    //
+    // NOT a workspace_documents FK: PRD-23 is an INDEX over artifacts rather
+    // than their store — its own context section says it deliberately does not
+    // copy content — so the bytes belong here and PRD-23 later indexes this row
+    // like any other artifact. Nothing about this waits on PRD-23.
+    artifactMessageId: integer('artifact_message_id').references(() => referralMessages.id),
+
+    deliveryMode: text('delivery_mode').notNull(), // 'transmitted' | 'local-only'
+    // Resolved at SEND time from the party row, never baked in, so moving a
+    // party from Mode A to Mode B is a configuration change and not a migration.
+    transportMode: text('transport_mode').notNull(), // 'address-on-file' | 'delegated-mailbox'
+
+    // The address actually used, recorded so the audit trail names where it
+    // went, and how that address was identified (PRD-24's matchedOn): an
+    // address resolved by domain alone is an inference, so routing falls back
+    // to intake and this records which.
+    sentToAddress: text('sent_to_address'),
+    sentFromAddress: text('sent_from_address'),
+    addressMatchedOn: text('address_matched_on'),
+
+    deliveryStatus: text('delivery_status').notNull().default('Pending'),
+    // 'Pending' | 'Delivered' | 'Failed' | 'Not-Transmitted'
+    deliveryError: text('delivery_error'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+    deliveredAt: integer('delivered_at', { mode: 'timestamp' }),
+  },
+  (table) => ({
+    workspaceIdx: index('idx_workspace_assertions_workspace').on(
+      table.workspaceId,
+      table.createdAt,
+    ),
+    keyIdx: index('idx_workspace_assertions_key').on(table.assertionKey),
+  }),
+);
+
 export const attachmentRequests = sqliteTable('attachment_requests', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   patientId: integer('patient_id').references(() => patients.id), // nullable until FHIR patient matched

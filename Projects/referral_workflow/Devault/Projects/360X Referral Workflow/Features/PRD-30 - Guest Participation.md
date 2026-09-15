@@ -5,7 +5,7 @@ prev: "[[PRD-29 - 360X Protocol Gateway]]"
 
 # PRD-30: Guest Participation & Secure Invitations
 
-**Status:** Ready for Dev — Phase 2a  
+**Status:** Phase 2a Implemented · Phase 2b blocked on PRD-22/23/29  
 **Team:** Clinical Workflow & Collaboration  
 **Module:** `workspace/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -527,3 +527,31 @@ several people at one party hold independent invitations and revoking one leaves
   "omit, do not hide" mistake this PRD forbids.
 - **The constructed-not-filtered test is now an allow-list comparison** rather than a list of
   forbidden keys, so it fails for a leaked field nobody anticipated.
+
+**Version:** 1.2 — Phase 2a implemented. Built as specified at v1.1. Four notes on what
+implementation settled, and two defects it found:
+
+- **The constant-time hash helper was written and then removed.** Every token lookup is an indexed
+  equality on the SHA-256 hash performed by SQLite, so no JavaScript comparison of secrets happens on
+  any path and nothing called it. An unused constant-time helper advertises a protection that is not
+  in effect, which is worse than not having one. The reasoning sits where the function was.
+- **Revocation must NOT clear `session_token_hash`.** Doing so looked like belt and braces and broke
+  AC13: the guard looks a session up by that hash, so a cleared hash made it fail with "no guest
+  session — open your invitation link again" before it ever reached the revocation check. That is the
+  wrong answer and useless advice, since the link also fails. The session row is now left intact and
+  the per-request invitation check produces the access-ended state AC13 asks for.
+- **`/guest/:token` must be registered AFTER `/guest/workspace`.** Express matches in registration
+  order, so with the parameterised route first, `/guest/workspace` matched it with
+  `token = "workspace"` and rendered "this link is not valid" — the guest page was unreachable while
+  the guest API worked fine. Caught by the smoke check; no unit test would have, because route order
+  is a property of neither handler.
+- **The guest timeline mirrors the internal page's branch logic** rather than a linear state
+  ordering. A referral that declined, no-showed or went to consult did not travel the happy path, and
+  a single canonical sequence misreports all three.
+- **`sendMail()` resolves a boolean instead of throwing**, so an invitation whose email failed still
+  exists and shows as undelivered with a resend. Losing the record because SMTP was down is strictly
+  worse.
+
+Phase 2b remains: shared comments (PRD-22), shared documents and the per-view audit event (PRD-23),
+assertions (PRD-29) and the guest-facing activity feed (PRD-25). The payload already carries the
+three collections present-and-empty, and a test holds that shape, so each is a wiring change.

@@ -5,7 +5,7 @@ prev: "[[PRD-28 - Correlation & Exception Queue]]"
 
 # PRD-29: 360X Protocol Gateway & Context Authoring
 
-**Status:** Drafting  
+**Status:** Implemented  
 **Team:** Clinical Workflow & Interoperability  
 **Module:** `workspace/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -37,11 +37,21 @@ explicit 360X support. The difference is where it happens: not in a separate por
 must adopt as a new system, but inside the shared workspace they were already invited to for this one
 referral.
 
-Everything needed to produce conformant artifacts already exists in this codebase. `rriBuilder.ts`
-builds accept/decline responses, `siuBuilder.ts` builds scheduling notifications, `ccdaBuilder.ts`
-builds consult notes, `mdnService.ts` builds delivery notifications, and `referralStateMachine.ts`
-guards the lifecycle. This PRD adds no message-building code. It adds the authoring surface, the
-assertion model, the authorization rules, and the delivery decision.
+Most of what is needed to produce conformant artifacts already exists. `buildRri()`,
+`buildSiu()` and `buildConsultNoteCcda()` are **pure functions returning a string**, which is exactly
+what a gateway needs, and `referralStateMachine.ts` guards the lifecycle. This PRD's job is the
+authoring surface, the assertion model, the authorization rules, and the delivery decision.
+
+**But the first draft's "everything already exists" was checked and is wrong for three of the twelve
+assertions**, so it is corrected here rather than discovered during implementation:
+
+| Assertion | The draft assumed | What is actually there |
+|---|---|---|
+| `acknowledge` | `mdnService.ts` builds an MDN | `sendMdn()` builds the disposition-notification block *inline and then sends it*. There is no pure builder to call. |
+| `acknowledge-outcome` | an ACK builder | `prd06/ackParser.ts` only **parses**. Nothing in the codebase builds an HL7 ACK; `mockReferrer.ts` fakes one by calling the ack service with a control id. |
+| `no-show` | `noShowService.ts` builds a notification | `markNoShow()` transitions state and sends **plain text**. There is no structured artifact, which is correct — the assertion table already says "Direct notification" — but it means there is nothing to reuse. |
+
+How each is resolved is in the engineering constraints below.
 
 ### Goal
 
@@ -145,16 +155,20 @@ refined.
    where it went. Note that `findPartyByDirectAddress()` can resolve a party by *domain* alone; a
    party matched that way has no confirmed reply address, so routing falls back to intake and the
    assertion records `matchedOn: 'domain'` rather than implying the address was verified.
-2. **Sender identity is configurable per organization**, and this PRD does not yet branch on it.
-   Proposed `config.workspace.senderIdentityMode: 'individual' | 'organization'`. Under
-   `individual`, the acting internal user's own `users.direct_address` (PRD-17) is the
-   sender/author, falling back to `config.receiving.directAddress` when they have none — which one
-   seeded clinician deliberately does not, so the fallback is exercised. Under `organization`,
-   outbound always uses the organizational address and the individual is named as author inside the
-   payload only. Both branches need tests; real deployments differ, so neither is the "wrong" one.
+2. **Sender identity — resolved.** `config.workspace.senderIdentityMode: 'individual' |
+   'organization'`, **defaulting to `organization`**. The default is chosen to preserve existing
+   behaviour rather than on aesthetics: every outbound path in the codebase today passes
+   `config.receiving.directAddress` as `sendingFacility`, so `organization` is a no-op for existing
+   flows and `individual` is opt-in. Under `individual` the acting internal user's own
+   `users.direct_address` (PRD-17) becomes the sender, falling back to the organizational address
+   when they have none — which `Dr. Sarah Kim` in the seed roster deliberately does not, so the
+   fallback is exercised by real seed data rather than a contrived fixture. A **guest** always
+   resolves to their party's address regardless of the mode: the setting is about *our* staff, and
+   applying it to a counterparty would be meaningless.
 3. **Per-individual sending does not change who signs transport.** Under Mode A the licensed party's
-   HISP still signs, whichever address appears as sender in the payload. State that explicitly so
-   `senderIdentityMode: 'individual'` is not mistaken for non-repudiation of that individual.
+   HISP signs, whichever address appears as sender in the payload. `senderIdentityMode: 'individual'`
+   changes the *authorship* claim, not the transport signature, and is not non-repudiation of that
+   individual. The audit event records both facts separately so neither is implied by the other.
 
 ---
 
@@ -232,13 +246,44 @@ appears in any rendered artifact, asserted by test.
 
 ### Engineering Constraints
 
-- **No new message-building code.** The gateway's job is to choose a builder, supply it with
-  parameters, and route its output. If an assertion cannot be expressed through an existing builder,
-  the correct response is to raise it as a gap against that builder's PRD, not to hand-build a
-  message here.
+- **No new message-building code IN THE GATEWAY.** The gateway chooses a builder, supplies it with
+  parameters, and routes its output. Where a builder is missing, the message-building code goes in
+  the module that owns that message type — never in `protocolGateway.ts`. Three cases, all decided:
+  - **MDN.** Extract a pure `buildMdnReport()` from `prd01/mdnService.ts` and have `sendMdn()` call
+    it, so there is one source of truth and existing behaviour is unchanged. Extraction, not
+    extension.
+  - **ACK.** Add `prd06/ackBuilder.ts` with `buildAck()`, in PRD-06's module. This is the one place
+    the rule bends, and the justification is specific rather than general: an HL7 ACK is MSH + MSA,
+    `parseAck()` already defines exactly the field positions it must produce, and the two are
+    **round-trip tested against each other** — `parseAck(buildAck(x))` must equal `x`. That is a
+    stronger correctness argument than most builders in this codebase have. Recorded as a gap
+    against PRD-06 as well, since that PRD should arguably have shipped it.
+  - **No-show.** No artifact to build. The assertion sends a plain-text Direct notification, which is
+    what `markNoShow()` already does, so `builder: 'direct'` covers it and nothing is extracted.
+- **THE GATEWAY OWNS render → store → deliver; it does not delegate to the existing services.**
+  Decided deliberately, because the alternative looks cheaper and is not. `dispositionService`,
+  `schedulingService`, `consultNoteService` and `noShowService` each own a *whole* flow: they
+  transition state, build, send, and audit as `clinician:<id>`. Delegating would mean giving four
+  tested services a suppress-transmission flag for `local-only` parties and an actor override so a
+  guest is not audited as a clinician — a diff reaching into PRD-02/03/04/09/11 to serve this PRD.
+  Instead the gateway calls only the **pure** builders and owns persistence and delivery.
+
+  The cost is stated plainly: two code paths can advance protocol state — the gateway and the
+  existing services. That is acceptable only because **both go through
+  `referralStateMachine.transition()`**, which the PRD already names as the single guard, and because
+  the existing services keep serving the automated and demo flows unchanged. If a third path ever
+  appears, consolidate rather than adding to it.
 - **Validate before render, render before send, store before send.** An invalid assertion produces no
   artifact. A rendered artifact is persisted before any transmission is attempted, so a delivery
   failure never loses the record.
+- **PRD-23 IS NOT A BLOCKER, and the draft's `artifactDocumentId` was pointed at the wrong thing.**
+  PRD-23's own context section says it deliberately does *not* copy content: "this PRD adds an
+  *index*: one row per document that points at wherever the bytes already live." So
+  `workspace_documents` is an index over artifacts, not their store. The bytes already have a home —
+  `referral_messages.content_hl7`, `content_xml` and `content_body`, written through
+  `recordThreadMessage()`, which AC5 already requires. The column is therefore
+  **`artifact_message_id` referencing `referral_messages.id`**, and PRD-23 later indexes those rows
+  like every other artifact. Nothing waits on PRD-23.
 - Protocol state changes only through `referralStateMachine.transition()`. The gateway calls it; it
   does not reimplement the guard or write `referrals.state` from a string literal.
 - Assertion submission must be **idempotent per assertion id**. A retried submission from a
@@ -341,7 +386,8 @@ export async function transmitPending(assertionId: number, actor: string): Promi
 export async function getAssertions(workspaceId: number): Promise<Assertion[]>;
 ```
 
-Migration: `0018_add_workspace_assertions.sql`.
+Migration: `0015_add_workspace_assertions.sql` — 0015 confirmed next free (0014 is PRD-30).
+The draft's `0018` was indicative, as the epic notes for every unrefined child.
 
 Audit events: `workspace.assertion_made`, `workspace.artifact_rendered`,
 `workspace.artifact_transmitted`, `workspace.artifact_not_transmitted`,
@@ -480,5 +526,55 @@ artifact after a Direct address is added. `409` if the party still has no addres
 ## History
 
 **Created:** 2026-09-14  
-**Last Updated:** 2026-09-14  
-**Version:** 1.0
+**Last Updated:** 2026-09-15  
+**Version:** 1.0 — first draft.
+
+**Version:** 1.1 — Ready for Dev, after a codebase pass against the shipped PRD-17/18/19/21/24/30.
+
+**The draft's central claim was wrong for a quarter of the assertions.** "Everything needed to
+produce conformant artifacts already exists" holds for `buildRri()`, `buildSiu()` and
+`buildConsultNoteCcda()`, which are pure functions returning a string. It does not hold for three:
+`sendMdn()` builds its report inline and then sends, so there is nothing to call; `prd06` only
+*parses* ACKs and nothing in the codebase builds one; and `markNoShow()` sends plain text, so there
+is no artifact to reuse. Each is now resolved explicitly — extract for MDN, a new `buildAck()` in
+PRD-06's module justified by round-tripping against `parseAck()`, and `builder: 'direct'` for
+no-show — rather than left to be discovered mid-implementation.
+
+**PRD-23 is not a blocker, and `artifactDocumentId` pointed at the wrong table.** PRD-23's own
+context says it deliberately does not copy content and is an *index* over bytes that already live
+elsewhere. The artifact bytes belong in `referral_messages`, which AC5 already requires writing
+through `recordThreadMessage()`. The column becomes `artifact_message_id`, and PRD-23 later indexes
+those rows like any other artifact.
+
+**The gateway owns render → store → deliver rather than delegating.** The existing services own
+whole flows — transition, build, send, audit as `clinician:<id>` — so delegating would have meant
+adding a suppress-transmission flag and an actor override to four tested services in four other
+PRDs' modules, to serve this one. The gateway calls only the pure builders instead. The cost is
+stated rather than hidden: two paths can advance protocol state, acceptable only because both go
+through `referralStateMachine.transition()` and the existing services keep serving the automated
+flows unchanged.
+
+**Sender identity resolved**, defaulting to `organization` because that is what every outbound path
+does today, making the default a no-op and `individual` opt-in. The `individual` fallback is
+exercised by `Dr. Sarah Kim`, who has no address in the seed roster on purpose. A guest always
+resolves to their own party's address, since the setting concerns our staff.
+
+**Also corrected:** migration is 0015, not the indicative 0018.
+
+**Version:** 1.2 — Implemented. Built as specified at v1.1. Two things implementation settled and
+one the tests caught:
+
+- **`buildAck()`'s first version was unreadable by its own parser.** It used a bare `\r` segment
+  terminator, which the HL7 standard specifies; `parseAck()` splits on `/\r?\n/`, so the message
+  arrived as one undivided line with no MSA segment. The round-trip test that justified adding the
+  builder caught it on its first run. Now `\r\n`, matching `buildRri()` and `buildSiu()` — a
+  message nothing in this codebase can read is not more correct.
+- **`cancel`'s specified states were illegal.** The assertion table gave "any non-terminal →
+  Declined"; the state machine permits only `Acknowledged` and `Pending-Information`. The catalog was
+  narrowed rather than the machine widened, and a property test over the whole catalog now asserts
+  every declared transition is legal. **Gap recorded:** withdrawing an already-scheduled referral has
+  no legal transition today, which is a real modelling gap belonging to the state machine's own PRD.
+- **`needs-information` renders an RRI with `AR`.** An information request is a rejection of the
+  referral *as submitted*; the distinction from a decline lives in the reason text and the protocol
+  state, not in the artifact. Stated because the assertion table implied a separate info-request
+  artifact and `infoRequestService` is a full-flow service the gateway does not call.

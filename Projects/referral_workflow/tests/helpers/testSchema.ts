@@ -212,4 +212,30 @@ export const TEST_SCHEMA_DDL = `
     last_seen_at INTEGER,
     created_at INTEGER NOT NULL
   );
+
+  -- ── Protocol assertions (PRD-29) ──────────────────────────────────────────
+  -- assertion_key is UNIQUE here as in the real schema: that index IS the
+  -- idempotency guarantee, so a test that dropped it would be testing a
+  -- weaker system than the one that ships.
+  CREATE TABLE workspace_assertions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id INTEGER NOT NULL,
+    assertion_key TEXT NOT NULL UNIQUE,
+    assertion_type TEXT NOT NULL,
+    asserted_by_party_id INTEGER NOT NULL,
+    asserted_by_actor TEXT NOT NULL,
+    context TEXT,
+    from_state TEXT,
+    to_state TEXT,
+    artifact_message_id INTEGER,
+    delivery_mode TEXT NOT NULL,
+    transport_mode TEXT NOT NULL,
+    sent_to_address TEXT,
+    sent_from_address TEXT,
+    address_matched_on TEXT,
+    delivery_status TEXT NOT NULL DEFAULT 'Pending',
+    delivery_error TEXT,
+    created_at INTEGER NOT NULL,
+    delivered_at INTEGER
+  );
 `

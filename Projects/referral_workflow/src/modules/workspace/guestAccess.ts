@@ -202,13 +202,24 @@ export interface GuestWorkspacePayload {
   party: { orgName: string; partyRole: PartyRole; protocolMode: ProtocolMode };
   guest: { displayName: string | null; expiresAt: string };
   /**
-   * PRD-22, PRD-23 and PRD-29 fill these. Present-but-empty in Phase 2a on
-   * purpose: a consumer written against 2a would break if the keys appeared
-   * later, so the shape is the contract and 2b is a wiring change.
+   * PRD-22 and PRD-23 still fill these two. Present-but-empty, so a consumer
+   * written against Phase 2a does not break when they arrive — the shape is the
+   * contract.
    */
   sharedComments: never[];
   sharedDocuments: never[];
-  availableAssertions: never[];
+  /**
+   * FILLED BY PRD-29, which is what unblocked PRD-30's third deferred item.
+   * Derived from the assertion catalog for this guest's party role and the
+   * referral's current protocol state, so the guest is offered exactly what the
+   * gateway would permit — and the gateway re-checks from the same catalog.
+   */
+  availableAssertions: {
+    type: string;
+    label: string;
+    description: string;
+    requiredContext: string[];
+  }[];
 }
 
 /**
@@ -287,6 +298,12 @@ export async function buildGuestPayload(
 
   const state = referral.state as ReferralState;
 
+  // What this guest may actually do, from the same catalog the gateway enforces.
+  // Imported lazily for the same reason hashToken is: keeping this module's
+  // import graph free of the gateway, which pulls in nodemailer via the mailer.
+  const { assertionsAvailableFor } = await import('./protocolGateway');
+  const available = await assertionsAvailableFor(guest.workspaceId, guest.partyId);
+
   return {
     workspace: {
       referralState: state,
@@ -308,7 +325,7 @@ export async function buildGuestPayload(
     },
     sharedComments: [],
     sharedDocuments: [],
-    availableAssertions: [],
+    availableAssertions: available.available,
   };
 }
 

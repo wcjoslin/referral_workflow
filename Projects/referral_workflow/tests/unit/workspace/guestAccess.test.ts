@@ -606,18 +606,49 @@ describe('buildGuestPayload()', () => {
     expect(payload!.workspace.referralState).toBe(ReferralState.SCHEDULED);
   });
 
-  it('presents the Phase 2b collections as present and empty', async () => {
+  it('still presents the PRD-22 and PRD-23 collections as present and empty', async () => {
     const f = await makeWorkspace();
     const accepted = await acceptInvitation((await invite(f)).token);
     const guest = await requireGuest(withCookie(accepted.sessionToken));
 
     const payload = await buildGuestPayload(guest);
 
-    // Present AND empty: a consumer written against 2a must not break when
-    // PRD-22/23/29 fill them, so the shape is the contract.
+    // Present AND empty: a consumer written against Phase 2a must not break
+    // when PRD-22 and PRD-23 fill them, so the shape is the contract.
     expect(payload!.sharedComments).toEqual([]);
     expect(payload!.sharedDocuments).toEqual([]);
-    expect(payload!.availableAssertions).toEqual([]);
+  });
+
+  it('offers the guest the assertions their party role actually permits', async () => {
+    // No longer empty: PRD-29 filled this, which was the third of PRD-30's
+    // deferred items. The fixture's guest is the INITIATING party on a
+    // Scheduled referral, so the catalog gives them interim-update and not
+    // accept, decline or scheduled — all of which are the receiving party's.
+    const f = await makeWorkspace();
+    const accepted = await acceptInvitation((await invite(f)).token);
+    const guest = await requireGuest(withCookie(accepted.sessionToken));
+
+    const types = (await buildGuestPayload(guest))!.availableAssertions.map((a) => a.type);
+
+    expect(types).toContain('interim-update');
+    expect(types).not.toContain('accept');
+    expect(types).not.toContain('decline');
+    expect(types).not.toContain('scheduled');
+  });
+
+  it('gives every offered assertion a label a guest can act on without knowing HL7', async () => {
+    const f = await makeWorkspace();
+    const accepted = await acceptInvitation((await invite(f)).token);
+    const guest = await requireGuest(withCookie(accepted.sessionToken));
+
+    const offered = (await buildGuestPayload(guest))!.availableAssertions;
+
+    expect(offered.length).toBeGreaterThan(0);
+    for (const a of offered) {
+      expect(a.label).toMatch(/[a-z]/);
+      expect(a.label).not.toMatch(/RRI|SIU|C-CDA|MDN|HL7/);
+      expect(a.description).toMatch(/[a-z]/);
+    }
   });
 });
 
