@@ -43,6 +43,8 @@ import {
 import { ReferralState } from '../../state/referralStateMachine';
 import { CookieCarrier, readCookie } from './identityService';
 import { PartyRole, ProtocolMode } from './partyService';
+// Type-only: a value import would close the cycle described above.
+import type { GuestSharedComment } from './commentService';
 
 /** Read by the guard only. HttpOnly, unlike the acting-user cookie. */
 export const GUEST_SESSION_COOKIE = 'guestSession';
@@ -202,11 +204,17 @@ export interface GuestWorkspacePayload {
   party: { orgName: string; partyRole: PartyRole; protocolMode: ProtocolMode };
   guest: { displayName: string | null; expiresAt: string };
   /**
-   * PRD-22 and PRD-23 still fill these two. Present-but-empty, so a consumer
-   * written against Phase 2a does not break when they arrive — the shape is the
-   * contract.
+   * FILLED BY PRD-22. Shared, non-tombstoned comments only, and a narrower shape
+   * than the internal `Comment` — no job role, no tombstone metadata, no
+   * share-lock state. The narrowing is asserted against
+   * `commentService.GUEST_COMMENT_KEYS`, so a field added to the internal shape
+   * cannot reach an external reader by being carried along.
    */
-  sharedComments: never[];
+  sharedComments: GuestSharedComment[];
+  /**
+   * PRD-23 still fills this one. Present-but-empty, so a consumer written
+   * against Phase 2a does not break when it arrives — the shape is the contract.
+   */
   sharedDocuments: never[];
   /**
    * FILLED BY PRD-29, which is what unblocked PRD-30's third deferred item.
@@ -304,6 +312,13 @@ export async function buildGuestPayload(
   const { assertionsAvailableFor } = await import('./protocolGateway');
   const available = await assertionsAvailableFor(guest.workspaceId, guest.partyId);
 
+  // Lazily for a different reason: commentService imports this module for
+  // formatGuestActor, so a static value import here would be a cycle. The
+  // visibility filter lives inside listSharedComments' SQL — an internal comment
+  // is never loaded into this process on a guest's behalf.
+  const { listSharedComments } = await import('./commentService');
+  const sharedComments = await listSharedComments(guest.workspaceId, guest.guestId);
+
   return {
     workspace: {
       referralState: state,
@@ -323,7 +338,7 @@ export async function buildGuestPayload(
       displayName: guest.displayName,
       expiresAt: guest.expiresAt.toISOString(),
     },
-    sharedComments: [],
+    sharedComments,
     sharedDocuments: [],
     availableAssertions: available.available,
   };

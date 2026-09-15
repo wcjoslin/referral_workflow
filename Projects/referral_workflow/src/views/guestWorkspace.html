@@ -89,6 +89,28 @@
   }
   .soon { font-size: 0.82rem; color: var(--muted); line-height: 1.6; font-style: italic; }
   .foot { font-size: 0.74rem; color: var(--muted); line-height: 1.6; margin-top: 22px; }
+
+  /* PRD-22. Everything on this page is shared by definition, so there is no
+     visibility marker to render here — the only distinction that matters to a
+     guest is whose message it is. */
+  .gc { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 9px; }
+  .gc-own { background: #eef6ff; border-left: 4px solid #0c63e4; }
+  .gc-them { background: var(--card); border-left: 4px solid #adb5bd; }
+  .gc-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .gc-who { font-size: 0.88rem; font-weight: 600; }
+  .gc-meta { font-size: 0.7rem; color: var(--muted); }
+  .gc-body { font-size: 0.88rem; line-height: 1.6; margin-top: 5px; white-space: pre-wrap; word-break: break-word; }
+  .gc-form textarea {
+    width: 100%; box-sizing: border-box; min-height: 64px; font: inherit; font-size: 0.88rem;
+    padding: 8px; border: 1px solid var(--border); border-radius: 6px; resize: vertical;
+  }
+  .gc-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .gc-btn {
+    font: inherit; font-size: 0.82rem; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+    background: #0c63e4; border: 1px solid #0c63e4; color: #fff;
+  }
+  .gc-msg { font-size: 0.78rem; min-height: 1em; }
+  .gc-warn { font-size: 0.76rem; color: var(--muted); line-height: 1.55; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -100,6 +122,7 @@
   <div id="gNotice"></div>
   <div class="card" id="gHeader"></div>
   <div class="card" id="gTimeline"></div>
+  <div class="card" id="gConversation"></div>
   <div class="card" id="gCollab"></div>
   <div class="foot" id="gFoot"></div>
 </div>
@@ -169,11 +192,90 @@
   document.getElementById('gTimeline').innerHTML =
     '<h2>Progress</h2><div class="tl">' + steps + '</div>';
 
-  // Phase 2a: these three collections are present in the payload and empty,
-  // because PRD-22, PRD-23 and PRD-29 have not been built. Saying so beats
-  // rendering three empty boxes that look broken.
-  var hasCollab = (P.sharedComments || []).length > 0 ||
-                  (P.sharedDocuments || []).length > 0 ||
+  // ── Conversation (PRD-22) ─────────────────────────────────────────────────
+  //
+  // Everything here arrived through listSharedComments(), which filters on
+  // visibility in SQL. An internal note is not hidden on this page; it was never
+  // sent to it.
+
+  var comments = P.sharedComments || [];
+
+  function renderConversation() {
+    var thread = comments.length === 0
+      ? '<div class="soon">No messages yet. Anything you write here is visible to the ' +
+        'organization that shared this referral with you.</div>'
+      : comments.map(function (c) {
+          return '<div class="gc ' + (c.own ? 'gc-own' : 'gc-them') + '">' +
+            '<div class="gc-top">' +
+              '<span class="gc-who">' + esc(c.authorDisplayName) + '</span>' +
+              '<span class="gc-meta">' + esc(c.authorOrgName) + '</span>' +
+              '<span class="gc-meta">' + esc(fmtDateTime(c.createdAt)) +
+                (c.edited ? ' \u00b7 edited' : '') + '</span>' +
+            '</div>' +
+            '<div class="gc-body">' + esc(c.body) + '</div>' +
+          '</div>';
+        }).join('');
+
+    document.getElementById('gConversation').innerHTML =
+      '<h2>Messages</h2>' + thread +
+      '<div class="gc-form">' +
+        '<textarea id="gcBody" maxlength="4000" ' +
+          'placeholder="Ask a question or send an update about this referral."></textarea>' +
+        '<div class="gc-row">' +
+          '<button class="gc-btn" id="gcPost">Send</button>' +
+          '<span class="gc-msg" id="gcMsg"></span>' +
+        '</div>' +
+        '<div class="gc-warn">Everyone at ' + esc(P.party.orgName) + ' invited to this ' +
+          'referral, and the organization that shared it with you, can read what you send. ' +
+          'There is no private note on this page.</div>' +
+      '</div>';
+
+    var post = document.getElementById('gcPost');
+    if (post) post.addEventListener('click', sendComment);
+  }
+
+  function fmtDateTime(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
+  }
+
+  function gcMsg(text, ok) {
+    var el = document.getElementById('gcMsg');
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = ok ? '#0a7d4b' : '#b02a37';
+  }
+
+  async function sendComment() {
+    var ta = document.getElementById('gcBody');
+    if (!ta || !ta.value.trim()) { gcMsg('Write something first.', false); return; }
+    try {
+      // No visibility field: a guest's comment is always shared, and the API
+      // refuses a supplied value rather than coercing one.
+      const res = await fetch('/api/guest/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: ta.value }),
+      });
+      const data = await res.json();
+      if (!res.ok) { gcMsg(data.error || 'Could not send that.', false); return; }
+      const reload = await fetch('/api/guest/workspace');
+      const fresh = await reload.json();
+      comments = reload.ok ? (fresh.sharedComments || []) : comments.concat([data.comment]);
+      renderConversation();
+      gcMsg('Sent.', true);
+    } catch (err) {
+      gcMsg('Network error.', false);
+      console.warn('[Guest/Comments]', err);
+    }
+  }
+
+  renderConversation();
+
+  // PRD-23 and the assertion surface are what remain unbuilt here. The
+  // conversation above is no longer part of that list.
+  var hasCollab = (P.sharedDocuments || []).length > 0 ||
                   (P.availableAssertions || []).length > 0;
 
   document.getElementById('gCollab').innerHTML =
@@ -186,9 +288,9 @@
       esc(MODE_TEXT[P.party.protocolMode] || P.party.protocolMode) +
     '</div>' +
     (hasCollab ? '' :
-      '<div class="soon" style="margin-top:12px;">Messaging, shared documents and ' +
-      'responding to this referral from here are not switched on yet. For now, this ' +
-      'page is a read-only view of where the referral stands.</div>');
+      '<div class="soon" style="margin-top:12px;">Shared documents and responding to ' +
+      'this referral from here are not switched on yet. Messages above and the progress ' +
+      'of the referral are live.</div>');
 
   document.getElementById('gFoot').innerHTML =
     'This page shows a single referral shared with your organization. It contains no ' +

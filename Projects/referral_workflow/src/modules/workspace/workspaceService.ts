@@ -159,9 +159,11 @@ export async function getWorkspaceByReferralId(referralId: number): Promise<Work
 /**
  * Whether this workspace still has internal work outstanding.
  *
- * PHASE-1 DEFINITION: always false, because Phase 1 has nothing that can BE an
- * open internal item. The sources are an unresolved exception (PRD-28) and an
- * unacknowledged mention (PRD-22), and neither exists yet.
+ * TWO SOURCES WERE PLANNED: an unresolved exception (PRD-28) and an
+ * unacknowledged mention (PRD-22). PRD-22 has now supplied the second, so this
+ * is no longer always false, and the `Closed-Confirmed → Follow-up-Required`
+ * branch below is reachable for the first time. PRD-28's source is still
+ * outstanding and ORs into the same place.
  *
  * This replaces the first definition, `workStatus !== Resolved`, which was
  * wrong in a way only visible once real data existed. Nothing in Phase 1 ever
@@ -177,26 +179,40 @@ export async function getWorkspaceByReferralId(referralId: number): Promise<Work
  * from a protocol event alone, which is correct: closing the loop is not by
  * itself evidence that internal work is outstanding.
  *
- * When PRD-28 or PRD-22 adds a source that needs a query, give this function an
- * async sibling and OR the two in hasOpenInternalItems(); do not fork the rule.
+ * PRD-28's source, when it arrives, ORs into workspaceHasOpenItemsAsync() below
+ * or into the synchronous row-only rule; it does not fork this function.
  */
 export async function hasOpenInternalItems(workspaceId: number): Promise<boolean> {
   const workspace = await getWorkspace(workspaceId);
   if (!workspace) throw new WorkspaceNotFoundError(workspaceId);
-  return workspaceHasOpenItems(workspace);
+  return workspaceHasOpenItemsAsync(workspace);
 }
 
 /**
- * The same definition against an already-loaded row, so the closure branch in
- * resolveProposedStatus() does not need a second read — and, more importantly,
- * so there is exactly ONE definition of "open" for a later PRD to extend.
+ * The sources answerable from the workspace ROW ALONE, with no query.
  *
- * The parameter is unused in Phase 1 and kept on purpose: PRD-28 and PRD-22 add
- * clauses that read the row, and the signature is what every caller is already
- * written against.
+ * Still none of them. The parameter is kept because PRD-28 is expected to add a
+ * clause that reads the row, and because every caller is written against this
+ * signature.
  */
 function workspaceHasOpenItems(_workspace: Workspace): boolean {
   return false;
+}
+
+/**
+ * The full definition: the row-only rule OR'ed with the sources that need a
+ * query. ONE definition of "open", which is what PRD-18 asked for — a second
+ * rule living in resolveProposedStatus() would drift from this one.
+ *
+ * commentService is imported lazily because it imports guestAccess, which would
+ * otherwise pull the guest surface into every module that proposes a work
+ * status. The cost is one dynamic import on a path that already does several
+ * reads.
+ */
+async function workspaceHasOpenItemsAsync(workspace: Workspace): Promise<boolean> {
+  if (workspaceHasOpenItems(workspace)) return true;
+  const { hasUnacknowledgedMention } = await import('./commentService');
+  return hasUnacknowledgedMention(workspace.id);
 }
 
 // ── Creation ──────────────────────────────────────────────────────────────────
@@ -346,19 +362,29 @@ export async function proposeWorkStatus(
   const workspace = await getWorkspace(workspaceId);
   if (!workspace) throw new WorkspaceNotFoundError(workspaceId);
 
-  const proposed = resolveProposedStatus(workspace, protocolState);
+  const proposed = await resolveProposedStatus(workspace, protocolState);
   return applyProposal(workspace, proposed, actor);
 }
 
-/** Resolves the mapping, including the closure branch. */
-function resolveProposedStatus(workspace: Workspace, protocolState: ReferralState): WorkStatus {
+/**
+ * Resolves the mapping, including the closure branch.
+ *
+ * Async since PRD-22: the open-items rule now needs a query, and consulting the
+ * one definition matters more than keeping this synchronous. Every call site was
+ * already inside an async function.
+ */
+async function resolveProposedStatus(
+  workspace: Workspace,
+  protocolState: ReferralState,
+): Promise<WorkStatus> {
   if (protocolState === ReferralState.CLOSED_CONFIRMED) {
     // The protocol lifecycle has closed. If internal work is still outstanding
     // the workspace stays visible as Follow-up-Required — the external state is
-    // never reopened to represent internal work. In Phase 1 nothing can be
-    // outstanding (see workspaceHasOpenItems), so this resolves; the branch is
-    // kept because PRD-28 and PRD-22 give it a second answer.
-    return workspaceHasOpenItems(workspace) ? WorkStatus.FOLLOW_UP_REQUIRED : WorkStatus.RESOLVED;
+    // never reopened to represent internal work. Since PRD-22 an unacknowledged
+    // mention makes that true, so both answers are now reachable.
+    return (await workspaceHasOpenItemsAsync(workspace))
+      ? WorkStatus.FOLLOW_UP_REQUIRED
+      : WorkStatus.RESOLVED;
   }
   return PROTOCOL_WORK_STATUS[protocolState];
 }
@@ -471,7 +497,7 @@ export async function resyncWorkStatus(workspaceId: number, actor: string): Prom
   }).catch((err) => console.error('[WorkspaceService]', err));
 
   const cleared: Workspace = { ...workspace, workStatusIsManual: false };
-  const proposed = resolveProposedStatus(cleared, referral.state as ReferralState);
+  const proposed = await resolveProposedStatus(cleared, referral.state as ReferralState);
   await applyProposal(cleared, proposed, actor);
 
   const refreshed = await getWorkspace(workspaceId);
@@ -581,7 +607,7 @@ export async function backfillWorkspaces(): Promise<BackfillResult> {
       // Stale, not correct — re-derive. applyProposal decides whether it may.
       const { applied } = await applyProposal(
         existing,
-        resolveProposedStatus(existing, state),
+        await resolveProposedStatus(existing, state),
         'system',
       );
       if (applied) updated += 1;
@@ -590,7 +616,7 @@ export async function backfillWorkspaces(): Promise<BackfillResult> {
     }
 
     const workspace = await createWorkspace(referral.id);
-    const proposed = resolveProposedStatus(workspace, state);
+    const proposed = await resolveProposedStatus(workspace, state);
     if (proposed !== workspace.workStatus) {
       await applyProposal(workspace, proposed, 'system');
     }

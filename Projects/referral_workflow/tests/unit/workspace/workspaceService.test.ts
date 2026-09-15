@@ -45,6 +45,34 @@ import {
   setWorkStatus,
 } from '../../../src/modules/workspace/workspaceService';
 
+/** A real `users` row, because a mention target must exist and be active. */
+function insertUser(displayName: string): number {
+  referralSeq += 1;
+  const result = sqlite()
+    .prepare(
+      `INSERT INTO users (display_name, email, job_role, all_queues_access, active, created_at)
+       VALUES (?, ?, 'coordinator', 0, 1, 0)`,
+    )
+    .run(displayName, `u${referralSeq}@example.test`);
+  return Number(result.lastInsertRowid);
+}
+
+/** The ActingUser shape postComment takes; only the id is load-bearing. */
+function actingUser(id: number, displayName: string): import(
+  '../../../src/modules/workspace/identityService'
+).ActingUser {
+  return {
+    id,
+    displayName,
+    email: `${id}@example.test`,
+    directAddress: null,
+    jobRole: 'coordinator',
+    legacyClinicianId: null,
+    allQueuesAccess: false,
+    active: true,
+  };
+}
+
 function sqlite(): import('better-sqlite3').Database {
   return (global as Record<string, unknown>).__TEST_SQLITE__ as import('better-sqlite3').Database;
 }
@@ -353,6 +381,58 @@ describe('workspaceService', () => {
       expect(result).toMatchObject({ applied: true, workStatus: WorkStatus.RESOLVED });
     });
 
+    it('proposes Follow-up-Required when a mention is still unacknowledged (PRD-22)', async () => {
+      // THE BRANCH PRD-18 KEPT AND COULD NEVER REACH. Closing the loop
+      // externally does not close internal work: a colleague was asked to look
+      // at something and has not, so the workspace stays visible.
+      const referralId = insertReferral(ReferralState.CLOSED);
+      const workspace = await createWorkspace(referralId);
+      await proposeWorkStatus(workspace.id, ReferralState.ACCEPTED);
+
+      const reader = insertUser('Priya Raman');
+      const author = insertUser('Dana Ruiz');
+      const { postComment, acknowledgeMentions } = await import(
+        '../../../src/modules/workspace/commentService'
+      );
+      await postComment({
+        workspaceId: workspace.id,
+        body: 'Priya, the discharge summary never arrived',
+        author: { kind: 'user', user: actingUser(author, 'Dana Ruiz') },
+        mentions: { users: [reader] },
+      });
+
+      await expect(
+        proposeWorkStatus(workspace.id, ReferralState.CLOSED_CONFIRMED),
+      ).resolves.toMatchObject({ applied: true, workStatus: WorkStatus.FOLLOW_UP_REQUIRED });
+
+      // And the protocol state was not touched to represent internal work.
+      expect(referralState(referralId)).toBe(ReferralState.CLOSED);
+
+      // GETTING BACK OUT IS A DELIBERATE ACT, and that is PRD-18's rule rather
+      // than an oversight here: a proposal is declined while the status is
+      // Follow-up-Required, so acknowledging the mention does not silently
+      // re-resolve a workspace somebody has been told to look at.
+      await acknowledgeMentions(workspace.id, reader, `user:${reader}`);
+      await expect(
+        proposeWorkStatus(workspace.id, ReferralState.CLOSED_CONFIRMED),
+      ).resolves.toMatchObject({
+        applied: false,
+        workStatus: WorkStatus.FOLLOW_UP_REQUIRED,
+      });
+
+      // Nor does resyncWorkStatus() lift it. Resync exists to escape a MANUAL
+      // override; Follow-up-Required is in PROPOSAL_PROTECTED, so it is
+      // protected from every proposal regardless of who set it. Clearing a
+      // follow-up flag is a person's decision, and setWorkStatus is how they
+      // make it.
+      await expect(resyncWorkStatus(workspace.id, 'user:1')).resolves.toMatchObject({
+        workStatus: WorkStatus.FOLLOW_UP_REQUIRED,
+      });
+      await expect(
+        setWorkStatus(workspace.id, WorkStatus.RESOLVED, `user:${reader}`),
+      ).resolves.toMatchObject({ workStatus: WorkStatus.RESOLVED });
+    });
+
     it('never derives Follow-up-Required from a protocol event alone', async () => {
       // Closing the loop is not by itself evidence that internal work is
       // outstanding. Follow-up-Required is reachable by a person setting it, and
@@ -403,11 +483,11 @@ describe('workspaceService', () => {
   // ── hasOpenInternalItems ──────────────────────────────────────────────────
 
   describe('hasOpenInternalItems()', () => {
-    it('is false for every status — Phase 1 has nothing that can be an open item', async () => {
-      // The sources are an unresolved exception (PRD-28) and an unacknowledged
-      // mention (PRD-22). Until one of those exists there is nothing to report,
-      // and saying otherwise is what made every closed referral look like it
-      // needed follow-up. Each of those PRDs owns flipping this.
+    it('is false for every status when nothing is actually outstanding', async () => {
+      // Work status alone never makes this true, whatever the status is: that
+      // was the first definition, and it made every closed referral look like
+      // it needed follow-up. The real sources are an unacknowledged mention
+      // (PRD-22, below) and an unresolved exception (PRD-28, still to come).
       for (const status of Object.values(WorkStatus)) {
         const referralId = insertReferral();
         const workspace = await createWorkspace(referralId);
@@ -421,6 +501,31 @@ describe('workspaceService', () => {
 
     it('throws for an unknown workspace', async () => {
       await expect(hasOpenInternalItems(9999)).rejects.toThrow(WorkspaceNotFoundError);
+    });
+
+    it('is true while a mention is unacknowledged, and false once it is (PRD-22)', async () => {
+      const workspace = await createWorkspace(insertReferral());
+      const reader = insertUser('Priya Raman');
+      const author = insertUser('Dana Ruiz');
+
+      const { postComment, acknowledgeMentions } = await import(
+        '../../../src/modules/workspace/commentService'
+      );
+
+      await expect(hasOpenInternalItems(workspace.id)).resolves.toBe(false);
+
+      await postComment({
+        workspaceId: workspace.id,
+        body: 'Priya, can you chase the imaging?',
+        author: { kind: 'user', user: actingUser(author, 'Dana Ruiz') },
+        mentions: { users: [reader] },
+      });
+
+      await expect(hasOpenInternalItems(workspace.id)).resolves.toBe(true);
+
+      await acknowledgeMentions(workspace.id, reader, `user:${reader}`);
+
+      await expect(hasOpenInternalItems(workspace.id)).resolves.toBe(false);
     });
   });
 

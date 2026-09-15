@@ -601,6 +601,200 @@ async function main(): Promise<void> {
   const tampered = await getRaw('/api/guest/workspace', `guestSession=${'B'.repeat(43)}`);
   check('a tampered session resolves to nothing', tampered.status === 401, `status ${tampered.status}`);
 
+  // ── The conversation (PRD-22) ─────────────────────────────────────────────
+  //
+  // Placed inside the guest block on purpose: the only way to prove the
+  // internal/shared boundary is to read the bytes a guest's browser actually
+  // receives while an internal comment exists on the same workspace.
+
+  const HOSTILE_COMMENT = '<script>alert("comment")</script> & "quoted" <b>bold</b>';
+
+  const emptyComment = await post(`/api/workspaces/${wsWith.id}/comments`, { body: '   ' }, me.id);
+  check('an empty comment is refused', emptyComment.status === 400, `status ${emptyComment.status}`);
+
+  const longComment = await post(
+    `/api/workspaces/${wsWith.id}/comments`,
+    { body: 'x'.repeat(4001) },
+    me.id,
+  );
+  check('an over-length comment is refused', longComment.status === 400, `status ${longComment.status}`);
+
+  const unconfirmed = await post(
+    `/api/workspaces/${wsWith.id}/comments`,
+    { body: 'sharing without meaning to', visibility: 'Shared' },
+    me.id,
+  );
+  check(
+    'sharing without the confirmation is refused',
+    unconfirmed.status === 422,
+    `status ${unconfirmed.status}`,
+  );
+
+  const internalComment = await post(
+    `/api/workspaces/${wsWith.id}/comments`,
+    { body: `INTERNAL-ONLY-MARKER the payer is difficult ${HOSTILE_COMMENT}` },
+    me.id,
+  );
+  check(
+    'an internal comment posts and defaults to Internal',
+    internalComment.status === 200 &&
+      (internalComment.json.comment as { visibility?: string } | undefined)?.visibility ===
+        'Internal',
+    `status ${internalComment.status}`,
+  );
+
+  const sharedComment = await post(
+    `/api/workspaces/${wsWith.id}/comments`,
+    {
+      body: `SHARED-MARKER could you send the echo report? ${HOSTILE_COMMENT}`,
+      visibility: 'Shared',
+      confirmShared: true,
+    },
+    me.id,
+  );
+  check(
+    'a confirmed shared comment posts',
+    sharedComment.status === 200 &&
+      (sharedComment.json.comment as { visibility?: string } | undefined)?.visibility === 'Shared',
+    `status ${sharedComment.status}`,
+  );
+
+  const thread = await get(`/api/workspaces/${wsWith.id}/comments`, me.id);
+  check(
+    'the internal thread carries both visibilities',
+    thread.status === 200 &&
+      thread.body.includes('INTERNAL-ONLY-MARKER') &&
+      thread.body.includes('SHARED-MARKER'),
+    `status ${thread.status}`,
+  );
+
+  // THE BOUNDARY, read from the bytes rather than asserted about.
+  const guestWithComments = await getRaw('/guest/workspace', guestCookie);
+  check(
+    'the guest page carries the shared comment',
+    guestWithComments.body.includes('SHARED-MARKER'),
+    'a shared comment did not reach the guest',
+  );
+  check(
+    'the guest page carries no internal comment',
+    !guestWithComments.body.includes('INTERNAL-ONLY-MARKER'),
+    'an internal note reached a guest',
+  );
+  check(
+    'and no internal comment field rides along with it',
+    !guestWithComments.body.includes('"shareLocked"') &&
+      !guestWithComments.body.includes('"authorJobRole"') &&
+      !guestWithComments.body.includes('"deletedByActor"'),
+    'an internal comment field reached a guest',
+  );
+  // A hostile comment body is embedded as JSON inside a <script> block. If it
+  // could close that block the page would execute it, which no unit test sees.
+  check(
+    'a hostile comment body cannot close the script block it is embedded in',
+    !guestWithComments.body.includes('</script>alert'),
+    'a comment body broke out of its script context',
+  );
+
+  const guestPost = await fetch(`${BASE}/api/guest/comments`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: guestCookie },
+    body: JSON.stringify({ body: 'GUEST-MARKER on its way this afternoon' }),
+  });
+  check('a guest can post a comment', guestPost.status === 200, `status ${guestPost.status}`);
+
+  // Both an understood value and a nonsense one: an unrecognised string must be
+  // REFUSED rather than read as "not supplied" and quietly defaulted to Shared.
+  for (const attempted of ['Internal', 'Public', '']) {
+    const guestForcing = await fetch(`${BASE}/api/guest/comments`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: guestCookie },
+      body: JSON.stringify({ body: 'a private note', visibility: attempted }),
+    });
+    check(
+      `a guest asking for visibility "${attempted}" is refused`,
+      guestForcing.status === 400,
+      `status ${guestForcing.status} — a guest set their own visibility`,
+    );
+  }
+
+  const threadWithGuest = await get(`/api/workspaces/${wsWith.id}/comments`, me.id);
+  check(
+    'the guest comment is attributed to the guest and their party internally',
+    threadWithGuest.body.includes('GUEST-MARKER') &&
+      threadWithGuest.body.includes('"authorKind":"guest"') &&
+      // The fixture's guest supplied no name, so this also exercises the
+      // fallback: the party's org name, which PRD-24 derived from the address
+      // domain rather than inventing one.
+      threadWithGuest.body.includes('"authorPartyOrgName":"primary.direct"'),
+    'a guest comment lost its attribution',
+  );
+
+  // THE SHARE LOCK. The guest has loaded the page since the comment was shared,
+  // so pulling it back would be rewriting what an outside party already saw.
+  const sharedId = (sharedComment.json.comment as { id?: number } | undefined)?.id;
+  const downgrade = await fetch(
+    `${BASE}/api/workspaces/${wsWith.id}/comments/${sharedId}`,
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: `actingUserId=${me.id}` },
+      body: JSON.stringify({ body: 'trying to take it back', visibility: 'Internal' }),
+    },
+  );
+  check(
+    'a shared comment a guest has seen cannot be made internal again',
+    downgrade.status === 409,
+    `status ${downgrade.status}`,
+  );
+
+  const notAuthor = await fetch(
+    `${BASE}/api/workspaces/${wsWith.id}/comments/${sharedId}`,
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: `actingUserId=${other.id}` },
+      body: JSON.stringify({ body: 'not mine to reword', visibility: 'Shared' }),
+    },
+  );
+  check(
+    'only the author may reword a comment',
+    notAuthor.status === 403,
+    `status ${notAuthor.status}`,
+  );
+
+  // A guest cookie must not reach the internal conversation, the same way it
+  // cannot reach any other internal surface.
+  for (const internal of [
+    `/api/workspaces/${wsWith.id}/comments`,
+    `/api/workspaces/${wsWith.id}/mention-targets`,
+    `/api/workspaces/${wsWith.id}/comments/${sharedId}/history`,
+  ]) {
+    const res = await getRaw(internal, guestCookie);
+    check(
+      `a guest cookie is refused at ${internal}`,
+      res.status === 403,
+      `status ${res.status} — a guest reached the internal conversation`,
+    );
+  }
+
+  const reDetailComments = await get(`/workspaces/${wsWith.id}`, me.id);
+  check(
+    'the workspace page carries the conversation panel',
+    reDetailComments.body.includes('renderConversation') &&
+      reDetailComments.body.includes('cmt-internal') &&
+      reDetailComments.body.includes('cmt-shared'),
+    'the conversation panel is not wired into the page',
+  );
+  check(
+    'the page no longer renders the PRD-22 placeholder',
+    !reDetailComments.body.includes(">Conversation<span class=\"slot-tag\">PRD-22"),
+    'the placeholder is still being rendered alongside the real panel',
+  );
+  check(
+    'the share confirmation names who will be able to read the comment',
+    reDetailComments.body.includes('share-warn') &&
+      reDetailComments.body.includes('has a live invitation'),
+    'the confirmation does not say who will read it',
+  );
+
   await revokeInvitation(invitation.id, other);
   const afterRevoke = await getRaw('/api/guest/workspace', guestCookie);
   check(
@@ -730,6 +924,20 @@ async function main(): Promise<void> {
       `no internal field "${internal}" reaches any rendered artifact`,
       !allPayloads.includes(internal),
       'internal workspace data leaked into a protocol artifact',
+    );
+  }
+  // PRD-22's builder boundary, and behavioural rather than structural: three
+  // comments exist on this workspace by now — one internal, one shared, one
+  // written by a guest — and NONE of them may appear in an RRI, an SIU, a C-CDA
+  // or an MDN. A builder is fed structured context by the gateway; it must never
+  // reach into the conversation on its own. A SHARED comment is as forbidden
+  // here as an internal one: sharing makes it visible in the workspace, not
+  // transmissible over 360X.
+  for (const marker of ['INTERNAL-ONLY-MARKER', 'SHARED-MARKER', 'GUEST-MARKER']) {
+    check(
+      `no comment ("${marker}") reaches any rendered artifact`,
+      !allPayloads.includes(marker),
+      'a comment was transmitted as part of a protocol artifact',
     );
   }
 
