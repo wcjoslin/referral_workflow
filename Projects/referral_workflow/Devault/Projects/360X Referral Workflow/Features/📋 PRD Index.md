@@ -323,10 +323,16 @@ The logical order for PRD development:
 
 - Per-comment `Internal` / `Shared` visibility; internal is the default, sharing needs confirmation
 - Internal comments are structurally absent from the guest payload, not filtered out of it
-- Edits are versioned, deletions are tombstoned, nothing is hard-deleted
+- Comment identity and comment content are separate tables; edits append a revision, deletions
+  tombstone, nothing is hard-deleted, and a partial unique index makes "exactly one current
+  revision" a database invariant
+- A shared comment locks against downgrade once a guest has been active since it was shared,
+  derived from `workspace_guests.lastSeenAt` rather than a read-receipt table
+- **Fills PRD-18's `hasOpenInternalItems()` extension point** with the unacknowledged mention,
+  making the `Closed-Confirmed → Follow-up-Required` branch reachable for the first time
 - **Prerequisite:** PRD-19, PRD-24
 
-**Status:** 📋 Drafting
+**Status:** ◐ Refined — ready for implementation (2026-09-15, v1.1)
 **Module:** `workspace/`
 
 ---
@@ -438,7 +444,7 @@ The logical order for PRD development:
 | [[PRD-19 - Workspace Shell\|19]] | Workspace Shell | ✅ | `/workspaces/:id`, header, dual badges, panel slots | `workspace/`, `views/` |
 | [[PRD-20 - Shared Queues & Queue View\|20]] | Shared Queues & Queue View | 📋 | Queue entity, membership scope, four-tab queue view | `workspace/`, `views/` |
 | [[PRD-21 - Ownership & Assignment\|21]] | Ownership & Assignment | ✅ | Claim, assign, release, My work, audited | `workspace/` |
-| [[PRD-22 - Referral Conversation\|22]] | Referral Conversation | 📋 | One thread, Internal/Shared visibility, versioned | `workspace/` |
+| [[PRD-22 - Referral Conversation\|22]] | Referral Conversation | ◐ | One thread, Internal/Shared visibility, versioned | `workspace/` |
 | [[PRD-23 - Document Collection\|23]] | Document Collection | 📋 | Index over existing artifacts, delivery + access evidence | `workspace/` |
 | [[PRD-24 - Parties & Participants\|24]] | Parties & Participants | ✅ | Organizations + Direct address + protocol mode; internal roles | `workspace/` |
 | [[PRD-25 - Activity History & Audit\|25]] | Activity History & Audit | 📋 | Per-referral event reader, merged feed, gaps closed | `workspace/`, `analytics/` |
