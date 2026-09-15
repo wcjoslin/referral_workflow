@@ -90,6 +90,29 @@ import {
   removeParticipant,
 } from './modules/workspace/participantService';
 import {
+  InvitationExpiredError,
+  InvitationAlreadyAcceptedError,
+  InvitationNotFoundError,
+  InvitationRevokedError,
+  PartyNotOnWorkspaceError,
+  acceptInvitation,
+  createInvitation,
+  listInvitations,
+  reissueInvitation,
+  revokeInvitation,
+} from './modules/workspace/invitationService';
+import { emitEvent } from './modules/analytics/eventService';
+import {
+  GUEST_SESSION_COOKIE,
+  GuestAccessRevokedError,
+  GuestScopeMismatchError,
+  GuestSessionExpiredError,
+  GuestSessionMissingError,
+  buildGuestPayload,
+  guestCookiePresent,
+  requireGuest,
+} from './modules/workspace/guestAccess';
+import {
   InvalidWorkStatusTransitionError,
   allowedTransitions,
   isValidState as isValidWorkStatus,
@@ -132,6 +155,42 @@ import { runAnalyticsAgent } from './modules/analytics/analyticsAgent';
 
 export const app = express();
 app.use(express.json({ type: ['application/json', 'application/fhir+json'] }));
+
+/**
+ * Internal routes refuse any request carrying a guest session cookie.
+ *
+ * THIS IS A MITIGATION, NOT AUTHENTICATION. The application authenticates
+ * nothing: `tryGetActingUser()` falls back to the first active user when the
+ * acting-user cookie is absent, so an unauthenticated caller is served as real
+ * staff. That was a documented simulation while every user was internal.
+ *
+ * PRD-30 hands a URL to an external organization, which makes it a PHI exposure
+ * — a guest who edits their path to `/workspaces/3` would otherwise be served a
+ * different patient's internal workspace. This closes exactly that path: a
+ * browser holding a guest session cannot reach an internal surface with it.
+ *
+ * It does NOT stop an unauthenticated stranger, and it is not meant to. PRD-20
+ * owns the real boundary; deploying guest access to a publicly reachable host is
+ * gated on it.
+ *
+ * Deliberately placed before every route so no future internal route can forget
+ * it, and deliberately allowing `/guest` and `/api/guest`, which are the only
+ * surfaces a guest cookie is for.
+ */
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const isGuestSurface = req.path === '/health' || req.path.startsWith('/guest') || req.path.startsWith('/api/guest');
+  if (isGuestSurface || !guestCookiePresent(req)) {
+    next();
+    return;
+  }
+  res.status(403);
+  if (req.path.startsWith('/api/')) {
+    res.json({ error: 'This session is scoped to one referral. Internal APIs are not available.' });
+  } else {
+    res.setHeader('Content-Type', 'text/html');
+    res.send(guestScopePage());
+  }
+});
 
 // ── Vendor static assets (for @kno2/ccdaview on demo pages) ──────────────────
 const nodeModulesDir = path.join(__dirname, '..', 'node_modules');
@@ -283,6 +342,62 @@ async function actingActor(req: Request): Promise<string> {
   return user ? formatActor(user) : 'system';
 }
 
+
+/**
+ * A standalone page for a guest who has hit something outside their scope, or
+ * whose access has ended.
+ *
+ * Deliberately NOT wrapped in `injectNav()`. The internal nav links to the
+ * dashboard, the workspace index and analytics — offering a guest a menu of
+ * surfaces they cannot reach would be both confusing and a disclosure of what
+ * exists. It also carries no patient detail: these pages are reachable with an
+ * expired or revoked session, so they must be safe to show to somebody who is
+ * no longer entitled to anything.
+ */
+function guestNoticePage(heading: string, message: string, hint?: string): string {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${escapeHtml(heading)}</title>
+<style>
+  :root { --ink: #212529; --muted: #6c757d; --line: #dee2e6; --card: #fff; --bg: #f8f9fa; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ecef; --muted: #adb5bd; --line: #343a40; --card: #1b1e21; --bg: #121416; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+         background: var(--bg); color: var(--ink);
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 28px; max-width: 460px; width: 100%; }
+  h1 { font-size: 1.15rem; margin: 0 0 10px; }
+  p { font-size: 0.9rem; line-height: 1.6; color: var(--muted); margin: 0 0 10px; }
+  p:last-child { margin-bottom: 0; }
+</style></head>
+<body><div class="card">
+  <h1>${escapeHtml(heading)}</h1>
+  <p>${escapeHtml(message)}</p>
+  ${hint ? `<p>${escapeHtml(hint)}</p>` : ''}
+</div></body></html>`;
+}
+
+/** Shown when a guest session is used against an internal surface. */
+function guestScopePage(): string {
+  return guestNoticePage(
+    'Not available',
+    'Your access is scoped to a single referral, and this page is not part of it.',
+    'Use the link from your invitation email to return to that referral.',
+  );
+}
+
+/** Minimal HTML escaping for the notice pages, which interpolate no user data today. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 /** A 404 body that matches the app's chrome instead of dumping a stack trace. */
 function notFoundPage(message: string): string {
@@ -891,6 +1006,302 @@ app.delete(
     }
   },
 );
+
+// ── Guest participation (PRD-30) ─────────────────────────────────────────────
+
+/**
+ * Internal: invitation management. Every one of these resolves the workspace
+ * from the path like any other internal route — these are staff-facing.
+ */
+app.get('/api/workspaces/:id/invitations', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    // Status only. There is no token to return: only its hash was ever stored.
+    res.json({ invitations: await listInvitations(workspaceId) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/workspaces/:id/invitations', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as { partyId?: unknown; recipientEmail?: unknown; expiresInHours?: unknown };
+    if (typeof body.partyId !== 'number' || !Number.isInteger(body.partyId)) {
+      res.status(400).json({ error: 'partyId must be an integer.', received: body.partyId });
+      return;
+    }
+    // Shape-only check. Deliverability is SMTP's answer, not a regex's, and the
+    // invitation survives a failed send by design.
+    if (typeof body.recipientEmail !== 'string' || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(body.recipientEmail.trim())) {
+      res.status(400).json({ error: 'recipientEmail must be an email address.', received: body.recipientEmail });
+      return;
+    }
+
+    const actor = await tryGetActingUser(req);
+    if (!actor) {
+      res.status(401).json({ error: 'No acting user. Seed users before inviting.' });
+      return;
+    }
+
+    const { invitation } = await createInvitation(
+      workspaceId,
+      body.partyId,
+      body.recipientEmail.trim(),
+      actor,
+      typeof body.expiresInHours === 'number' ? body.expiresInHours : undefined,
+    );
+
+    // NOTE the absence of `inviteUrl`. The raw token goes to the invited
+    // address and nowhere else — returning it here would put it in the
+    // inviter's browser history, and from there into a screenshot.
+    res.json({
+      success: true,
+      invitationId: invitation.id,
+      expiresAt: invitation.expiresAt.toISOString(),
+      emailDelivered: invitation.emailDelivered,
+    });
+  } catch (err) {
+    if (err instanceof PartyNotOnWorkspaceError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+app.delete(
+  '/api/workspaces/:id/invitations/:invitationId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const invitationId = Number(req.params.invitationId);
+      if (!Number.isInteger(invitationId) || invitationId <= 0) {
+        res.status(404).json({ error: 'Invitation not found' });
+        return;
+      }
+      const actor = await tryGetActingUser(req);
+      if (!actor) {
+        res.status(401).json({ error: 'No acting user. Seed users first.' });
+        return;
+      }
+      await revokeInvitation(invitationId, actor);
+      res.json({ success: true });
+    } catch (err) {
+      if (err instanceof InvitationNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+app.post(
+  '/api/workspaces/:id/invitations/:invitationId/reissue',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const invitationId = Number(req.params.invitationId);
+      if (!Number.isInteger(invitationId) || invitationId <= 0) {
+        res.status(404).json({ error: 'Invitation not found' });
+        return;
+      }
+      const actor = await tryGetActingUser(req);
+      if (!actor) {
+        res.status(401).json({ error: 'No acting user. Seed users first.' });
+        return;
+      }
+      const { invitation } = await reissueInvitation(invitationId, actor);
+      res.json({
+        success: true,
+        invitationId: invitation.id,
+        expiresAt: invitation.expiresAt.toISOString(),
+        emailDelivered: invitation.emailDelivered,
+      });
+    } catch (err) {
+      if (err instanceof InvitationNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+/** The guest workspace page. Takes NO id — the workspace comes from the session. */
+app.get('/guest/workspace', async (req: Request, res: Response) => {
+  try {
+    const guest = await requireGuest(req);
+    const payload = await buildGuestPayload(guest);
+    if (!payload) {
+      res.status(404).setHeader('Content-Type', 'text/html');
+      res.send(guestNoticePage('Referral unavailable', 'This referral is no longer available.'));
+      return;
+    }
+    const templatePath = path.join(__dirname, 'views', 'guestWorkspace.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    // No injectNav(): the internal nav links to surfaces a guest cannot reach.
+    res.setHeader('Content-Type', 'text/html');
+    res.send(template.replace('/*__GUEST_DATA__*/', `window.__GUEST__ = ${embedJson(payload)};`));
+  } catch (err) {
+    sendGuestDenied(err, req, res, false);
+  }
+});
+
+app.get('/api/guest/workspace', async (req: Request, res: Response) => {
+  try {
+    const guest = await requireGuest(req);
+    const payload = await buildGuestPayload(guest);
+    if (!payload) {
+      res.status(404).json({ error: 'This referral is no longer available.' });
+      return;
+    }
+    res.json(payload);
+  } catch (err) {
+    sendGuestDenied(err, req, res, true);
+  }
+});
+
+/**
+ * Guest-facing: accept an invitation.
+ *
+ * The one route that takes a raw token. It sets the session cookie and redirects
+ * so the token leaves the address bar immediately — a token sitting in browser
+ * history, or in a Referer header on the next request, is a token leaked.
+ *
+ * REGISTERED AFTER `/guest/workspace` ON PURPOSE. Express matches in
+ * registration order, so while this came first it also matched
+ * `/guest/workspace` with `token = "workspace"`, failed the token shape check,
+ * and rendered "this link is not valid" — the guest page was unreachable while
+ * the guest API worked fine. The smoke check caught it; no unit test would
+ * have, because route order is a property of neither handler.
+ *
+ * KEEP ANY FUTURE LITERAL `/guest/...` PATH ABOVE THIS HANDLER.
+ */
+app.get('/guest/:token', async (req: Request, res: Response) => {
+  const raw = Array.isArray(req.params.token) ? req.params.token[0] : req.params.token;
+  try {
+    const accepted = await acceptInvitation(raw);
+
+    // HttpOnly, unlike the acting-user cookie, which client script reads on
+    // purpose. This one is a real credential, so script must not see it.
+    // SameSite=Lax rather than Strict: Strict would withhold the cookie on a
+    // top-level navigation from outside the site, signing a guest out of their
+    // own bookmark. Lax still refuses cross-site POSTs.
+    //
+    // `Secure` is deliberately omitted because the demo runs over plain HTTP on
+    // localhost and setting it would break the flow entirely. That is a
+    // production gap recorded in PRD-30, on the same gate as the authentication
+    // finding — not an oversight.
+    const maxAge = Math.max(
+      0,
+      Math.floor((accepted.sessionExpiresAt.getTime() - Date.now()) / 1000),
+    );
+    res.setHeader(
+      'Set-Cookie',
+      `${GUEST_SESSION_COOKIE}=${accepted.sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+    );
+    res.redirect('/guest/workspace');
+  } catch (err) {
+    res.setHeader('Content-Type', 'text/html');
+    if (err instanceof InvitationExpiredError) {
+      res.status(410).send(
+        guestNoticePage(
+          'This invitation has expired',
+          'Invitation links are time-limited, and this one has passed its expiry.',
+          'Ask your contact at the referring organization to send a new invitation.',
+        ),
+      );
+      return;
+    }
+    if (err instanceof InvitationRevokedError) {
+      res.status(403).send(
+        guestNoticePage(
+          'This invitation has been withdrawn',
+          'Access to this referral has been ended by the referring organization.',
+          'If you think this is a mistake, contact them directly.',
+        ),
+      );
+      return;
+    }
+    if (err instanceof InvitationAlreadyAcceptedError) {
+      res.status(410).send(
+        guestNoticePage(
+          'This link has already been used',
+          'Invitation links work once. If your session has since ended, the link cannot be reused.',
+          'Ask your contact to re-issue the invitation.',
+        ),
+      );
+      return;
+    }
+    // Unknown, malformed, or a probe. Same answer for all three, so nothing is
+    // learned by guessing.
+    res.status(404).send(
+      guestNoticePage(
+        'This link is not valid',
+        'We could not match this invitation link to a referral.',
+        'Check that you copied the whole link, or ask for a new invitation.',
+      ),
+    );
+  }
+});
+
+/**
+ * One place that turns a guard rejection into a response, and writes the
+ * `guest_access_denied` event.
+ *
+ * Shared so a denial is audited identically however it was reached — a denial
+ * recorded on one route and not another would make the audit trail lie by
+ * omission.
+ */
+function sendGuestDenied(err: unknown, req: Request, res: Response, asJson: boolean): void {
+  const known =
+    err instanceof GuestSessionMissingError ||
+    err instanceof GuestSessionExpiredError ||
+    err instanceof GuestAccessRevokedError ||
+    err instanceof GuestScopeMismatchError;
+
+  if (!known) {
+    console.error('[Guest]', err);
+    res.status(500);
+    if (asJson) res.json({ error: 'Something went wrong.' });
+    else res.setHeader('Content-Type', 'text/html'), res.send(guestNoticePage('Something went wrong', 'Please try your invitation link again.'));
+    return;
+  }
+
+  const status = err instanceof GuestSessionMissingError ? 401 : 403;
+  const message = (err as Error).message;
+
+  void emitEvent({
+    eventType: 'workspace.guest_access_denied',
+    entityType: 'referral',
+    entityId: 0, // no workspace resolved — that IS the denial
+    actor: 'guest:unresolved',
+    metadata: { reason: (err as Error).name, path: req.path },
+  }).catch((e: unknown) => console.error('[Guest]', e));
+
+  res.status(status);
+  if (asJson) {
+    res.json({ error: message });
+  } else {
+    res.setHeader('Content-Type', 'text/html');
+    res.send(
+      guestNoticePage(
+        'Access ended',
+        message,
+        'Open the link from your invitation email again, or ask for a new invitation.',
+      ),
+    );
+  }
+}
 
 /**
  * The C-CDA viewer as its own document, for the workspace page's iframe.

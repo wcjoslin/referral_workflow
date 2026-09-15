@@ -99,6 +99,13 @@
       "when": 1789494910121,
       "tag": "0013_soft_proudstar",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1789496831929,
+      "tag": "0014_public_madame_masque",
+      "breakpoints": true
     }
   ]
 }

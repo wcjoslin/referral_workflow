@@ -116,6 +116,26 @@ owned workspace; it offers the move rather than performing it.
 
 ---
 
+## Known issue inherited from PRD-30
+
+**This PRD owns the fix for the application having no authentication.**
+`identityService.tryGetActingUser()` reads the `actingUserId` cookie and falls back to
+`getDefaultActingUser()` — the first active user — when it is absent. Every internal page and API is
+therefore served to an unauthenticated caller as a real staff member.
+
+PRD-17 recorded that cookie as a simulation rather than a credential, which held while every user
+was internal staff on localhost. PRD-30 v1.1 changes the threat model by handing an invitation URL
+to an external organization, and ships only a mitigation: internal routes refuse a guest session
+cookie, and the guest cookie is `HttpOnly`. That closes the one path PRD-30 opens; it does not make
+internal routes authenticated.
+
+Since this PRD is where queue membership becomes the least-privilege PHI boundary, the boundary needs
+something to authenticate *against*. Whatever this PRD builds for `getVisibleQueueIds()` has to rest
+on a real caller identity, not on a cookie anyone can set. Resolve it here, and treat deploying guest
+access to a publicly reachable host as gated on it.
+
+---
+
 ## Technical Specifications
 
 ### Dependencies

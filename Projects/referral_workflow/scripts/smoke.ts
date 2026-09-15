@@ -91,6 +91,13 @@ async function post(
  * rendered client-side, so counting the one key that only appears in that array
  * is the honest way to assert a server-side filter from the page source.
  */
+/** Fetches with an arbitrary Cookie header — the guest session is not an actingUserId. */
+async function getRaw(pathname: string, cookie: string): Promise<{ status: number; body: string }> {
+  const res = await fetch(`${BASE}${pathname}`, { headers: { cookie }, redirect: 'manual' });
+  return { status: res.status, body: await res.text() };
+}
+
+
 function rowCount(body: string): number {
   return body.split('"workspaceId":').length - 1;
 }
@@ -499,6 +506,124 @@ async function main(): Promise<void> {
     reDetail.body.includes('not access control yet'),
     'a reader could take Viewer for a permission',
   );
+
+  // ── Guest participation (PRD-30) ──────────────────────────────────────────
+  //
+  // The invitation token is created through the service rather than the API on
+  // purpose: the API deliberately does NOT return it, which is itself asserted
+  // below. There is no other way to obtain one, and that is the design.
+  const { createInvitation, revokeInvitation } = await import(
+    '../src/modules/workspace/invitationService'
+  );
+  const { getParties } = await import('../src/modules/workspace/partyService');
+
+  const wsWithParties = await getParties(wsWith.id);
+  const invitedParty = wsWithParties.find((p) => p.partyRole === 'initiating');
+  if (!invitedParty) throw new Error('no initiating party to invite');
+
+  const inviteApi = await post(`/api/workspaces/${wsWith.id}/invitations`, {
+    partyId: invitedParty.id,
+    recipientEmail: 'guest@primary.direct',
+  });
+  check('POST an invitation returns 200', inviteApi.status === 200, `status ${inviteApi.status}`);
+  check(
+    'the API never returns the raw token',
+    !('inviteUrl' in inviteApi.json) && !JSON.stringify(inviteApi.json).includes('/guest/'),
+    'a token came back to the inviter, and from there into browser history',
+  );
+
+  const badInvite = await post(`/api/workspaces/${wsWith.id}/invitations`, {
+    partyId: invitedParty.id,
+    recipientEmail: 'not-an-email',
+  });
+  check('a malformed recipient is refused', badInvite.status === 400, `status ${badInvite.status}`);
+
+  const { invitation, inviteUrl } = await createInvitation(
+    wsWith.id,
+    invitedParty.id,
+    'smoke-guest@primary.direct',
+    other,
+  );
+  const token = inviteUrl.split('/guest/')[1];
+
+  const accept = await fetch(`${BASE}/guest/${token}`, { redirect: 'manual' });
+  const setCookie = accept.headers.get('set-cookie') ?? '';
+  const guestCookie = setCookie.split(';')[0];
+  check('accepting redirects rather than rendering the token', accept.status === 302, `status ${accept.status}`);
+  check(
+    'the session cookie is HttpOnly, unlike the acting-user cookie',
+    setCookie.includes('HttpOnly'),
+    'client script can read a real credential',
+  );
+  check(
+    'the token leaves the address bar immediately',
+    accept.headers.get('location') === '/guest/workspace',
+    `redirected to ${accept.headers.get('location')}`,
+  );
+
+  const guestPage = await getRaw('/guest/workspace', guestCookie);
+  check('the guest page renders', guestPage.status === 200, `status ${guestPage.status}`);
+  check(
+    'it carries the patient and both organizations',
+    guestPage.body.includes('"patientName"') && guestPage.body.includes('"receivingOrg"'),
+  );
+  // The internal-absence check is the security control, so it runs against the
+  // bytes a guest's browser actually receives rather than against a unit test.
+  for (const forbidden of ['workStatus', 'ownerUserId', 'queueId', 'nextAction', 'exceptionReason', 'participants']) {
+    check(
+      `the guest page contains no ${forbidden}`,
+      !guestPage.body.includes(`"${forbidden}"`),
+      'an internal field reached a guest',
+    );
+  }
+  check(
+    'the guest page carries no internal nav',
+    !guestPage.body.includes('href="/workspaces"') && !guestPage.body.includes('href="/analytics"'),
+    'a guest is being offered surfaces they cannot reach',
+  );
+
+  const guestApi = await getRaw('/api/guest/workspace', guestCookie);
+  check('the guest API serves the same scope', guestApi.status === 200, `status ${guestApi.status}`);
+
+  // The mitigation for the authentication finding: a guest cookie cannot reach
+  // an internal surface, page or API.
+  for (const internal of [`/workspaces/${wsWith.id}`, `/workspaces/${wsWithout.id}`, '/', `/api/workspaces/${wsWith.id}`, '/api/users']) {
+    const res = await getRaw(internal, guestCookie);
+    check(
+      `a guest cookie is refused at ${internal}`,
+      res.status === 403,
+      `status ${res.status} — a guest reached an internal surface`,
+    );
+  }
+
+  const noSession = await get('/api/guest/workspace');
+  check('the guest API refuses a request with no session', noSession.status === 401, `status ${noSession.status}`);
+  const tampered = await getRaw('/api/guest/workspace', `guestSession=${'B'.repeat(43)}`);
+  check('a tampered session resolves to nothing', tampered.status === 401, `status ${tampered.status}`);
+
+  await revokeInvitation(invitation.id, other);
+  const afterRevoke = await getRaw('/api/guest/workspace', guestCookie);
+  check(
+    'revocation takes effect mid-session',
+    afterRevoke.status === 403,
+    `status ${afterRevoke.status}`,
+  );
+  check(
+    'and says access ended rather than sending them back to a dead link',
+    afterRevoke.body.includes('has been ended'),
+    `body was ${afterRevoke.body.slice(0, 120)}`,
+  );
+
+  for (const [label, bad] of [['unknown', 'A'.repeat(43)], ['malformed', 'short']] as [string, string][]) {
+    const res = await fetch(`${BASE}/guest/${bad}`, { redirect: 'manual' });
+    const body = await res.text();
+    check(
+      `an ${label} token explains itself instead of throwing`,
+      res.status === 404 && body.includes('not valid') && !body.includes('at Object.'),
+      `status ${res.status}`,
+    );
+  }
+
 
   // ── Escaping: the other defect that shipped ───────────────────────────────
   const pages: [string, string][] = [

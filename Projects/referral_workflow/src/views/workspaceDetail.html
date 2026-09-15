@@ -972,6 +972,7 @@
               extra.map(function (a) { return esc(a.address); }).join(', ') + '</div>') +
             (p.contactName ? '<div class="party-extra">Contact: ' + esc(p.contactName) + '</div>' : '') +
             modeCtl +
+            renderInviteBlock(p) +
           '</div>';
         }).join('');
 
@@ -1032,6 +1033,8 @@
         if (sel) setMode(id, sel.value);
       });
     });
+
+    bindInviteControls();
 
     var addBtn = document.getElementById('pAddBtn');
     if (addBtn) addBtn.addEventListener('click', function () {
@@ -1099,15 +1102,127 @@
     }
   }
 
+  // ── Invitations (PRD-30) ──────────────────────────────────────────────────
+  //
+  // Lives in this panel because you invite a PARTY, and the parties are here.
+  // A separate panel would have separated the organization from the act of
+  // giving it access.
+
+  var invitations = [];
+
+  function inviteRowsFor(partyId) {
+    return invitations.filter(function (i) { return i.partyId === partyId; });
+  }
+
+  function renderInviteBlock(p) {
+    var rows = inviteRowsFor(p.id);
+    var readOnly = !!P.workspace.archivedAt;
+
+    var list = rows.length === 0 ? '' :
+      '<ul class="plist" style="margin-top:8px;">' + rows.map(function (i) {
+        var when = new Date(i.expiresAt);
+        // Status is computed server-side so the panel and the guard cannot
+        // disagree about whether a link still works.
+        var tagClass = i.status === 'accepted' ? 'tag verified'
+          : (i.status === 'pending' ? 'tag' : 'tag assumed');
+        return '<li>' +
+          '<span class="p-meta" style="font-family:ui-monospace,monospace;">' + esc(i.recipientEmail) + '</span>' +
+          '<span class="' + tagClass + '">' + esc(i.status) + '</span>' +
+          (i.emailDelivered ? '' : '<span class="tag" title="SMTP did not accept it; the invitation still exists">undelivered</span>') +
+          '<span class="p-spacer"></span>' +
+          '<span class="p-meta">' + (i.status === 'expired' ? 'expired ' : 'until ') + esc(when.toLocaleDateString()) + '</span>' +
+          (readOnly || i.status === 'revoked' ? '' :
+            '<button class="btn" data-reissue="' + esc(i.id) + '" title="Issue a new link and invalidate this one">Re-issue</button>' +
+            '<button class="btn-x" data-revoke="' + esc(i.id) + '" title="End access immediately">\u00D7</button>') +
+        '</li>';
+      }).join('') + '</ul>';
+
+    if (readOnly) return list;
+
+    return list +
+      '<div class="ctl-row">' +
+        '<input class="ctl" id="inviteEmail-' + esc(p.id) + '" placeholder="' +
+          (p.directAddress ? esc(p.directAddress) : 'email address') +
+          '" style="min-width:220px;" />' +
+        '<button class="btn" data-invite="' + esc(p.id) + '">Invite</button>' +
+      '</div>';
+  }
+
+  function bindInviteControls() {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-invite]'), function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-invite');
+        var input = document.getElementById('inviteEmail-' + id);
+        // The party's own intake address is the sensible default, so an empty
+        // field means "send it there" rather than being an error.
+        var email = (input && input.value.trim()) || input.getAttribute('placeholder');
+        if (!email || email.indexOf('@') === -1) { pMsg('Enter an email address.', false); return; }
+        sendInvite(Number(id), email);
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-revoke]'), function (btn) {
+      btn.addEventListener('click', function () { revokeInvite(Number(btn.getAttribute('data-revoke'))); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-reissue]'), function (btn) {
+      btn.addEventListener('click', function () { reissueInvite(Number(btn.getAttribute('data-reissue'))); });
+    });
+  }
+
+  async function sendInvite(partyId, recipientEmail) {
+    try {
+      var res = await fetch('/api/workspaces/' + ws.id + '/invitations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ partyId: partyId, recipientEmail: recipientEmail })
+      });
+      var json = await res.json();
+      if (!res.ok) { pMsg(json.error || 'Could not send the invitation.', false); return; }
+      await reloadParties();
+      // Deliberately does not show a link: the server never returns the token,
+      // so there is nothing to display even if we wanted to.
+      pMsg(json.emailDelivered
+        ? 'Invitation emailed to ' + recipientEmail + '.'
+        : 'Invitation created, but the email could not be sent. Use Re-issue to try again.', json.emailDelivered);
+    } catch (err) {
+      pMsg('Could not send the invitation: ' + err.message, false);
+    }
+  }
+
+  async function revokeInvite(invitationId) {
+    try {
+      var res = await fetch('/api/workspaces/' + ws.id + '/invitations/' + invitationId, { method: 'DELETE' });
+      var json = await res.json();
+      if (!res.ok) { pMsg(json.error || 'Could not revoke it.', false); return; }
+      await reloadParties();
+      pMsg('Access ended. Their next request is refused, even with the page open.', true);
+    } catch (err) {
+      pMsg('Could not revoke it: ' + err.message, false);
+    }
+  }
+
+  async function reissueInvite(invitationId) {
+    try {
+      var res = await fetch('/api/workspaces/' + ws.id + '/invitations/' + invitationId + '/reissue', { method: 'POST' });
+      var json = await res.json();
+      if (!res.ok) { pMsg(json.error || 'Could not re-issue it.', false); return; }
+      await reloadParties();
+      pMsg('New link sent. The previous one no longer works.', true);
+    } catch (err) {
+      pMsg('Could not re-issue it: ' + err.message, false);
+    }
+  }
+
   /** Re-reads both lists from the server rather than patching them locally. */
   async function reloadParties() {
     try {
-      var both = await Promise.all([
+      var all = await Promise.all([
         fetch('/api/workspaces/' + ws.id + '/parties').then(function (r) { return r.json(); }),
-        fetch('/api/workspaces/' + ws.id + '/participants').then(function (r) { return r.json(); })
+        fetch('/api/workspaces/' + ws.id + '/participants').then(function (r) { return r.json(); }),
+        fetch('/api/workspaces/' + ws.id + '/invitations').then(function (r) { return r.json(); })
       ]);
-      P.parties = both[0].parties || [];
-      P.participants = both[1].participants || [];
+      P.parties = all[0].parties || [];
+      P.participants = all[1].participants || [];
+      invitations = all[2].invitations || [];
     } catch (err) {
       console.warn('[Workspace/Parties]', err);
     }
@@ -1159,7 +1274,7 @@
   renderCcda();
   renderSlots();
   if (P.slots.owner) loadOwnerUsers();
-  if (P.slots.participants) { renderParties(); loadRoster(); }
+  if (P.slots.participants) { renderParties(); loadRoster(); reloadParties(); }
   loadThread();
 })();
 </script>
