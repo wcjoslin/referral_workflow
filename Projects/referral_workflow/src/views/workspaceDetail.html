@@ -216,6 +216,56 @@
   .subhead { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); margin: 16px 0 6px; }
   .empty-note { font-size: 0.8rem; color: var(--color-text-muted); font-style: italic; }
 
+  /*
+    PRD-22. Internal and shared comments must be UNMISTAKABLY different, and by
+    more than colour: each carries an explicit worded label, a different border
+    treatment and a different background, so the distinction survives
+    colour-blindness, a greyscale print and a bad monitor.
+  */
+  .cmt { border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; border: 1px solid var(--color-border); }
+  .cmt-internal { background: var(--color-card); border-left: 4px solid #6c757d; }
+  .cmt-shared { background: #fff8e6; border-left: 4px double #bd5800; border-top-style: dashed; }
+  .cmt-deleted { background: #f1f3f5; border-left: 4px dotted #adb5bd; }
+  .cmt-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .cmt-author { font-size: 0.9rem; font-weight: 600; }
+  .cmt-meta { font-size: 0.72rem; color: var(--color-text-muted); }
+  .cmt-vis {
+    font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 2px 7px; border-radius: 4px; white-space: nowrap;
+  }
+  .cmt-vis-internal { background: #e9ecef; color: #343a40; }
+  .cmt-vis-shared { background: #bd5800; color: #fff; }
+  .cmt-body { font-size: 0.88rem; line-height: 1.6; margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
+  .cmt-gone { font-size: 0.82rem; color: var(--color-text-muted); font-style: italic; margin-top: 6px; }
+  .cmt-mentions { font-size: 0.74rem; color: var(--color-text-muted); margin-top: 6px; }
+  .cmt-acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .cmt-hist { font-size: 0.74rem; margin-top: 8px; border-top: 1px solid var(--color-border); padding-top: 6px; }
+  .cmt-hist div { padding: 3px 0; line-height: 1.5; }
+  .cmt-edit-area { width: 100%; box-sizing: border-box; margin-top: 6px; }
+
+  .cmp { border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; margin-top: 4px; }
+  .cmp textarea {
+    width: 100%; box-sizing: border-box; min-height: 68px; font: inherit; font-size: 0.88rem;
+    padding: 8px; border: 1px solid var(--color-border); border-radius: 6px; resize: vertical;
+  }
+  .cmp-count { font-size: 0.7rem; color: var(--color-text-muted); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 0.74rem;
+    background: #e7f1ff; color: #0c63e4; border-radius: 12px; padding: 2px 4px 2px 9px; margin: 0 4px 4px 0;
+  }
+  .chip button { background: none; border: none; color: inherit; cursor: pointer; font-size: 0.85rem; line-height: 1; padding: 0 3px; }
+  /*
+    The share confirmation. Deliberately loud, deliberately in words: it names
+    who will be able to read the comment rather than saying "are you sure?".
+  */
+  .share-warn {
+    margin-top: 8px; padding: 10px 12px; border-radius: 6px;
+    background: #fff3cd; color: #664d03; border-left: 4px solid #ffc107; font-size: 0.8rem; line-height: 1.55;
+  }
+  .share-warn ul { margin: 6px 0 0; padding-left: 20px; }
+  .share-warn label { display: flex; gap: 7px; align-items: flex-start; margin-top: 8px; font-weight: 600; cursor: pointer; }
+  .mention-flag { font-size: 0.74rem; color: #bd5800; margin-top: 6px; }
+
   .cols { display: grid; grid-template-columns: 1fr; gap: 16px; }
   .cols.with-viewer { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
   @media (max-width: 980px) { .cols.with-viewer { grid-template-columns: 1fr; } }
@@ -1408,6 +1458,488 @@
     renderParties();
   }
 
+  // ── Conversation (PRD-22) ─────────────────────────────────────────────────
+
+  var comments = [];
+  var openMentions = 0;
+  var mentionRoster = { users: [], parties: [] };
+  var draftMentions = [];   // [{ kind, id, displayName }]
+  var editingId = null;
+  var historyFor = null;
+  var historyRows = [];
+
+  function visLabel(v) {
+    return v === 'Shared' ? 'Shared' : 'Internal';
+  }
+
+  /** Who a shared comment actually reaches. Drives the confirmation wording. */
+  function sharedWith() {
+    return (mentionRoster.parties || []).filter(function (p) {
+      return p.partyRole !== 'receiving';
+    });
+  }
+
+  function renderShareWarning() {
+    var targets = sharedWith();
+    var list = targets.length === 0
+      ? '<li>Nobody yet — no other organization is recorded on this referral.</li>'
+      : targets.map(function (p) {
+          return '<li><strong>' + esc(p.orgName) + '</strong> — ' +
+            (p.hasLiveInvitation
+              ? 'has a live invitation, so somebody there can read this now'
+              : 'has no live invitation yet, so nobody there can read it until one is sent') +
+            '</li>';
+        }).join('');
+
+    return '<div class="share-warn">' +
+      'This comment will be readable by everyone your organization invites to this referral, ' +
+      'and by:' +
+      '<ul>' + list + '</ul>' +
+      '<label><input type="checkbox" id="cmtConfirm"> ' +
+        'I mean to share this outside my organization.</label>' +
+    '</div>';
+  }
+
+  function mentionOptions(visibility) {
+    // Internal comments mention colleagues; shared comments mention
+    // organizations. The two lists never mix, which is the rule that stops a
+    // colleague's name reaching the other side.
+    if (visibility === 'Shared') {
+      return (mentionRoster.parties || []).map(function (p) {
+        return { kind: 'party', id: p.id, displayName: p.orgName };
+      });
+    }
+    return (mentionRoster.users || []).map(function (u) {
+      return {
+        kind: 'user',
+        id: u.id,
+        displayName: u.displayName + (u.isParticipant ? '' : ' — not yet on this referral'),
+      };
+    });
+  }
+
+  function renderConversation() {
+    var readOnly = !!P.workspace.archivedAt;
+    var visibility = (document.getElementById('cmtVis') || {}).value || 'Internal';
+
+    var thread = comments.length === 0
+      ? '<div class="empty-note">Nothing written down yet. Notes you add here stay internal ' +
+        'unless you share them.</div>'
+      : comments.map(function (c) { return renderComment(c, readOnly); }).join('');
+
+    var opts = mentionOptions(visibility);
+    var chips = draftMentions.map(function (m, i) {
+      return '<span class="chip">' + esc(m.displayName) +
+        '<button type="button" class="cmt-chip-x" data-i="' + esc(i) + '" ' +
+        'aria-label="Remove mention">×</button></span>';
+    }).join('');
+
+    var composer = readOnly
+      ? '<div class="empty-note">This workspace is archived. The conversation is read-only.</div>'
+      : '<div class="cmp">' +
+          '<textarea id="cmtBody" maxlength="4000" placeholder="What did you learn? ' +
+            'Anything you write here is internal unless you share it."></textarea>' +
+          '<div class="ctl-row">' +
+            '<select class="ctl" id="cmtVis">' +
+              '<option value="Internal"' + (visibility === 'Internal' ? ' selected' : '') + '>' +
+                'Internal — my organization only</option>' +
+              '<option value="Shared"' + (visibility === 'Shared' ? ' selected' : '') + '>' +
+                'Shared — the other organization can read it</option>' +
+            '</select>' +
+            (opts.length === 0 ? '' :
+              '<select class="ctl" id="cmtMention">' +
+                '<option value="">Mention…</option>' +
+                opts.map(function (o) {
+                  return '<option value="' + esc(o.kind) + ':' + esc(o.id) + '">' +
+                    esc(o.displayName) + '</option>';
+                }).join('') +
+              '</select>') +
+            '<button class="btn btn-primary" id="cmtPost">Post</button>' +
+            '<span class="cmp-count" id="cmtCount"></span>' +
+          '</div>' +
+          (chips ? '<div>' + chips + '</div>' : '') +
+          (visibility === 'Shared' ? renderShareWarning() : '') +
+          '<div class="msg" id="cmtMsg"></div>' +
+        '</div>';
+
+    var badge = openMentions > 0
+      ? '<div class="ctl-row">' +
+          '<span class="tag assumed">' + esc(openMentions) +
+            (openMentions === 1 ? ' mention waiting for you' : ' mentions waiting for you') +
+          '</span>' +
+          '<button class="btn" id="cmtAck">Mark as read</button>' +
+        '</div>'
+      : '';
+
+    document.getElementById('wsConversation').innerHTML =
+      '<h2>Conversation</h2>' + badge + thread + composer;
+
+    bindConversation();
+  }
+
+  function renderComment(c, readOnly) {
+    var cls = c.deleted ? 'cmt-deleted' : (c.visibility === 'Shared' ? 'cmt-shared' : 'cmt-internal');
+    var visCls = c.visibility === 'Shared' ? 'cmt-vis-shared' : 'cmt-vis-internal';
+
+    var who = esc(c.authorDisplayName) +
+      (c.authorKind === 'guest'
+        ? ' <span class="cmt-meta">(guest' +
+          (c.authorPartyOrgName ? ' at ' + esc(c.authorPartyOrgName) : '') + ')</span>'
+        : (c.authorJobRole ? ' <span class="cmt-meta">(' + esc(c.authorJobRole) + ')</span>' : '')) +
+      (c.authorInactive ? ' <span class="tag">no longer active</span>' : '');
+
+    var when = fmtDateTime(c.createdAt) +
+      (c.editedAt ? ' · edited ' + fmtDateTime(c.editedAt) +
+        ' (revision ' + esc(c.revisionCount) + ')' : '');
+
+    var body = c.deleted
+      ? '<div class="cmt-gone">This comment was deleted' +
+        (c.deletedByActor ? ' by ' + esc(actorLabel(c.deletedByActor)) : '') +
+        (c.deletedAt ? ' on ' + fmtDateTime(c.deletedAt) : '') +
+        '. The wording is kept in the revision history.</div>'
+      : '<div class="cmt-body">' + esc(c.body) + '</div>';
+
+    var mentions = (c.mentions || []).length === 0 ? '' :
+      '<div class="cmt-mentions">Mentioned: ' +
+        c.mentions.map(function (m) {
+          return esc(m.displayName) + (m.acknowledgedAt ? ' ✓' : '');
+        }).join(', ') +
+      '</div>';
+
+    var editing = editingId === c.id;
+    var acts = [];
+    if (!readOnly && !c.deleted && !editing) {
+      // Only the author is offered the edit control, because only the author can
+      // use it — the server refuses anybody else regardless of what is rendered.
+      if (c.authorKind === 'user' && P.actingUser && c.authorUserId === P.actingUser.id) {
+        acts.push('<button class="btn cmt-edit" data-id="' + esc(c.id) + '">Edit</button>');
+      }
+      acts.push('<button class="btn cmt-del" data-id="' + esc(c.id) + '">Delete</button>');
+    }
+    if (c.revisionCount > 1 || c.deleted) {
+      acts.push('<button class="btn cmt-hist-btn" data-id="' + esc(c.id) + '">' +
+        (historyFor === c.id ? 'Hide history' : 'History') + '</button>');
+    }
+
+    var editor = !editing ? '' :
+      '<textarea class="cmt-edit-area" id="cmtEdit' + esc(c.id) + '" maxlength="4000">' +
+        esc(c.body) + '</textarea>' +
+      '<div class="ctl-row">' +
+        '<select class="ctl" id="cmtEditVis' + esc(c.id) + '">' +
+          '<option value="Internal"' + (c.visibility === 'Internal' ? ' selected' : '') + '>Internal</option>' +
+          '<option value="Shared"' + (c.visibility === 'Shared' ? ' selected' : '') + '>Shared</option>' +
+        '</select>' +
+        '<button class="btn btn-primary cmt-save" data-id="' + esc(c.id) + '">Save</button>' +
+        '<button class="btn cmt-cancel">Cancel</button>' +
+      '</div>' +
+      (c.visibility === 'Internal'
+        ? '<div class="mention-flag">Changing this to Shared shares it with the other ' +
+          'organization. You will be asked to confirm.</div>'
+        : (c.shareLocked
+            ? '<div class="mention-flag">This can no longer be made internal: someone ' +
+              'outside your organization has already had access to it.</div>'
+            : ''));
+
+    var hist = historyFor !== c.id ? '' :
+      '<div class="cmt-hist">' +
+        historyRows.map(function (r) {
+          return '<div><strong>Revision ' + esc(r.revisionNumber) + '</strong> · ' +
+            esc(visLabel(r.visibility)) + ' · ' + fmtDateTime(r.createdAt) + ' · ' +
+            esc(actorLabel(r.createdByActor)) + '<br>' + esc(r.body) + '</div>';
+        }).join('') +
+      '</div>';
+
+    return '<div class="cmt ' + cls + '">' +
+      '<div class="cmt-top">' +
+        '<span class="cmt-author">' + who + '</span>' +
+        '<span class="cmt-vis ' + visCls + '">' + esc(visLabel(c.visibility)) + '</span>' +
+        '<span class="cmt-meta">' + esc(when) + '</span>' +
+      '</div>' +
+      (editing ? editor : body) +
+      mentions +
+      (acts.length ? '<div class="cmt-acts">' + acts.join('') + '</div>' : '') +
+      hist +
+    '</div>';
+  }
+
+  /** 'user:5' / 'guest:2' / 'system' rendered for a human. */
+  function actorLabel(actor) {
+    var raw = String(actor == null ? '' : actor);
+    var m = /^user:(\d+)$/.exec(raw);
+    if (m) {
+      var found = (mentionRoster.users || []).filter(function (u) {
+        return String(u.id) === m[1];
+      })[0];
+      return found ? found.displayName : raw;
+    }
+    if (/^guest:/.test(raw)) return 'a guest';
+    return raw;
+  }
+
+  function fmtDateTime(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
+  }
+
+  function cMsg(text, ok) {
+    var el = document.getElementById('cmtMsg');
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = ok ? '#0a7d4b' : 'var(--color-priority)';
+  }
+
+  function bindConversation() {
+    var vis = document.getElementById('cmtVis');
+    if (vis) {
+      vis.addEventListener('change', function () {
+        // Switching visibility drops mentions that the new visibility forbids,
+        // and says so rather than silently discarding them.
+        var want = vis.value === 'Shared' ? 'party' : 'user';
+        var before = draftMentions.length;
+        draftMentions = draftMentions.filter(function (m) { return m.kind === want; });
+        var body = (document.getElementById('cmtBody') || {}).value || '';
+        renderConversation();
+        var ta = document.getElementById('cmtBody');
+        if (ta) ta.value = body;
+        if (before !== draftMentions.length) {
+          cMsg('Mentions that do not apply to a ' + vis.value.toLowerCase() +
+            ' comment were removed.', false);
+        }
+      });
+    }
+
+    var pick = document.getElementById('cmtMention');
+    if (pick) {
+      pick.addEventListener('change', function () {
+        if (!pick.value) return;
+        var parts = pick.value.split(':');
+        var opts = mentionOptions((document.getElementById('cmtVis') || {}).value || 'Internal');
+        var found = opts.filter(function (o) {
+          return o.kind === parts[0] && String(o.id) === parts[1];
+        })[0];
+        var already = draftMentions.some(function (m) {
+          return m.kind === parts[0] && String(m.id) === parts[1];
+        });
+        if (found && !already) {
+          draftMentions.push({ kind: found.kind, id: found.id, displayName: found.displayName });
+        }
+        var body = (document.getElementById('cmtBody') || {}).value || '';
+        renderConversation();
+        var ta = document.getElementById('cmtBody');
+        if (ta) ta.value = body;
+      });
+    }
+
+    Array.prototype.forEach.call(document.querySelectorAll('.cmt-chip-x'), function (b) {
+      b.addEventListener('click', function () {
+        draftMentions.splice(parseInt(b.getAttribute('data-i'), 10), 1);
+        var body = (document.getElementById('cmtBody') || {}).value || '';
+        renderConversation();
+        var ta = document.getElementById('cmtBody');
+        if (ta) ta.value = body;
+      });
+    });
+
+    var ta = document.getElementById('cmtBody');
+    var count = document.getElementById('cmtCount');
+    if (ta && count) {
+      var tick = function () {
+        count.textContent = ta.value.length > 3600 ? ta.value.length + ' / 4000' : '';
+      };
+      ta.addEventListener('input', tick);
+      tick();
+    }
+
+    var post = document.getElementById('cmtPost');
+    if (post) post.addEventListener('click', submitComment);
+
+    var ack = document.getElementById('cmtAck');
+    if (ack) ack.addEventListener('click', ackMentions);
+
+    Array.prototype.forEach.call(document.querySelectorAll('.cmt-edit'), function (b) {
+      b.addEventListener('click', function () {
+        editingId = parseInt(b.getAttribute('data-id'), 10);
+        renderConversation();
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.cmt-cancel'), function (b) {
+      b.addEventListener('click', function () { editingId = null; renderConversation(); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.cmt-save'), function (b) {
+      b.addEventListener('click', function () { saveEdit(parseInt(b.getAttribute('data-id'), 10)); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.cmt-del'), function (b) {
+      b.addEventListener('click', function () { removeComment(parseInt(b.getAttribute('data-id'), 10)); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.cmt-hist-btn'), function (b) {
+      b.addEventListener('click', function () { toggleHistory(parseInt(b.getAttribute('data-id'), 10)); });
+    });
+  }
+
+  function mentionPayload() {
+    return {
+      users: draftMentions.filter(function (m) { return m.kind === 'user'; })
+        .map(function (m) { return m.id; }),
+      parties: draftMentions.filter(function (m) { return m.kind === 'party'; })
+        .map(function (m) { return m.id; }),
+    };
+  }
+
+  async function submitComment() {
+    var ta = document.getElementById('cmtBody');
+    var vis = document.getElementById('cmtVis');
+    var confirmBox = document.getElementById('cmtConfirm');
+    var body = ta ? ta.value : '';
+    var visibility = vis ? vis.value : 'Internal';
+
+    if (!body.trim()) { cMsg('Write something first.', false); return; }
+    if (visibility === 'Shared' && !(confirmBox && confirmBox.checked)) {
+      cMsg('Tick the confirmation before sharing this outside your organization.', false);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/workspaces/' + P.workspace.id + '/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          body: body,
+          visibility: visibility,
+          confirmShared: visibility === 'Shared',
+          mentions: mentionPayload(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { cMsg(data.error || 'Could not post that.', false); return; }
+      draftMentions = [];
+      await reloadComments();
+      cMsg('Posted.', true);
+    } catch (err) {
+      cMsg('Network error.', false);
+      console.warn('[Workspace/Comments]', err);
+    }
+  }
+
+  async function saveEdit(commentId) {
+    var ta = document.getElementById('cmtEdit' + commentId);
+    var vis = document.getElementById('cmtEditVis' + commentId);
+    var existing = comments.filter(function (c) { return c.id === commentId; })[0];
+    if (!ta || !vis || !existing) return;
+
+    var becomingShared = existing.visibility === 'Internal' && vis.value === 'Shared';
+    if (becomingShared) {
+      var targets = sharedWith().map(function (p) { return p.orgName; }).join(', ');
+      // The composer's confirmation is a tick-box; an edit's is a dialog, for
+      // the same reason: sharing must be a separate deliberate act.
+      if (!window.confirm('Share this comment with ' +
+          (targets || 'the other organization') + '? They will be able to read it.')) {
+        return;
+      }
+    }
+
+    try {
+      const res = await fetch(
+        '/api/workspaces/' + P.workspace.id + '/comments/' + commentId,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            body: ta.value,
+            visibility: vis.value,
+            confirmShared: becomingShared,
+          }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) { cMsg(data.error || 'Could not save that.', false); return; }
+      editingId = null;
+      await reloadComments();
+      cMsg('Saved.', true);
+    } catch (err) {
+      cMsg('Network error.', false);
+      console.warn('[Workspace/Comments]', err);
+    }
+  }
+
+  async function removeComment(commentId) {
+    if (!window.confirm('Delete this comment? The wording is kept in the revision history ' +
+        'and the deletion is recorded against you.')) {
+      return;
+    }
+    try {
+      const res = await fetch(
+        '/api/workspaces/' + P.workspace.id + '/comments/' + commentId,
+        { method: 'DELETE' },
+      );
+      const data = await res.json();
+      if (!res.ok) { cMsg(data.error || 'Could not delete that.', false); return; }
+      await reloadComments();
+      cMsg('Deleted.', true);
+    } catch (err) {
+      cMsg('Network error.', false);
+      console.warn('[Workspace/Comments]', err);
+    }
+  }
+
+  async function toggleHistory(commentId) {
+    if (historyFor === commentId) { historyFor = null; historyRows = []; renderConversation(); return; }
+    try {
+      const res = await fetch(
+        '/api/workspaces/' + P.workspace.id + '/comments/' + commentId + '/history',
+      );
+      const data = await res.json();
+      historyRows = res.ok ? (data.revisions || []) : [];
+      historyFor = commentId;
+    } catch (err) {
+      historyRows = [];
+      historyFor = commentId;
+      console.warn('[Workspace/Comments]', err);
+    }
+    renderConversation();
+  }
+
+  async function ackMentions() {
+    try {
+      await fetch('/api/workspaces/' + P.workspace.id + '/mentions/ack', { method: 'POST' });
+      await reloadComments();
+    } catch (err) {
+      console.warn('[Workspace/Comments]', err);
+    }
+  }
+
+  async function reloadComments() {
+    try {
+      const res = await fetch('/api/workspaces/' + P.workspace.id + '/comments');
+      const data = await res.json();
+      comments = res.ok ? (data.comments || []) : [];
+      openMentions = res.ok ? (data.openMentions || 0) : 0;
+    } catch (err) {
+      comments = [];
+      openMentions = 0;
+      console.warn('[Workspace/Comments]', err);
+    }
+    renderConversation();
+  }
+
+  async function loadConversation() {
+    // Targets FIRST: renderComment() resolves actor strings and mention labels
+    // through the roster, so fetching them in parallel would render a first
+    // frame full of bare ids.
+    await loadMentionTargets();
+    await reloadComments();
+  }
+
+  async function loadMentionTargets() {
+    try {
+      const res = await fetch('/api/workspaces/' + P.workspace.id + '/mention-targets');
+      const data = await res.json();
+      if (res.ok) mentionRoster = { users: data.users || [], parties: data.parties || [] };
+    } catch (err) {
+      console.warn('[Workspace/Comments]', err);
+    }
+  }
+
   function renderSlots() {
     if (!P.slots.owner) {
       renderSlot('wsOwner', 'Ownership', 'PRD-21',
@@ -1442,6 +1974,7 @@
   renderSlots();
   if (P.slots.owner) loadOwnerUsers();
   if (P.slots.participants) { renderParties(); loadRoster(); reloadParties(); }
+  if (P.slots.conversation) { renderConversation(); loadConversation(); }
   reloadAssertions();
   loadThread();
 })();

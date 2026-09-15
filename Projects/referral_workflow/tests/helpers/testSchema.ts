@@ -16,6 +16,12 @@
  * modules read. A missing column surfaces as `no such column`, not as a subtle
  * wrong answer, so the failure mode is at least loud.
  *
+ * The PRD-22 tables carry two CHECK constraints and a PARTIAL unique index, and
+ * they are reproduced here deliberately: they are the enforcement, not
+ * decoration, so a test suite running against DDL without them would pass while
+ * the real schema rejected the same write. `idx_comment_revisions_current` is
+ * what makes "exactly one current revision per comment" a database invariant.
+ *
  * `tests/unit/workspace/identityService.test.ts` and
  * `tests/unit/analytics/analyticsQueries.test.ts` still carry their own copies.
  * Neither needed the PRD-24 tables, so neither was touched; both are candidates
@@ -238,4 +244,48 @@ export const TEST_SCHEMA_DDL = `
     created_at INTEGER NOT NULL,
     delivered_at INTEGER
   );
+  CREATE TABLE referral_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id INTEGER NOT NULL,
+    author_user_id INTEGER,
+    author_guest_id INTEGER,
+    author_party_id INTEGER,
+    created_at INTEGER NOT NULL,
+    deleted_at INTEGER,
+    deleted_by_actor TEXT,
+    CONSTRAINT referral_comments_author_union
+      CHECK ((author_user_id IS NULL) <> (author_guest_id IS NULL))
+  );
+  CREATE INDEX idx_referral_comments_workspace ON referral_comments (workspace_id, created_at);
+  CREATE TABLE comment_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    comment_id INTEGER NOT NULL,
+    revision_number INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    visibility TEXT NOT NULL DEFAULT 'Internal',
+    created_at INTEGER NOT NULL,
+    created_by_actor TEXT NOT NULL,
+    superseded_at INTEGER
+  );
+  CREATE UNIQUE INDEX idx_comment_revisions_number
+    ON comment_revisions (comment_id, revision_number);
+  CREATE UNIQUE INDEX idx_comment_revisions_current
+    ON comment_revisions (comment_id) WHERE superseded_at IS NULL;
+  CREATE TABLE comment_mentions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    comment_id INTEGER NOT NULL,
+    revision_id INTEGER NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    mentioned_user_id INTEGER,
+    mentioned_party_id INTEGER,
+    created_at INTEGER NOT NULL,
+    acknowledged_at INTEGER,
+    acknowledged_by_actor TEXT,
+    CONSTRAINT comment_mentions_target_union
+      CHECK ((mentioned_user_id IS NULL) <> (mentioned_party_id IS NULL))
+  );
+  CREATE INDEX idx_comment_mentions_workspace
+    ON comment_mentions (workspace_id, acknowledged_at);
+  CREATE INDEX idx_comment_mentions_user
+    ON comment_mentions (mentioned_user_id, acknowledged_at);
 `

@@ -345,14 +345,15 @@ describe('buildWorkspacePayload()', () => {
 
     const payload = await buildWorkspacePayload(workspace.id, NOBODY);
 
-    // A slot flips to true exactly when its PRD lands: `owner` in PRD-21 and
-    // `participants` in PRD-24, with three still to come. Asserting the whole
-    // object rather than one key means the next PRD has to come past this test,
-    // so a panel cannot be half-wired — live code behind a flag saying otherwise.
+    // A slot flips to true exactly when its PRD lands: `owner` in PRD-21,
+    // `participants` in PRD-24, `conversation` in PRD-22, with two still to
+    // come. Asserting the whole object rather than one key means the next PRD
+    // has to come past this test, so a panel cannot be half-wired — live code
+    // behind a flag saying otherwise.
     expect(payload!.slots).toEqual({
       owner: true,
       participants: true,
-      conversation: false,
+      conversation: true,
       documents: false,
       activity: false,
     });

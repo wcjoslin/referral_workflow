@@ -320,10 +320,11 @@ export async function buildWorkspacePayload(
       department: r.department,
     })),
     slots: {
-      conversation: false,
       documents: false,
       activity: false,
-      // PRD-21 and PRD-24 filled these. The shell stops rendering their placeholders.
+      // PRD-21, PRD-24 and PRD-22 filled these. The shell stops rendering their
+      // placeholders.
+      conversation: true,
       participants: true,
       owner: true,
     },

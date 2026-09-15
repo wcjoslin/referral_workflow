@@ -1,4 +1,4 @@
-import { index, sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { check, index, sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 // ── Internal Staff Identity (PRD-17) ────────────────────────────────────────
@@ -518,6 +518,145 @@ export const workspaceAssertions = sqliteTable(
       table.createdAt,
     ),
     keyIdx: index('idx_workspace_assertions_key').on(table.assertionKey),
+  }),
+);
+
+// ── Referral Conversation (PRD-22) ─────────────────────────────────
+//
+// One conversation per workspace, carrying two kinds of speech: internal notes
+// that must never leave the organization, and messages meant for the other
+// party. Split across two tables because a comment has two parts that behave
+// differently:
+//
+//   IDENTITY (referral_comments) — who wrote it, where, when, and whether it has
+//   been tombstoned. Never changes. What a PATCH targets, what a tombstone
+//   marks, what a mention hangs off.
+//
+//   CONTENT (comment_revisions) — the body and the visibility at one point in
+//   time. Append-only. An edit supersedes the current revision and inserts the
+//   next, so "what did this say, and who could read it, on Tuesday" is
+//   answerable.
+//
+// The first draft put both in one self-referencing table. That gives a comment
+// no stable id: a tombstone, a mention and a PATCH would all target a row that
+// changes on every edit.
+//
+// DELIBERATELY NOT AN EXTENSION OF referral_messages. That table is the
+// protocol thread — machine-authored, tied to message control ids and ack
+// status. PRD-25 may interleave the two for display; the storage stays separate.
+export const referralComments = sqliteTable(
+  'referral_comments',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workspaceId: integer('workspace_id')
+      .references(() => referralWorkspaces.id)
+      .notNull(),
+
+    // EXACTLY ONE AUTHOR, enforced by the check constraint below rather than by
+    // the service alone. `(a IS NULL) <> (b IS NULL)` is XOR: it rejects both
+    // set and neither set. Verified against SQLite before being relied on.
+    authorUserId: integer('author_user_id').references(() => users.id),
+    authorGuestId: integer('author_guest_id').references(() => workspaceGuests.id),
+    // Denormalised from the guest row for the same reason workspace_guests
+    // denormalises its own pair: attribution reads one row. NULL for an
+    // internal author, who acts for the organization rather than for a party.
+    authorPartyId: integer('author_party_id').references(() => workspaceParties.id),
+
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+
+    // Tombstone. Nothing here is ever hard-deleted — the row survives, and the
+    // service stops handing out the body.
+    deletedAt: integer('deleted_at', { mode: 'timestamp' }),
+    deletedByActor: text('deleted_by_actor'),
+  },
+  (table) => ({
+    workspaceIdx: index('idx_referral_comments_workspace').on(table.workspaceId, table.createdAt),
+    authorUnion: check(
+      'referral_comments_author_union',
+      sql`(${table.authorUserId} IS NULL) <> (${table.authorGuestId} IS NULL)`,
+    ),
+  }),
+);
+
+// Content. One row per revision, never updated except to set superseded_at.
+export const commentRevisions = sqliteTable(
+  'comment_revisions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    commentId: integer('comment_id')
+      .references(() => referralComments.id)
+      .notNull(),
+    revisionNumber: integer('revision_number').notNull(), // 1-based
+    body: text('body').notNull(),
+
+    // Recorded PER REVISION and never mutated in place, so a later change
+    // cannot disguise what was visible when.
+    visibility: text('visibility').notNull().default('Internal'), // 'Internal' | 'Shared'
+
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+    createdByActor: text('created_by_actor').notNull(),
+    supersededAt: integer('superseded_at', { mode: 'timestamp' }),
+  },
+  (table) => ({
+    numberIdx: uniqueIndex('idx_comment_revisions_number').on(table.commentId, table.revisionNumber),
+    // EXACTLY ONE CURRENT REVISION PER COMMENT, as a database invariant rather
+    // than a service convention. A partial unique index: SQLite enforces
+    // uniqueness only over rows matching the WHERE clause, so any number of
+    // superseded revisions coexist and only one may be current. Two concurrent
+    // edits therefore cannot both win — the second is refused, which beats
+    // leaving two rows each claiming to be the live text.
+    currentIdx: uniqueIndex('idx_comment_revisions_current')
+      .on(table.commentId)
+      .where(sql`${table.supersededAt} IS NULL`),
+  }),
+);
+
+// Resolved mention targets, per revision, with acknowledgement.
+//
+// Stored relationally rather than as a JSON array because a mention needs an
+// acknowledgement state: PRD-18 named the unacknowledged mention as one of two
+// intended sources for hasOpenInternalItems(), and a JSON column cannot carry
+// that fact.
+export const commentMentions = sqliteTable(
+  'comment_mentions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    commentId: integer('comment_id')
+      .references(() => referralComments.id)
+      .notNull(),
+    // The revision that made this mention. An edit that drops a mention leaves
+    // the old row attached to a superseded revision, which is how a retraction
+    // is represented without deleting anything.
+    revisionId: integer('revision_id')
+      .references(() => commentRevisions.id)
+      .notNull(),
+    // Denormalised so hasOpenInternalItems(workspaceId) is one indexed query
+    // rather than a join through comments — it is consulted on every protocol
+    // transition via resolveProposedStatus().
+    workspaceId: integer('workspace_id')
+      .references(() => referralWorkspaces.id)
+      .notNull(),
+
+    // Exactly one target, the same XOR shape as the author. A user mention is
+    // internal and can be an open item; a party mention is a routing hint for
+    // PRD-27 and never is.
+    mentionedUserId: integer('mentioned_user_id').references(() => users.id),
+    mentionedPartyId: integer('mentioned_party_id').references(() => workspaceParties.id),
+
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+    acknowledgedAt: integer('acknowledged_at', { mode: 'timestamp' }),
+    acknowledgedByActor: text('acknowledged_by_actor'),
+  },
+  (table) => ({
+    workspaceIdx: index('idx_comment_mentions_workspace').on(
+      table.workspaceId,
+      table.acknowledgedAt,
+    ),
+    userIdx: index('idx_comment_mentions_user').on(table.mentionedUserId, table.acknowledgedAt),
+    targetUnion: check(
+      'comment_mentions_target_union',
+      sql`(${table.mentionedUserId} IS NULL) <> (${table.mentionedPartyId} IS NULL)`,
+    ),
   }),
 );
 

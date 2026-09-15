@@ -128,6 +128,30 @@ import {
 } from './modules/workspace/protocolGateway';
 import { isAssertionType } from './modules/workspace/assertionCatalog';
 import {
+  CommentDeletedError,
+  CommentEmptyError,
+  CommentNotAuthorError,
+  CommentNotFoundError,
+  CommentRevisionConflictError,
+  CommentTooLongError,
+  CommentVisibility,
+  CommentWorkspaceNotFoundError,
+  GuestVisibilityError,
+  MentionTargetError,
+  ShareNotConfirmedError,
+  SharedMentionError,
+  VisibilityDowngradeError,
+  acknowledgeMentions,
+  deleteComment,
+  editComment,
+  getCommentHistory,
+  isCommentVisibility,
+  listComments,
+  mentionTargets,
+  openMentionCount,
+  postComment,
+} from './modules/workspace/commentService';
+import {
   InvalidWorkStatusTransitionError,
   allowedTransitions,
   isValidState as isValidWorkStatus,
@@ -1210,6 +1234,305 @@ app.post('/api/guest/assertions', async (req: Request, res: Response) => {
   } catch (err) {
     if (!sendAssertionError(err, res)) {
       console.error('[Guest/Assertion]', err);
+      res.status(500).json({ error: 'Something went wrong.' });
+    }
+  }
+});
+
+// ── Referral conversation (PRD-22) ───────────────────────────────────────────
+
+function sendCommentError(err: unknown, res: Response): boolean {
+  if (err instanceof CommentWorkspaceNotFoundError || err instanceof CommentNotFoundError) {
+    res.status(404).json({ error: err.message });
+    return true;
+  }
+  if (
+    err instanceof CommentEmptyError ||
+    err instanceof CommentTooLongError ||
+    err instanceof MentionTargetError ||
+    err instanceof GuestVisibilityError
+  ) {
+    res.status(400).json({ error: err.message });
+    return true;
+  }
+  // 422 rather than 400: the body is well-formed and the values are valid, but
+  // the request is refused on a deliberateness rule.
+  if (err instanceof ShareNotConfirmedError || err instanceof SharedMentionError) {
+    res.status(422).json({ error: err.message });
+    return true;
+  }
+  if (err instanceof CommentNotAuthorError) {
+    res.status(403).json({ error: err.message });
+    return true;
+  }
+  // 409: well-formed, permitted in principle, refused by the comment's current
+  // state. A retry after reloading may succeed — except for the downgrade,
+  // which never will, and whose message says so.
+  if (
+    err instanceof VisibilityDowngradeError ||
+    err instanceof CommentDeletedError ||
+    err instanceof CommentRevisionConflictError
+  ) {
+    res.status(409).json({ error: err.message });
+    return true;
+  }
+  return false;
+}
+
+/** The mention id lists, read defensively — a client sends whatever it likes. */
+function parseMentions(raw: unknown): { users?: number[]; parties?: number[] } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const body = raw as { users?: unknown; parties?: unknown };
+  const ids = (value: unknown): number[] | undefined =>
+    Array.isArray(value) ? value.map(Number).filter((n) => Number.isInteger(n) && n > 0) : undefined;
+  return { users: ids(body.users), parties: ids(body.parties) };
+}
+
+function parseVisibility(raw: unknown): CommentVisibility | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'string' || !isCommentVisibility(raw)) return undefined;
+  return raw;
+}
+
+function parseCommentId(req: Request): number | null {
+  const raw = Array.isArray(req.params.commentId) ? req.params.commentId[0] : req.params.commentId;
+  const parsed = parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+app.get('/api/workspaces/:id/comments', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    const user = await tryGetActingUser(req);
+    res.json({
+      comments: await listComments(workspaceId),
+      // Scoped to the acting user: "mentions waiting for me", not a global count.
+      openMentions: user ? await openMentionCount(workspaceId, user.id) : 0,
+    });
+  } catch (err) {
+    if (!sendCommentError(err, res)) next(err);
+  }
+});
+
+app.post('/api/workspaces/:id/comments', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    const body = (req.body ?? {}) as {
+      body?: unknown;
+      visibility?: unknown;
+      confirmShared?: unknown;
+      mentions?: unknown;
+    };
+
+    // A supplied visibility that is not one of the two is refused rather than
+    // defaulted: silently treating "shared" as Internal would be confusing, and
+    // treating it as Shared would be dangerous.
+    if (body.visibility !== undefined && parseVisibility(body.visibility) === undefined) {
+      res.status(400).json({ error: 'visibility must be "Internal" or "Shared".' });
+      return;
+    }
+
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'No acting user. Seed users before commenting.' });
+      return;
+    }
+
+    const comment = await postComment({
+      workspaceId,
+      body: typeof body.body === 'string' ? body.body : '',
+      visibility: parseVisibility(body.visibility),
+      confirmShared: body.confirmShared === true,
+      author: { kind: 'user', user },
+      mentions: parseMentions(body.mentions),
+    });
+    res.json({ success: true, comment });
+  } catch (err) {
+    if (!sendCommentError(err, res)) next(err);
+  }
+});
+
+app.patch(
+  '/api/workspaces/:id/comments/:commentId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      const commentId = parseCommentId(req);
+      if (workspaceId === null || commentId === null) {
+        res.status(404).json({ error: 'Comment not found' });
+        return;
+      }
+      const body = (req.body ?? {}) as {
+        body?: unknown;
+        visibility?: unknown;
+        confirmShared?: unknown;
+        mentions?: unknown;
+      };
+      const visibility = parseVisibility(body.visibility);
+      if (visibility === undefined) {
+        res.status(400).json({ error: 'visibility must be "Internal" or "Shared".' });
+        return;
+      }
+
+      const user = await tryGetActingUser(req);
+      if (!user) {
+        res.status(401).json({ error: 'No acting user. Seed users before commenting.' });
+        return;
+      }
+
+      const comment = await editComment({
+        workspaceId,
+        commentId,
+        body: typeof body.body === 'string' ? body.body : '',
+        visibility,
+        confirmShared: body.confirmShared === true,
+        user,
+        mentions: parseMentions(body.mentions),
+      });
+      res.json({ success: true, comment });
+    } catch (err) {
+      if (!sendCommentError(err, res)) next(err);
+    }
+  },
+);
+
+app.delete(
+  '/api/workspaces/:id/comments/:commentId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      const commentId = parseCommentId(req);
+      if (workspaceId === null || commentId === null) {
+        res.status(404).json({ error: 'Comment not found' });
+        return;
+      }
+      // 200 with the tombstoned comment rather than 204, so the panel re-renders
+      // from the response instead of reloading the whole thread.
+      const comment = await deleteComment(workspaceId, commentId, await actingActor(req));
+      res.json({ success: true, comment });
+    } catch (err) {
+      if (!sendCommentError(err, res)) next(err);
+    }
+  },
+);
+
+/**
+ * THE AUDIT PATH. The only way to read a superseded or tombstoned revision, and
+ * deliberately internal-only — there is no guest equivalent.
+ */
+app.get(
+  '/api/workspaces/:id/comments/:commentId/history',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      const commentId = parseCommentId(req);
+      if (workspaceId === null || commentId === null) {
+        res.status(404).json({ error: 'Comment not found' });
+        return;
+      }
+      res.json({ revisions: await getCommentHistory(workspaceId, commentId) });
+    } catch (err) {
+      if (!sendCommentError(err, res)) next(err);
+    }
+  },
+);
+
+/** Drives the mention picker AND the share confirmation's "who will read this". */
+app.get(
+  '/api/workspaces/:id/mention-targets',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      if (workspaceId === null) {
+        res.status(404).json({ error: 'Workspace not found' });
+        return;
+      }
+      res.json(await mentionTargets(workspaceId));
+    } catch (err) {
+      if (!sendCommentError(err, res)) next(err);
+    }
+  },
+);
+
+app.post(
+  '/api/workspaces/:id/mentions/ack',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      if (workspaceId === null) {
+        res.status(404).json({ error: 'Workspace not found' });
+        return;
+      }
+      const user = await tryGetActingUser(req);
+      if (!user) {
+        res.status(401).json({ error: 'No acting user.' });
+        return;
+      }
+      res.json({
+        acknowledged: await acknowledgeMentions(workspaceId, user.id, formatActor(user)),
+      });
+    } catch (err) {
+      if (!sendCommentError(err, res)) next(err);
+    }
+  },
+);
+
+/**
+ * A GUEST commenting. The workspace and the party come from the SESSION, never
+ * the body, and the visibility is not accepted at all — a supplied value other
+ * than `Shared` is refused rather than coerced, so a client bug surfaces.
+ */
+app.post('/api/guest/comments', async (req: Request, res: Response) => {
+  let guest: GuestContext;
+  try {
+    guest = await requireGuest(req);
+  } catch (err) {
+    sendGuestDenied(err, req, res, true);
+    return;
+  }
+  try {
+    const body = (req.body ?? {}) as { body?: unknown; visibility?: unknown };
+
+    // Refused, never coerced. Checked here against the literal rather than
+    // through parseVisibility(), which returns undefined for an unrecognised
+    // string — and undefined would then be read as "not supplied" and quietly
+    // become Shared, which is the coercion this rule exists to prevent.
+    if (body.visibility !== undefined && body.visibility !== 'Shared') {
+      res.status(400).json({
+        error: 'A comment posted from outside your organization is always shared.',
+      });
+      return;
+    }
+
+    const comment = await postComment({
+      workspaceId: guest.workspaceId,
+      body: typeof body.body === 'string' ? body.body : '',
+      author: { kind: 'guest', guest },
+    });
+    // The guest gets back only what a guest may see, not the internal shape.
+    res.json({
+      success: true,
+      comment: {
+        id: comment.id,
+        body: comment.body,
+        authorDisplayName: comment.authorDisplayName,
+        authorOrgName: comment.authorPartyOrgName ?? guest.partyOrgName,
+        createdAt: comment.createdAt.toISOString(),
+        edited: false,
+        own: true,
+      },
+    });
+  } catch (err) {
+    if (!sendCommentError(err, res)) {
+      console.error('[Guest/Comment]', err);
       res.status(500).json({ error: 'Something went wrong.' });
     }
   }

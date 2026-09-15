@@ -606,7 +606,7 @@ describe('buildGuestPayload()', () => {
     expect(payload!.workspace.referralState).toBe(ReferralState.SCHEDULED);
   });
 
-  it('still presents the PRD-22 and PRD-23 collections as present and empty', async () => {
+  it('still presents the PRD-23 collection as present and empty', async () => {
     const f = await makeWorkspace();
     const accepted = await acceptInvitation((await invite(f)).token);
     const guest = await requireGuest(withCookie(accepted.sessionToken));
@@ -614,9 +614,41 @@ describe('buildGuestPayload()', () => {
     const payload = await buildGuestPayload(guest);
 
     // Present AND empty: a consumer written against Phase 2a must not break
-    // when PRD-22 and PRD-23 fill them, so the shape is the contract.
-    expect(payload!.sharedComments).toEqual([]);
+    // when PRD-23 fills it, so the shape is the contract.
     expect(payload!.sharedDocuments).toEqual([]);
+  });
+
+  it('carries shared comments and leaves internal ones out of the payload entirely', async () => {
+    // PRD-22 filled sharedComments, so this no longer asserts an empty array.
+    // The filter is in listSharedComments' SQL: an internal comment is not
+    // hidden from this payload, it is never loaded into the process for it.
+    const f = await makeWorkspace();
+    const accepted = await acceptInvitation((await invite(f)).token);
+    const guest = await requireGuest(withCookie(accepted.sessionToken));
+
+    const { postComment } = await import('../../../src/modules/workspace/commentService');
+    await postComment({
+      workspaceId: f.workspaceId,
+      body: 'INTERNAL: the payer is being difficult about this one',
+      author: { kind: 'user', user: actor },
+    });
+    await postComment({
+      workspaceId: f.workspaceId,
+      body: 'Could you send the echo report?',
+      visibility: 'Shared',
+      confirmShared: true,
+      author: { kind: 'user', user: actor },
+    });
+
+    const payload = await buildGuestPayload(guest);
+
+    expect(payload!.sharedComments.map((c) => c.body)).toEqual([
+      'Could you send the echo report?',
+    ]);
+    // Asserted over the whole serialised payload, not just the comment slice:
+    // an internal note copied into any other field fails here too.
+    expect(JSON.stringify(payload)).not.toContain('INTERNAL');
+    expect(JSON.stringify(payload)).not.toContain('payer');
   });
 
   it('offers the guest the assertions their party role actually permits', async () => {

@@ -5,7 +5,7 @@ prev: "[[PRD-21 - Ownership & Assignment]]"
 
 # PRD-22: Referral Conversation (Dual-Visibility)
 
-**Status:** Refined — ready for implementation  
+**Status:** Implemented  
 **Team:** Clinical Workflow & Collaboration  
 **Module:** `workspace/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -226,7 +226,10 @@ timestamp and visibility.
 
 ### As a care coordinator, I want to share a message with the other organization deliberately, so that I never disclose an internal note by accident
 
-**AC6:** Posting or editing to `Shared` without `confirmShared: true` is rejected with `422`.  
+**AC6:** Posting a `Shared` comment, or editing one from `Internal` to `Shared`, without
+`confirmShared: true` is rejected with `422`. Editing a comment that is *already* shared does not
+re-ask: a confirmation on every keystroke-level edit is one people learn to click through, which
+costs more safety than it buys.  
 **AC7:** The confirmation names the party or parties who will be able to read the comment, and says
 whether any of them currently has an active guest.  
 **AC8:** Internal and shared comments are unmistakably different on screen — differing background
@@ -683,3 +686,26 @@ that changed the design most:
   Split into identity and content, with a partial unique index making "exactly one current revision"
   a database invariant — verified emitted and enforced before being written down here, as were both
   check constraints.
+
+**Version:** 1.2 — Implemented. Built as specified at v1.1, with 797 tests across 45 suites and
+144 smoke checks green. Three things implementation settled, the first of them only because the
+smoke check caught it:
+
+- **The share lock compared with `>` and never fired.** Both `comment_revisions.created_at` and
+  `workspace_guests.last_seen_at` are drizzle `mode: 'timestamp'` columns, which store WHOLE
+  SECONDS. A guest who loads the page in the same second as the share reads an identical value, so
+  `lastSeenAt > firstSharedAt` was false and the downgrade went through. Every unit test passed,
+  because each had constructed timestamps a second or more apart; the smoke check, which posts a
+  comment and then fetches the guest page for real, failed on it immediately. Now `>=`: ties lock,
+  which is the safe direction, at the cost of over-locking inside a one-second window.
+- **PRD-22 can put a workspace into `Follow-up-Required`, and only a person can take it out.**
+  An unacknowledged mention makes the `Closed-Confirmed` branch derive `Follow-up-Required` —
+  the branch PRD-18 kept and had never been able to reach. Acknowledging the mention does NOT
+  resolve the workspace again, and neither does `resyncWorkStatus()`: `Follow-up-Required` is in
+  `PROPOSAL_PROTECTED`, so every proposal onto it is declined regardless of who set it, and resync
+  exists to escape a *manual* override rather than a protected status. Clearing a follow-up flag is
+  a person's decision and `setWorkStatus()` is how they make it. Correct, and non-obvious enough to
+  be worth stating: a coordinator will meet it.
+- **`Comment` gained `authorUserId`.** The panel offers the edit control only to the author, which
+  needs the author's id client-side. The rule is still enforced on the server; the field is
+  presentation, not permission.
