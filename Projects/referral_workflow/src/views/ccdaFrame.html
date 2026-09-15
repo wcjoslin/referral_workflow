@@ -1,0 +1,96 @@
+<!--
+  PRD-19 — the C-CDA viewer, as its own document.
+
+  Served into an iframe by the workspace page rather than mounted inline, for a
+  specific reason: Sialia needs Bootstrap's CSS, and loading Bootstrap into the
+  workspace page would restyle every element on it. An iframe is a real CSS
+  boundary, so the vendor stack stays contained.
+
+  The vendor script ORDER matters and is not arbitrary — jQuery, Bootstrap,
+  riot, lodash (re-exported as window.lodash, which sialia.js expects), dragula,
+  then sialia. This is the same chain referralReview.html loads, and the same
+  `new sialia.Sialia()` + `viewer.open({ url })` API. Copied deliberately rather
+  than reinvented: the first attempt at this panel guessed at a `CcdaView.render`
+  API that does not exist and silently fell back to dumping raw XML.
+-->
+<meta charset="utf-8" />
+<title>Referral C-CDA</title>
+<link rel="stylesheet" href="/static/bootstrap/css/bootstrap.min.css" />
+<link rel="stylesheet" href="/static/dragula/dragula.min.css" />
+<link rel="stylesheet" href="/static/ccdaview/sialia.css" />
+<style>
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    background: #fff;
+  }
+  sialia {
+    display: block;
+    width: 100%;
+  }
+  #frameStatus {
+    padding: 24px 16px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 0.9rem;
+    color: #6c757d;
+    text-align: center;
+  }
+  /*
+    No Sialia colour overrides here. referralReview.html carries a block
+    targeting .sialia-nav / .sialia-header / .sialia-section-title, but none of
+    those class names exist in the shipped sialia.css — it is dead CSS. Copying
+    it would have looked like theming while doing nothing. The viewer keeps its
+    own chrome; restyling it means finding the real selectors first.
+  */
+</style>
+
+<div id="frameStatus">Loading document&hellip;</div>
+<sialia></sialia>
+
+<script src="/static/jquery/jquery.min.js"></script>
+<script src="/static/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="/static/riot/riot.js"></script>
+<script src="/static/lodash/lodash.min.js"></script>
+<script>
+  window.lodash = window._;
+</script>
+<script src="/static/dragula/dragula.min.js"></script>
+<script src="/static/ccdaview/sialia.js"></script>
+<script>
+  /*__CCDA_FRAME_DATA__*/
+</script>
+<script>
+  (function () {
+    'use strict';
+
+    var referralId = window.__CCDA_FRAME__.referralId;
+    var status = document.getElementById('frameStatus');
+
+    function fail(message, err) {
+      status.textContent = message;
+      status.style.display = 'block';
+      if (err) console.warn('[CcdaFrame]', err);
+    }
+
+    var viewer;
+    try {
+      viewer = new sialia.Sialia();
+    } catch (err) {
+      fail('The document viewer failed to load.', err);
+      return;
+    }
+
+    try {
+      Promise.resolve(viewer.open({ name: 'referral', url: '/referrals/' + referralId + '/ccda.xml' }))
+        .then(function () {
+          status.style.display = 'none';
+        })
+        .catch(function (err) {
+          fail('This referral document could not be displayed.', err);
+        });
+    } catch (err) {
+      fail('This referral document could not be displayed.', err);
+    }
+  })();
+</script>
