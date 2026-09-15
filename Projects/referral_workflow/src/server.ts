@@ -513,6 +513,47 @@ app.post('/api/workspaces/:id/resync', async (req: Request, res: Response, next:
 });
 
 /**
+ * The C-CDA viewer as its own document, for the workspace page's iframe.
+ *
+ * Separate rather than inline because Sialia needs Bootstrap's CSS, and loading
+ * Bootstrap into the workspace page would restyle the whole page. The iframe is
+ * the CSS boundary.
+ */
+app.get('/referrals/:id/ccda-frame', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const referralId = parseInt(raw, 10);
+    if (!Number.isInteger(referralId) || referralId <= 0) {
+      res.status(404).send('Not found');
+      return;
+    }
+
+    const [referral] = await db
+      .select({ id: referrals.id, rawCcdaXml: referrals.rawCcdaXml })
+      .from(referrals)
+      .where(eq(referrals.id, referralId));
+
+    if (!referral || !referral.rawCcdaXml) {
+      res.status(404).send('No C-CDA on file for this referral.');
+      return;
+    }
+
+    const templatePath = path.join(__dirname, 'views', 'ccdaFrame.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    // No injectNav() — this renders inside an iframe, not as a page.
+    res.setHeader('Content-Type', 'text/html');
+    res.send(
+      template.replace(
+        '/*__CCDA_FRAME_DATA__*/',
+        `window.__CCDA_FRAME__ = ${embedJson({ referralId })};`,
+      ),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * Referral-centric convenience link, so a caller does not need to know the
  * workspace id. Distinct from every existing /referrals/:id/* route.
  */

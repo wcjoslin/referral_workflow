@@ -118,13 +118,26 @@
   .hdr-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
   .hdr-title { font-size: 1.3rem; font-weight: 700; margin: 0 0 3px; }
   .hdr-sub { font-size: 0.82rem; color: var(--color-text-muted); }
+  /*
+    The reason is prose and can run to a paragraph, so it gets its own
+    full-width row. Inside the auto-fit grid below it made one cell tall enough
+    to leave the other six looking like dead space.
+  */
+  .hdr-reason {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--color-border);
+    max-width: 78ch;
+  }
+  .hdr-reason .value { line-height: 1.55; }
   .hdr-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 14px 20px;
-    margin-top: 18px;
-    padding-top: 16px;
+    margin-top: 16px;
+    padding-top: 14px;
     border-top: 1px solid var(--color-border);
+    align-items: start;
   }
 
   .banner { border-radius: 6px; padding: 10px 14px; font-size: 0.85rem; margin-bottom: 14px; }
@@ -231,7 +244,7 @@
     padding: 1px 5px;
     margin-left: auto;
   }
-  #ccdaContainer { width: 100%; min-height: 560px; border: none; }
+  #ccdaContainer { width: 100%; height: 720px; border: none; display: block; background: #fff; }
 </style>
 
 <!--__NAV__-->
@@ -405,8 +418,12 @@
         '</div>' +
       '</div>' +
 
+      '<div class="hdr-reason">' +
+        '<span class="label">Reason for referral</span>' +
+        orEmpty(ref.reasonForReferral, 'None recorded') +
+      '</div>' +
+
       '<div class="hdr-grid">' +
-        field('Reason for referral', ref.reasonForReferral) +
         field('Initiating organization', ref.referrerAddress) +
         field('Receiving department', ref.routingDepartment) +
         field('Owner', ws.ownerDisplayName, 'Unassigned') +
@@ -698,23 +715,12 @@
       return;
     }
     document.getElementById('wsCols').classList.add('with-viewer');
-    panel.innerHTML = '<h2>Referral Document (C-CDA)</h2>' +
-      '<iframe id="ccdaContainer" title="C-CDA document"></iframe>';
-
-    var frame = document.getElementById('ccdaContainer');
-    frame.srcdoc =
-      '<!doctype html><html><head><meta charset="utf-8">' +
-      '<link rel="stylesheet" href="/static/ccdaview/ccdaview.css">' +
-      '</head><body><div id="root"></div>' +
-      '<script src="/static/ccdaview/ccdaview.js"><\/script>' +
-      '<script>' +
-      'fetch("/referrals/' + encodeURIComponent(ref.id) + '/ccda.xml")' +
-      '.then(function(r){return r.text();})' +
-      '.then(function(xml){' +
-      'if (window.CcdaView && window.CcdaView.render) { window.CcdaView.render(document.getElementById("root"), xml); }' +
-      'else { var pre = document.createElement("pre"); pre.style.cssText="white-space:pre-wrap;font-size:11px;padding:12px;"; pre.textContent = xml; document.getElementById("root").appendChild(pre); }' +
-      '}).catch(function(e){ document.getElementById("root").textContent = "Failed to load document."; });' +
-      '<\/script></body></html>';
+    // Sialia is loaded inside the frame, not here \u2014 it needs Bootstrap's CSS,
+    // which would restyle this whole page. The iframe is the CSS boundary.
+    panel.innerHTML =
+      '<h2>Referral Document (C-CDA)</h2>' +
+      '<iframe id="ccdaContainer" title="Referral C-CDA document" src="' +
+        '/referrals/' + encodeURIComponent(ref.id) + '/ccda-frame"></iframe>';
   }
 
   // ── Reserved panels (AC12, AC13) ──────────────────────────────────────────
