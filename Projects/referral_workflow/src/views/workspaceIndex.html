@@ -2,13 +2,17 @@
   PRD-19 — the flat workspace index.
 
   Exists so the "Workspaces" nav entry has a destination and the detail page is
-  reachable (AC15). Deliberately NOT PRD-20's queue view: no tabs, no filters, no
-  queue grouping, no assignment, no allQueuesAccess scoping. PRD-20 may replace
-  this page outright rather than extend it.
+  reachable (PRD-19 AC15). Still NOT PRD-20's queue view: no queue grouping, no
+  tabs over work status, no allQueuesAccess scoping. PRD-20 may replace this page
+  outright rather than extend it.
 
-  The one affordance beyond listing is a client-side text filter, because 100
-  demo rows are unreadable without it — it filters what is already on the page
-  and issues no queries.
+  Two kinds of filtering, and the difference matters:
+
+    - the text box filters rows ALREADY on the page, client-side, issuing no
+      queries. It exists because 100 demo rows are unreadable without it.
+    - the owner toggles (PRD-21) filter SERVER-SIDE via ?owner=, because PRD-20
+      inherits listWorkspaceRows() and a paged list cannot filter in the browser.
+      They are links rather than buttons so the state lives in the URL.
 -->
 <meta charset="utf-8" />
 <title>Workspaces</title>
@@ -118,6 +122,22 @@
   }
   .stat-n { font-size: 1.15rem; font-weight: 700; }
   .stat-l { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); }
+  .toggles { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .toggle {
+    font-size: 0.82rem; padding: 6px 12px; border: 1px solid var(--color-border);
+    border-radius: 16px; background: #fff; text-decoration: none; color: var(--color-text);
+    font-weight: 600;
+  }
+  .toggle:hover { background: #f1f3f5; }
+  .toggle.on { background: var(--color-brand); border-color: var(--color-brand); color: #fff; }
+  .owner-inactive-tag {
+    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    color: #997404; border: 1px solid #997404; border-radius: 3px; padding: 0 3px; margin-left: 5px;
+  }
+  .warn {
+    font-size: 0.8rem; background: var(--color-badge-pending); color: var(--color-badge-pending-text);
+    border-left: 4px solid #ffc107; border-radius: 4px; padding: 9px 12px; margin-bottom: 14px;
+  }
   #filter {
     font-size: 0.85rem; padding: 7px 10px; border: 1px solid var(--color-border);
     border-radius: 4px; min-width: 260px; margin-bottom: 14px;
@@ -135,6 +155,17 @@
   </div>
 
   <div class="stats" id="stats"></div>
+
+  <div id="warn"></div>
+
+  <!--
+    PRD-21: server-side owner filters. Plain links, not JS toggles, so the state
+    is in the URL and survives a reload — and ?owner=me is resolved server-side
+    from the acting user, so the link cannot be shared into showing someone
+    else's work.
+  -->
+  <div class="toggles" id="toggles"></div>
+
   <input id="filter" type="search" placeholder="Filter by patient, department or status&hellip;" />
 
   <div class="card" style="padding:0;overflow-x:auto;">
@@ -163,6 +194,7 @@
   'use strict';
 
   var rows = window.__WORKSPACE_ROWS__ || [];
+  var meta = window.__WORKSPACE_INDEX__ || { ownerFilter: 'any', actingUserName: null };
 
   function esc(str) {
     return String(str == null ? '' : str)
@@ -191,8 +223,29 @@
     });
   }
 
+  var scope = meta.ownerFilter === 'me'
+    ? (meta.actingUserName ? ' owned by ' + meta.actingUserName : ' owned by you')
+    : meta.ownerFilter === 'unassigned' ? ' with no owner' : '';
   document.getElementById('sub').textContent =
-    rows.length + (rows.length === 1 ? ' workspace' : ' workspaces') + ', most recently updated first.';
+    rows.length + (rows.length === 1 ? ' workspace' : ' workspaces') + scope +
+    ', most recently updated first.';
+
+  // An owner filter that silently listed everything would read as "you own all
+  // of this", which is worse than saying the filter could not be applied.
+  if (meta.ownerFilterUnavailable) {
+    document.getElementById('warn').innerHTML =
+      '<div class="warn">No acting user is set, so the <strong>Mine</strong> filter could not be ' +
+      'applied \u2014 every workspace is shown. Seed users, or pick one in the nav.</div>';
+  }
+
+  document.getElementById('toggles').innerHTML = [
+    ['any', '/workspaces', 'All'],
+    ['me', '/workspaces?owner=me', 'Mine'],
+    ['unassigned', '/workspaces?owner=unassigned', 'Unassigned']
+  ].map(function (t) {
+    return '<a class="toggle' + (meta.ownerFilter === t[0] ? ' on' : '') + '" href="' + t[1] + '">' +
+      esc(t[2]) + '</a>';
+  }).join('');
 
   // Counts by work status, in the machine's own order.
   var order = ['Triage', 'In-Progress', 'Waiting-External', 'Waiting-Internal',
@@ -239,7 +292,8 @@
             ? '<span class="manual-mark" title="Set by a person; the protocol mapping will not change it">HELD</span>'
             : '') + '</td>' +
         '<td>' + (r.ownerDisplayName
-          ? esc(r.ownerDisplayName)
+          ? esc(r.ownerDisplayName) +
+            (r.ownerInactive ? '<span class="owner-inactive-tag" title="No longer active">inactive</span>' : '')
           : '<span class="muted">Unassigned</span>') + '</td>' +
         '<td style="white-space:nowrap;color:var(--color-text-muted);">' + esc(fmtDate(r.updatedAt)) + '</td>' +
         '<td style="white-space:nowrap;"><a href="' + href + '">Open →</a></td>' +

@@ -129,8 +129,15 @@
   <div class="stats" id="stats"></div>
   <div class="filter-bar" id="filterBar" style="display:none;">
     <label for="deptFilter">Department:</label>
-    <select id="deptFilter" onchange="applyDeptFilter()">
+    <select id="deptFilter" onchange="applyFilters()">
       <option value="">All Departments</option>
+    </select>
+    <!-- PRD-21 AC12: filter to unowned work, or to the acting user's own. -->
+    <label for="ownerFilter">Owner:</label>
+    <select id="ownerFilter" onchange="applyFilters()">
+      <option value="">Anyone</option>
+      <option value="unassigned">Unassigned</option>
+      <option value="me">Mine</option>
     </select>
   </div>
   <div id="tableWrapper"></div>
@@ -138,6 +145,22 @@
 <script>
   const { items, departments } = window.__DASHBOARD_DATA__;
   const previewCache = {};
+
+  /*
+    AC11: an explicit treatment, never an empty cell. A blank here reads as
+    "no data"; "Unassigned" reads as "nobody has picked this up", which is the
+    fact worth surfacing.
+  */
+  function ownerCell(item) {
+    const o = item.owner;
+    if (!o || o.ownerUserId === null) {
+      return '<span style="color:var(--color-text-muted);font-style:italic;">Unassigned</span>';
+    }
+    const inactive = o.ownerInactive
+      ? '<span style="font-size:0.6rem;font-weight:700;text-transform:uppercase;color:#997404;border:1px solid #997404;border-radius:3px;padding:0 3px;margin-left:5px;">inactive</span>'
+      : '';
+    return esc(o.ownerDisplayName || ('User ' + o.ownerUserId)) + inactive;
+  }
 
   function stateBadge(state) {
     const map = {
@@ -204,7 +227,7 @@
     const loadingRow = document.createElement('tr');
     loadingRow.id = 'preview-' + id;
     loadingRow.className = 'preview-row';
-    loadingRow.innerHTML = '<td colspan="7"><div class="spinner"></div></td>';
+    loadingRow.innerHTML = '<td colspan="8"><div class="spinner"></div></td>';
     dataRow.after(loadingRow);
 
     // Fetch detail data (cached after first load)
@@ -214,12 +237,12 @@
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         previewCache[id] = await resp.json();
       } catch (err) {
-        loadingRow.innerHTML = '<td colspan="7"><div style="padding:16px 20px;color:#842029;font-size:0.88rem;">Failed to load preview. <a href="/referrals/' + id + '/review">Open full view →</a> &middot; <a href="/referrals/' + id + '/workspace">Open workspace →</a></div></td>';
+        loadingRow.innerHTML = '<td colspan="8"><div style="padding:16px 20px;color:#842029;font-size:0.88rem;">Failed to load preview. <a href="/referrals/' + id + '/review">Open full view →</a> &middot; <a href="/referrals/' + id + '/workspace">Open workspace →</a></div></td>';
         return;
       }
     }
 
-    loadingRow.innerHTML = '<td colspan="7">' + renderPreview(previewCache[id]) + '</td>';
+    loadingRow.innerHTML = '<td colspan="8">' + renderPreview(previewCache[id]) + '</td>';
   }
 
   // ── Preview rendering ─────────────────────────────────────────────────────────
@@ -641,7 +664,9 @@
         '<div class="empty"><p>No referrals match the filter.</p></div>';
       return;
     }
-    const rows = filteredItems.map(({ referral: r, patient: p }) => {
+    const rows = filteredItems.map((i) => {
+      const r = i.referral;
+      const p = i.patient;
       const name = `${p.lastName}, ${p.firstName}`;
       const created = r.createdAt ? new Date(typeof r.createdAt === 'number' ? r.createdAt * 1000 : r.createdAt).toLocaleDateString() : '—';
       const priority = r.priorityFlag ? '<span class="priority-flag">⚑</span>' : '';
@@ -655,25 +680,40 @@
         <td>${name} ${priority}</td>
         <td>${deptBadge(r.routingDepartment)}</td>
         <td>${stateBadge(r.state)}${declineLine}</td>
+        <td>${ownerCell(i)}</td>
         <td>${r.reasonForReferral ? r.reasonForReferral.substring(0, 60) + (r.reasonForReferral.length > 60 ? '…' : '') : '—'}</td>
         <td>${created}</td>
       </tr>`;
     }).join('');
     document.getElementById('tableWrapper').innerHTML = `
       <table>
-        <thead><tr><th></th><th>#</th><th>Patient</th><th>Department</th><th>State</th><th>Reason</th><th>Created</th></tr></thead>
+        <thead><tr><th></th><th>#</th><th>Patient</th><th>Department</th><th>State</th><th>Owner</th><th>Reason</th><th>Created</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
   }
 
-  function applyDeptFilter() {
-    const val = document.getElementById('deptFilter').value;
-    if (!val) {
-      renderTable(items);
-    } else {
-      renderTable(items.filter(function(i) { return (i.referral.routingDepartment || 'Unassigned') === val; }));
-    }
+  /*
+    Both filters at once. They used to be one department-only function; an owner
+    filter that reset the department selection would be worse than no filter.
+  */
+  function applyFilters() {
+    const dept = document.getElementById('deptFilter').value;
+    const ownerSel = document.getElementById('ownerFilter');
+    const owner = ownerSel ? ownerSel.value : '';
+    const actingId = window.__DASHBOARD_DATA__.actingUser
+      ? window.__DASHBOARD_DATA__.actingUser.id
+      : null;
+
+    renderTable(items.filter(function (i) {
+      if (dept && (i.referral.routingDepartment || 'Unassigned') !== dept) return false;
+      if (owner === 'unassigned') return !i.owner || i.owner.ownerUserId === null;
+      if (owner === 'me') return !!i.owner && i.owner.ownerUserId === actingId;
+      return true;
+    }));
   }
+
+  /* Kept so any inline handler or bookmarklet still works. */
+  function applyDeptFilter() { applyFilters(); }
 
   // Initial render
   if (items.length === 0) {

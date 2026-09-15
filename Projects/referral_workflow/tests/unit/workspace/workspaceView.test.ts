@@ -433,17 +433,21 @@ describe('buildWorkspacePayload()', () => {
     expect(new Date(payload!.workspace.archivedAt as string).getTime()).not.toBeNaN();
   });
 
-  it('starts every reserved panel switched off, so the shell renders placeholders', async () => {
+  it('switches on the panels that are built and leaves the rest for their PRDs', async () => {
     const workspace = await createWorkspace(insertReferral());
 
     const payload = await buildWorkspacePayload(workspace.id, NOBODY);
 
+    // A slot flips to true exactly when its PRD lands: `owner` did so in PRD-21,
+    // and the remaining four are still placeholders. Asserting the whole object
+    // rather than one key means the next PRD has to come past this test, so a
+    // panel cannot be half-wired — live code behind a flag that says otherwise.
     expect(payload!.slots).toEqual({
+      owner: true,
       conversation: false,
       documents: false,
       activity: false,
       participants: false,
-      owner: false,
     });
   });
 
@@ -457,6 +461,7 @@ describe('buildWorkspacePayload()', () => {
       jobRole: 'coordinator',
       legacyClinicianId: null,
       allQueuesAccess: false,
+      active: true,
     };
 
     const payload = await buildWorkspacePayload(workspace.id, acting);

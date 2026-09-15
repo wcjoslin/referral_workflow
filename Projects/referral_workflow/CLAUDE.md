@@ -22,12 +22,19 @@ DATABASE_URL=./smoke.db npm run db:migrate
 DATABASE_URL=./smoke.db npm run smoke
 ```
 
+`config.ts` requires the IMAP/SMTP vars at import time, so an unconfigured shell
+fails before the first check with `Missing required environment variable`. None
+of them is reachable — nothing here makes an outbound connection — so any
+placeholder works; the CI job's `env:` block is the reference set.
+
 Boots the real server against a throwaway database and reads the bytes a browser
 would receive: the workspace pages render, the C-CDA viewer is wired to the real
-Sialia frame rather than a stand-in, hostile patient data stays escaped, and
-unknown ids 404. Added because two defects shipped through a green unit suite —
-a viewer panel calling an API that does not exist, and page data embedded without
-escaping. Run it before pushing anything that touches a view or a page route.
+Sialia frame rather than a stand-in, hostile patient data stays escaped, the
+ownership endpoint refuses an ambiguous body and a losing claim, the `?owner=`
+index filters resolve per-user server-side, and unknown ids 404. Added because
+two defects shipped through a green unit suite — a viewer panel calling an API
+that does not exist, and page data embedded without escaping. Run it before
+pushing anything that touches a view or a page route.
 
 **CI** lives at `.github/workflows/ci.yml` in the *repository root* (one level
 above this directory) and runs build, test, lint budget and smoke on every push

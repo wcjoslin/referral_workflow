@@ -5,7 +5,7 @@ prev: "[[PRD-20 - Shared Queues & Queue View]]"
 
 # PRD-21: Ownership & Assignment
 
-**Status:** Ready for Dev  
+**Status:** Implemented  
 **Team:** Clinical Workflow & Collaboration  
 **Module:** `workspace/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -448,3 +448,18 @@ predated all three, so several criteria pointed at infrastructure that does not 
   a test that cannot fail.
 - Actor convention divergence stated deliberately: this service takes `ActingUser` because
   `claimOwnership()` needs the actor's id, not just an audit label.
+
+**Version:** 1.2 — Implemented. Built as specified at v1.1; four notes on what implementation
+settled that the spec left to it:
+
+- **`assignmentService.ts` is the only writer of `owner_user_id`.** Recorded in the module header
+  rather than left as a convention, because it is what makes "no ownership change without an event"
+  true by construction.
+- **The ownership panel sits in the main column, not the side column.** The side column stacks after
+  the main one at narrow widths, which put the primary action of this PRD roughly 1100px down the
+  page. PRD-19's slot layout was the wrong place for it.
+- **`hasOpenItems` is still false in Phase 1**, so a release never blocks on open work. Unchanged
+  from PRD-18's stated Phase-1 behaviour; noted here because AC5 reads as though it could.
+- **The index filters are plain links, not JS toggles**, so `?owner=` survives a reload and a
+  bookmark. `me` is resolved server-side and never reaches the query layer as a string, so a shared
+  link cannot be made to show somebody else's work.

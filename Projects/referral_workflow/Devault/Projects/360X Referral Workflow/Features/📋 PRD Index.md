@@ -267,7 +267,7 @@ The logical order for PRD development:
 - Ships the PRD-17 v1.2 `active` amendment it depends on
 - **Prerequisite:** PRD-17 (incl. v1.2), PRD-19
 
-**Status:** 📋 Ready for Dev (refined 2026-09-15, v1.1)
+**Status:** ✅ Shipped (2026-09-15). Doc at v1.2.
 **Module:** `workspace/`
 
 ---
@@ -431,11 +431,11 @@ The logical order for PRD development:
 | [[PRD-14 - Analytics Agent (Phase 2)\|14b]] | Analytics Agent (Phase 2) | 🔧 | SQL dashboard, KPI charts, seed data | `analytics/` |
 | [[PRD-15 - Analytics Agent AI\|15]] | Analytics Agent AI | 📋 | Anomaly detection, Claude pattern analysis, findings UI | `analytics/` |
 | [[PRD-16 - 360X Referral Collaboration Workspace\|16]] | 360X Collaboration Workspace (Epic) | 📋 | Persistent referral workspace; 360X enablement layer | `workspace/` |
-| [[PRD-17 - Identity & Acting User\|17]] | Identity & Acting User | 📋 Ready | Users table, acting-user picker, `user:<id>` actors | `workspace/` |
-| [[PRD-18 - Workspace Entity & Dual Status\|18]] | Workspace Entity & Dual Status | 📋 Ready | Workspace row, work status machine, closure conflict | `workspace/`, `state/` |
-| [[PRD-19 - Workspace Shell\|19]] | Workspace Shell | 📋 | `/workspaces/:id`, header, dual badges, panel slots | `workspace/`, `views/` |
+| [[PRD-17 - Identity & Acting User\|17]] | Identity & Acting User | ✅ | Users table, acting-user picker, `user:<id>` actors | `workspace/` |
+| [[PRD-18 - Workspace Entity & Dual Status\|18]] | Workspace Entity & Dual Status | ✅ | Workspace row, work status machine, closure conflict | `workspace/`, `state/` |
+| [[PRD-19 - Workspace Shell\|19]] | Workspace Shell | ✅ | `/workspaces/:id`, header, dual badges, panel slots | `workspace/`, `views/` |
 | [[PRD-20 - Shared Queues & Queue View\|20]] | Shared Queues & Queue View | 📋 | Queue entity, membership scope, four-tab queue view | `workspace/`, `views/` |
-| [[PRD-21 - Ownership & Assignment\|21]] | Ownership & Assignment | 📋 | Claim, assign, release, My work, audited | `workspace/` |
+| [[PRD-21 - Ownership & Assignment\|21]] | Ownership & Assignment | ✅ | Claim, assign, release, My work, audited | `workspace/` |
 | [[PRD-22 - Referral Conversation\|22]] | Referral Conversation | 📋 | One thread, Internal/Shared visibility, versioned | `workspace/` |
 | [[PRD-23 - Document Collection\|23]] | Document Collection | 📋 | Index over existing artifacts, delivery + access evidence | `workspace/` |
 | [[PRD-24 - Parties & Participants\|24]] | Parties & Participants | 📋 | Organizations + Direct address + protocol mode; internal roles | `workspace/` |

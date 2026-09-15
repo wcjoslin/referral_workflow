@@ -56,9 +56,43 @@ function check(name: string, ok: boolean, detail = ''): void {
   console.log(`  ${ok ? '✓' : '✗'} ${name}${detail && !ok ? ` — ${detail}` : ''}`);
 }
 
-async function get(pathname: string): Promise<{ status: number; body: string }> {
-  const res = await fetch(`${BASE}${pathname}`);
+async function get(pathname: string, actingUserId?: number): Promise<{ status: number; body: string }> {
+  const res = await fetch(`${BASE}${pathname}`, {
+    headers: actingUserId === undefined ? {} : { cookie: `actingUserId=${actingUserId}` },
+  });
   return { status: res.status, body: await res.text() };
+}
+
+async function post(
+  pathname: string,
+  body: unknown,
+  actingUserId?: number,
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  const res = await fetch(`${BASE}${pathname}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(actingUserId === undefined ? {} : { cookie: `actingUserId=${actingUserId}` }),
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    parsed = { _unparseable: text.slice(0, 200) };
+  }
+  return { status: res.status, json: parsed };
+}
+
+/**
+ * How many workspaces the index would list. The rows are embedded as JSON and
+ * rendered client-side, so counting the one key that only appears in that array
+ * is the honest way to assert a server-side filter from the page source.
+ */
+function rowCount(body: string): number {
+  return body.split('"workspaceId":').length - 1;
 }
 
 async function main(): Promise<void> {
@@ -114,6 +148,18 @@ async function main(): Promise<void> {
   const wsWithout = await getWorkspaceByReferralId(noCcda.id);
   if (!wsWith || !wsWithout) throw new Error('backfill did not create the fixture workspaces');
 
+  // PRD-21 needs real people to own things. Two are enough: `me` is the default
+  // acting user (first active id, which is what an absent cookie resolves to)
+  // and `other` is somebody else, so "mine" can be shown to be per-user rather
+  // than just non-empty.
+  const { seedUsers } = await import('../src/modules/workspace/userRoster');
+  const { listUsers } = await import('../src/modules/workspace/identityService');
+  await seedUsers();
+  const roster = await listUsers();
+  if (roster.length < 2) throw new Error('seedUsers did not produce a usable roster');
+  const me = roster[0];
+  const other = roster[1];
+
   // ── Boot ──────────────────────────────────────────────────────────────────
   const { startServer } = await import('../src/server');
   startServer();
@@ -146,8 +192,8 @@ async function main(): Promise<void> {
     detail.body.includes('badge badge-') && detail.body.includes('ws-chip'),
   );
   check(
-    'detail reserves the later panels rather than omitting them',
-    ['PRD-21', 'PRD-22', 'PRD-23', 'PRD-24', 'PRD-25'].every((p) => detail.body.includes(p)),
+    'detail reserves the still-unbuilt panels rather than omitting them',
+    ['PRD-22', 'PRD-23', 'PRD-24', 'PRD-25'].every((p) => detail.body.includes(p)),
   );
 
   // ── The C-CDA viewer: the defect this check exists for ────────────────────
@@ -210,10 +256,144 @@ async function main(): Promise<void> {
     'the frame served a document that does not exist',
   );
 
+  // ── Ownership (PRD-21) ────────────────────────────────────────────────────
+  //
+  // This section MUTATES the fixtures, in this order, and the row counts below
+  // depend on the end state: wsWith ends up owned by `other`, wsWithout stays
+  // unassigned. Any check inserted here has to keep that true.
+  check(
+    'the owner slot is live, not a PRD-21 placeholder',
+    detail.body.includes('"owner":true'),
+    'slots.owner was not true — the page would render the coming-soon card',
+  );
+  check(
+    'the owner panel posts to the ownership endpoint',
+    detail.body.includes('/owner') && detail.body.includes('renderOwner'),
+  );
+
+  // The body is a three-way discrimination because the PRD's first draft encoded
+  // release as `ownerUserId: null`, which made a request that forgot its payload
+  // silently unassign the workspace. These two checks are that defect's guard.
+  const emptyBody = await post(`/api/workspaces/${wsWith.id}/owner`, {});
+  check(
+    'an empty owner body is refused rather than read as a release',
+    emptyBody.status === 400,
+    `status ${emptyBody.status}`,
+  );
+  const twoIntents = await post(`/api/workspaces/${wsWith.id}/owner`, { self: true, release: true });
+  check('two intents at once are refused', twoIntents.status === 400, `status ${twoIntents.status}`);
+  const unknownOwner = await post(`/api/workspaces/${wsWith.id}/owner`, { ownerUserId: 999999 });
+  check('an unknown assignee is refused', unknownOwner.status === 400, `status ${unknownOwner.status}`);
+
+  const claimed = await post(`/api/workspaces/${wsWith.id}/owner`, { self: true });
+  check(
+    'a claim assigns the acting user',
+    claimed.status === 200 && claimed.json.ownerUserId === me.id,
+    `status ${claimed.status}, owner ${String(claimed.json.ownerUserId)}`,
+  );
+  const stolen = await post(`/api/workspaces/${wsWith.id}/owner`, { self: true }, other.id);
+  check(
+    'a second claim 409s instead of stealing, and names the holder',
+    stolen.status === 409 && stolen.json.currentOwnerUserId === me.id,
+    `status ${stolen.status}, holder ${String(stolen.json.currentOwnerUserId)}`,
+  );
+
+  // wsWith is Waiting-External (backfilled from Scheduled), so it is past Triage
+  // and releasing it is a decision that needs explaining.
+  const bareRelease = await post(`/api/workspaces/${wsWith.id}/owner`, { release: true });
+  check(
+    'release without a reason is refused once work has started',
+    bareRelease.status === 422,
+    `status ${bareRelease.status}`,
+  );
+  const released = await post(`/api/workspaces/${wsWith.id}/owner`, {
+    release: true,
+    reason: 'Handing off <b>before</b> leave',
+  });
+  check(
+    'release with a reason clears the owner',
+    released.status === 200 && released.json.ownerUserId === null,
+    `status ${released.status}, owner ${String(released.json.ownerUserId)}`,
+  );
+
+  const assigned = await post(`/api/workspaces/${wsWith.id}/owner`, { ownerUserId: other.id });
+  check(
+    'assignment hands it to somebody else',
+    assigned.status === 200 && assigned.json.ownerUserId === other.id,
+    `status ${assigned.status}, owner ${String(assigned.json.ownerUserId)}`,
+  );
+  const reDetail = await get(`/workspaces/${wsWith.id}`);
+  check(
+    'the detail payload then names the new owner',
+    reDetail.body.includes(`"ownerUserId":${other.id}`) && reDetail.body.includes('"ownerInactive":false'),
+    'the page would render Unassigned for a workspace that has an owner',
+  );
+
+  // ── My work ───────────────────────────────────────────────────────────────
+  const mineApi = await get('/api/my-work', other.id);
+  check('GET /api/my-work returns 200', mineApi.status === 200, `status ${mineApi.status}`);
+  check(
+    'my-work lists what the acting user owns',
+    mineApi.body.includes(`"workspaceId":${wsWith.id}`),
+    'the owned workspace is missing from my-work',
+  );
+  const spoofed = await get(`/api/my-work?userId=${other.id}`, me.id);
+  check(
+    'my-work takes no user id from the caller',
+    !spoofed.body.includes(`"workspaceId":${wsWith.id}`),
+    'a query parameter changed whose work was returned',
+  );
+
+  // ── Index owner filters, resolved server-side ─────────────────────────────
+  const allRows = await get('/workspaces');
+  const unassignedRows = await get('/workspaces?owner=unassigned');
+  const otherMine = await get('/workspaces?owner=me', other.id);
+  const myMine = await get('/workspaces?owner=me', me.id);
+  check('the unfiltered index lists both workspaces', rowCount(allRows.body) === 2, `${rowCount(allRows.body)} rows`);
+  check(
+    '?owner=unassigned lists only the one with no owner',
+    rowCount(unassignedRows.body) === 1 && unassignedRows.body.includes(`"workspaceId":${wsWithout.id}`),
+    `${rowCount(unassignedRows.body)} rows`,
+  );
+  check(
+    '?owner=me lists the owner\'s own work',
+    rowCount(otherMine.body) === 1 && otherMine.body.includes(`"workspaceId":${wsWith.id}`),
+    `${rowCount(otherMine.body)} rows`,
+  );
+  check(
+    'and shows somebody else nothing — the filter is per-user, not just non-empty',
+    rowCount(myMine.body) === 0,
+    `${rowCount(myMine.body)} rows for a user who owns nothing`,
+  );
+  check(
+    'the index reports which filter is active',
+    unassignedRows.body.includes('"ownerFilter":"unassigned"') &&
+      otherMine.body.includes('"ownerFilter":"me"') &&
+      allRows.body.includes('"ownerFilter":"any"'),
+  );
+  check(
+    'the index offers all three filters as links',
+    ['href="/workspaces"', "'/workspaces?owner=me'", "'/workspaces?owner=unassigned'"].every((l) =>
+      allRows.body.includes(l),
+    ),
+  );
+
+  // ── The dashboard carries the owner too ───────────────────────────────────
+  const dashboard = await get('/');
+  check('the dashboard shows an Owner column', dashboard.body.includes('<th>Owner</th>'));
+  check('the dashboard offers an owner filter', dashboard.body.includes('ownerFilter'));
+  check(
+    'the dashboard payload carries the owner it renders',
+    dashboard.body.includes(`"ownerUserId":${other.id}`),
+    'the Owner column would be empty for a workspace that has an owner',
+  );
+
   // ── Escaping: the other defect that shipped ───────────────────────────────
   const pages: [string, string][] = [
-    ['/', (await get('/')).body],
+    ['/', dashboard.body],
     ['/workspaces', index.body],
+    ['/workspaces?owner=unassigned', unassignedRows.body],
+    ['/workspaces?owner=me', otherMine.body],
     [`/workspaces/${wsWith.id}`, detail.body],
     [`/workspaces/${wsWithout.id}`, plain.body],
     [`/referrals/${withCcda.id}/review`, (await get(`/referrals/${withCcda.id}/review`)).body],
