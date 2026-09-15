@@ -132,16 +132,19 @@ per-party attribute resolved at send time, never baked into a stored artifact. M
 Mode B is a configuration change plus credential storage, and credential storage is deliberately out
 of scope here.
 
-### Known issues for refinement — Direct address cardinality and sender identity
+### Known issues for refinement — sender identity
 
-Three gaps, all stemming from this PRD assuming a party has exactly one Direct address. A party can
-hold an organizational intake address, departmental addresses and per-clinician addresses at once.
+Address cardinality was the third gap here and is now **resolved in PRD-24 v1.1**: a party holds a
+canonical intake address on `workspace_parties.direct_address` plus every observed address in
+`party_addresses`. Two sender-identity gaps remain, and are this PRD's own to close when it is
+refined.
 
-1. **Send-to routing is unspecified.** This PRD says an artifact is "addressed to the other party's
-   Direct address" — singular. With several, it needs a rule. Proposed: reply to the address the
-   inbound message actually arrived from, falling back to the party's designated intake address, and
-   recorded on the assertion so the audit trail names where it went. Depends on PRD-24 resolving the
-   cardinality first.
+1. **Send-to routing — resolved, and stated here so this PRD inherits it rather than re-deciding.**
+   Reply to the address the inbound message actually arrived from, falling back to the party's
+   canonical intake address, and record the chosen address on the assertion so the audit trail names
+   where it went. Note that `findPartyByDirectAddress()` can resolve a party by *domain* alone; a
+   party matched that way has no confirmed reply address, so routing falls back to intake and the
+   assertion records `matchedOn: 'domain'` rather than implying the address was verified.
 2. **Sender identity is configurable per organization**, and this PRD does not yet branch on it.
    Proposed `config.workspace.senderIdentityMode: 'individual' | 'organization'`. Under
    `individual`, the acting internal user's own `users.direct_address` (PRD-17) is the

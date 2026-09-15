@@ -275,13 +275,15 @@ The logical order for PRD development:
 ### 24. **[[PRD-24 - Parties & Participants|PRD-24: Parties & Participants]]** 📋
 **Who is involved on each side** — and the prerequisite for guest access and the protocol gateway.
 
-- `workspace_parties`: organization, Direct address, party role, protocol mode
+- `workspace_parties`: organization, canonical intake Direct address, party role, protocol mode
+- `party_addresses`: every address observed from a party, so one org's several addresses resolve to one
 - `workspace_participants`: internal staff as Manager / Collaborator / Viewer
 - Protocol mode resolution: `native-360x`, `workspace-mediated`, `local-only`
 - A party is never a user; the two models stay structurally separate
+- Settles the Direct address cardinality question the epic left open for PRD-24/29/30
 - **Prerequisite:** PRD-19
 
-**Status:** 📋 Drafting
+**Status:** 📋 Ready for Dev (refined 2026-09-15, v1.1)
 **Module:** `workspace/`
 
 ---
