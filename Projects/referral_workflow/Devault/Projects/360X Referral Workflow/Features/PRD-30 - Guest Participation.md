@@ -5,7 +5,7 @@ prev: "[[PRD-29 - 360X Protocol Gateway]]"
 
 # PRD-30: Guest Participation & Secure Invitations
 
-**Status:** Drafting  
+**Status:** Ready for Dev — Phase 2a  
 **Team:** Clinical Workflow & Collaboration  
 **Module:** `workspace/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -53,16 +53,31 @@ The primary goal of this feature is to:
 
 ### Scope
 
-**In Scope:**
+**PHASED, because three of this PRD's four content areas belong to PRDs that do not exist.** Shared
+comments are PRD-22, shared documents are PRD-23 and assertions are PRD-29; none is built. Rather
+than stub three subsystems, the security-critical machinery ships first and the content areas are
+wired as each PRD lands. The split is explicit so a reader can tell a deferral from an omission.
+
+**In Scope — Phase 2a (ships now):**
 - Invitations: create, deliver by email, accept, expire, revoke, re-issue
 - A guest identity distinct from `users`, scoped to one workspace and bound to one party
-- A guest workspace view: header, protocol timeline, shared comments, shared documents, available
-  assertions
-- Guest actions: post shared comments, upload documents, submit assertions (through PRD-29)
-- Access enforcement: a guest request can only ever resolve to its own workspace, and only to
-  shared-visibility material
-- Audit of guest invitation, acceptance, every action and every document view
-- Expiry and revocation taking effect immediately, including mid-session
+- A guest workspace view of what exists today: header, patient, both organizations, the protocol
+  timeline, and the guest's own party and protocol mode
+- **The single guard.** Every guest route resolves through `requireGuest()`; no guest route accepts a
+  workspace id from the client
+- Access enforcement, expiry and revocation checked per request, taking effect mid-session
+- Audit of invitation, re-issue, revocation, acceptance and denial
+- Internal routes rejecting a guest session cookie
+
+**In Scope — Phase 2b (wired when its prerequisite lands):**
+- Shared comments and posting one — **PRD-22**
+- Shared documents, upload, and the per-view audit event (AC10) — **PRD-23**
+- Available assertions and submitting one — **PRD-29**
+- The guest-facing activity feed (AC12) — **PRD-25**
+
+`buildGuestPayload()` returns these as empty collections in 2a, with the fields present so the shape
+does not change when they are filled. A test asserts they are empty *and* present, so 2b is a wiring
+change rather than a shape change.
 
 **Out of Scope:**
 - Passwords, SSO, guest self-registration, guest profile management
@@ -95,20 +110,24 @@ tokenized link, the patient's name, the referring organization, and an expiry da
 documents, and the assertions available to their party role — and nothing else.  
 **AC6:** The guest view contains no internal comment, work status, owner, queue, participant, or
 other-patient data — asserted by inspecting the served payload, not by CSS.  
-**AC7:** A guest can post a comment, and it is created with `Shared` visibility with no option to
-choose `Internal`.  
-**AC8:** A guest can upload a document, and it is created with `Shared` visibility and never
-transmitted until 360X context is attached to it.  
-**AC9:** A guest can submit an assertion permitted for their party role, and it flows through the
-PRD-29 gateway identically to a licensed user's assertion.
+**AC7 (Phase 2b — PRD-22):** A guest can post a comment, and it is created with `Shared`
+visibility with no option to choose `Internal`. In 2a the endpoint does not exist; the payload
+carries `sharedComments: []` so the field is real before the feature is.  
+**AC8 (Phase 2b — PRD-23):** A guest can upload a document, created `Shared` and never
+transmitted until 360X context is attached.  
+**AC9 (Phase 2b — PRD-29):** A guest can submit an assertion permitted for their party role,
+flowing through the gateway identically to a licensed user's.
 
 ### As a compliance reviewer, I want every external access to PHI recorded so that I can answer who saw what
 
-**AC10:** Every guest document view writes an audit event naming the guest, the party, the document
-and the time.  
-**AC11:** Every guest action records the guest, the party they acted for, and the invitation used.  
-**AC12:** The workspace activity feed distinguishes guest actions from internal actions visibly, and
-the activity feed shown *to* the guest omits internal events.
+**AC10 (Phase 2b — PRD-23):** Every guest document view writes an audit event naming the guest,
+the party, the document and the time. There are no documents to view in 2a.  
+**AC11:** Every guest action records the guest, the party they acted for, and the invitation used.
+This holds in 2a for the actions 2a has — acceptance and denied access — and is satisfied by
+`formatGuestActor()` plus the invitation id in the event metadata, so 2b's actions inherit it.  
+**AC12 (Phase 2b — PRD-25):** The workspace activity feed distinguishes guest actions from
+internal ones, and the feed shown *to* the guest omits internal events. 2a ships the `guest:<id>`
+actor prefix the feed will resolve, so the events are already distinguishable in the log.
 
 ### As a care coordinator, I want to cut off access when the referral is done or the invitation was a mistake, so that access does not outlive its purpose
 
@@ -145,6 +164,27 @@ not served.
 
 ### Engineering Constraints
 
+- **THE APPLICATION HAS NO AUTHENTICATION ON INTERNAL ROUTES, AND THIS PRD IS WHAT MAKES THAT
+  DANGEROUS.** `tryGetActingUser()` reads the `actingUserId` cookie and, when it is absent,
+  *falls back to `getDefaultActingUser()`* — the first active user. So any unauthenticated request
+  to `/workspaces/:id`, `/api/workspaces/:id` or the dashboard is served as a real staff member.
+  PRD-17 recorded that cookie as a simulation rather than a credential, which was defensible while
+  every user was internal staff on localhost.
+
+  This PRD hands a URL to an external organization. A guest who follows their invitation link and
+  then edits the path to `/workspaces/3` receives the full internal view of a different patient —
+  owner, work status, internal fields and all. The guest guard below protects guest routes; **nothing
+  protects internal routes from guests.**
+
+  What this PRD does about it, which is a mitigation and not a fix:
+  - Internal page and API routes **reject any request carrying a guest session cookie**, closing the
+    specific path this PRD opens.
+  - The guest session cookie is `HttpOnly`, unlike the acting-user cookie, which is deliberately
+    readable by client script.
+
+  What it does not do: make internal routes authenticated. That is a real gate on deploying guest
+  access anywhere reachable from the internet, and it is PRD-20's boundary to build. Recorded here,
+  in this PRD, because this is the PRD that changes the threat model.
 - **One guard, one scope.** Every guest route goes through a single `requireGuest()` middleware that
   resolves the token to one `(workspaceId, partyId)` and attaches it to the request. No guest handler
   reads a workspace id from the path or body. This is the single most important constraint in the PRD;
@@ -163,16 +203,31 @@ not served.
   visibility is not a client choice for a guest.
 - Invitation email content must not include clinical detail beyond the patient name and referring
   organization; the referral content lives behind the link, not in the mail.
-- **Known issue for refinement — an invitation may target a named individual.** This PRD invites
-  "a party" at a single `recipientEmail`. PRD-24 v1.1 settled the underlying model: a party has a
-  canonical intake address plus a `party_addresses` row per address observed from it, so the
-  individuals at a party are now *enumerable* rather than hypothetical — which makes this question
-  concrete instead of theoretical. Still to resolve when this PRD is refined: whether
-  `workspace_guests` binds to a party alone or to a party plus a specific `party_addresses` row, what
-  the audit record names when several people at one party hold separate invitations, and whether
-  revoking one revokes the others. The one-workspace scoping rule is unaffected either way.
-- Rate limiting is out of scope but the absence must be documented as a production gap in the PRD's
-  own engineering constraints, so it is not mistaken for a completed control.
+- **Guest binding — decided: party-scoped access, per-invitation identity.** A guest row binds to a
+  `(workspaceId, partyId)` pair and carries **no foreign key to `party_addresses`**. The reasoning:
+  what a guest may see is decided by which *organization* they represent, so the party is the access
+  scope, and adding an address FK would contribute nothing to that decision while implying the
+  address had been verified — which PRD-24 may only have *inferred* from a domain match
+  (`matchedOn: 'domain'`).
+
+  Identity and audit live on the invitation instead. Each invitation is its own row with its own
+  recipient email, token, expiry and audit trail, so several people at one party hold independent
+  invitations; revoking one leaves the others working, and every guest action names the invitation it
+  was taken under. The invited email need not be one of the party's observed addresses, which is the
+  normal case for a first invitation and would have forced an awkward choice under an address FK.
+- **No rate limiting, and none is faked.** There is no rate-limiting middleware anywhere in this
+  codebase, so a token-guessing attempt against `GET /guest/:token` is unthrottled. The 256-bit
+  token makes guessing impractical rather than merely slow, which is why this is a gap and not a
+  hole — but it is a gap, and it belongs on the same deployment gate as the authentication finding
+  above.
+- **The session cookie is `SameSite=Lax`, not `Strict`.** Strict would block the cookie on a
+  top-level navigation from outside the site, so a guest reopening a bookmarked
+  `/guest/workspace` would appear signed out. Lax still refuses cross-site POSTs, which is the
+  attack that matters here.
+- **No shared mail helper exists.** `nodemailer.createTransport` is constructed inline in
+  `prd03/schedulingService.ts`, `prd04/consultNoteService.ts`, `prd05/encounterService.ts` and
+  `prd01/mdnService.ts`. Invitation delivery is a fifth caller; extract a helper rather than paste a
+  fifth copy.
 
 ### Data Models
 
@@ -281,9 +336,23 @@ export interface GuestWorkspacePayload {
 Note the absence: no `workStatus`, no `ownerUserId`, no `queueId`, no `nextAction`, no participants,
 no internal comments, no `exceptionReason`. That absence is the security control.
 
-Migration: `0019_add_guest_participation.sql`.
-Config: `config.workspace.guestInvitationExpiryHours` (default 336 — 14 days) and
-`config.workspace.guestSessionExpiryHours` (default 24).
+In Phase 2a `sharedComments`, `sharedDocuments` and `availableAssertions` are always `[]` — present
+in the shape, empty in fact, so PRD-22/23/29 fill them without changing the contract. Deliberately
+NOT omitted: a consumer written against 2a would otherwise break when they appear.
+
+**The message thread is deliberately not in this payload.** `referral_messages` holds the Direct
+messages exchanged between the two organizations, and it is tempting to show the guest "their" half.
+It is excluded because the rows carry `content_xml`, `content_hl7` and `decline_reason` — the raw
+payloads — and because filtering a mixed-direction table down to what one party may see is exactly
+the "omit, do not hide" mistake this PRD forbids. If a guest-visible exchange history is wanted, it
+is PRD-25's feed, built for the purpose.
+
+Migration: `0014_add_guest_participation.sql` — 0014 confirmed next free (0013 is PRD-24). The
+`0019` in the first draft was indicative, as the epic notes for every unrefined child.
+Config: a new `config.workspace` section — there is none today — with
+`guestInvitationExpiryHours` (default 336, 14 days) and `guestSessionExpiryHours` (default 24), plus
+`publicBaseUrl` (default `http://localhost:${PORT}`) because the invitation URL has to be absolute
+and nothing in `config.ts` currently knows the app's external address.
 
 Audit events: `workspace.guest_invited`, `workspace.guest_reissued`, `workspace.guest_revoked`,
 `workspace.guest_accepted`, `workspace.guest_action`, `workspace.guest_document_viewed`,
@@ -374,8 +443,13 @@ from the guest context, never from the request body.
 **Security Tests:**
 - No raw token in any log line, audit metadata or error response
 - A guest session cookie from workspace A cannot read workspace B by any route
-- The guest payload is constructed, not filtered — verified by a test that adds a new internal field
-  to the internal payload and asserts it does not appear in the guest payload
+- The guest payload is constructed, not filtered — asserted by comparing the payload's key set
+  against an explicit allow-list, so a field added to the internal payload cannot leak in. Stronger
+  than naming forbidden fields: it fails for fields nobody thought of.
+- An internal route carrying a guest session cookie is refused (the mitigation for the
+  authentication finding above), asserted on both a page route and an API route
+- The invitation token is 256 bits from `crypto.randomBytes`, and only its SHA-256 hash reaches the
+  database — asserted by querying the row after creation and matching the hash, never the token
 
 **Regression:**
 - All internal routes reject guest session cookies; internal tests unaffected
@@ -411,5 +485,45 @@ from the guest context, never from the request body.
 ## History
 
 **Created:** 2026-09-14  
-**Last Updated:** 2026-09-14  
-**Version:** 1.0
+**Last Updated:** 2026-09-15  
+**Version:** 1.0 — first draft.
+
+**Version:** 1.1 — Ready for Dev, split into Phase 2a and 2b, after a codebase pass against the
+shipped PRD-17/18/19/21/24.
+
+**The finding that matters most is not in this PRD's own subject matter.** The application has no
+authentication on internal routes: `tryGetActingUser()` falls back to the first active user when no
+cookie is present, so an unauthenticated request to `/workspaces/:id` is served as real staff. That
+was a documented simulation while every user was internal. This PRD hands a URL to an external
+organization, which turns it into a PHI exposure — a guest can edit the path and read another
+patient's workspace. The PRD now opens with it, ships the proportionate mitigation (internal routes
+refuse a guest session cookie; the guest cookie is `HttpOnly`), and states plainly that the real fix
+is PRD-20's boundary and a gate on deploying guest access anywhere public.
+
+**Three of four content areas had nothing behind them.** Shared comments (PRD-22), shared documents
+(PRD-23) and assertions (PRD-29) are all unbuilt, and with them AC7–AC10 and AC12. Rather than stub
+three subsystems, the scope is split: 2a ships the invitation lifecycle, the guest identity, the
+single guard and a view of what exists, with the three collections present-but-empty in the payload
+so 2b is a wiring change and not a shape change. Each deferred AC now names the PRD it waits on.
+
+**Guest binding resolved: party-scoped access, per-invitation identity.** No FK to
+`party_addresses` — the party is the access scope, and an address FK would imply verification PRD-24
+may only have inferred from a domain match. Identity, expiry and audit live on the invitation, so
+several people at one party hold independent invitations and revoking one leaves the others alone.
+
+**Corrections and additions from the codebase pass:**
+
+- **Migration is 0014, not 0019.** The draft's number was indicative.
+- **`config.workspace` does not exist** and has to be created; it also needs `publicBaseUrl`, since
+  nothing in `config.ts` knows the app's external address and an invitation URL must be absolute.
+- **There is no shared mail helper.** `nodemailer.createTransport` is inline in four services;
+  invitation delivery extracts a helper rather than adding a fifth copy.
+- **There is no rate-limiting middleware anywhere**, so token guessing is unthrottled. The 256-bit
+  token is what makes that impractical; the gap is recorded on the same deployment gate.
+- **`SameSite=Lax`, not `Strict`**, with the reason stated — Strict signs a guest out of their own
+  bookmark.
+- **The message thread is explicitly excluded** from the guest payload, with the reason: the rows
+  carry raw C-CDA and HL7 payloads and decline reasons, and filtering a mixed-direction table is the
+  "omit, do not hide" mistake this PRD forbids.
+- **The constructed-not-filtered test is now an allow-list comparison** rather than a list of
+  forbidden keys, so it fails for a leaked field nobody anticipated.

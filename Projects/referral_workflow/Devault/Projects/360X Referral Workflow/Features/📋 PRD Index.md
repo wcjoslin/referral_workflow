@@ -297,7 +297,7 @@ The logical order for PRD development:
 - Every guest action and every guest document view audited
 - **Prerequisite:** PRD-24
 
-**Status:** 📋 Drafting
+**Status:** 📋 Ready for Dev — Phase 2a (refined 2026-09-15, v1.1)
 **Module:** `workspace/`
 
 ---
