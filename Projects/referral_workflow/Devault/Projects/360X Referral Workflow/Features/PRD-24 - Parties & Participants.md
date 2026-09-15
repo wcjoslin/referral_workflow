@@ -5,7 +5,7 @@ prev: "[[PRD-23 - Document Collection]]"
 
 # PRD-24: Parties & Participants
 
-**Status:** Ready for Dev  
+**Status:** Implemented  
 **Team:** Clinical Workflow & Collaboration  
 **Module:** `workspace/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -502,3 +502,19 @@ fixed mid-session, so AC3a now requires re-derivation and a test asserts it.
 `party_addresses` has a real backfill source rather than only populating going forward; and
 `recordThreadMessage()` is a single funnel called by nine services, so address observation hooks in
 one place instead of nine.
+
+**Version:** 1.2 — Implemented as specified at v1.1. Four notes on what
+implementation settled that the spec left open:
+
+- **A party with an address starts at `workspace-mediated`, not `native-360x`.** The spec said the
+  mode is auto-resolved without saying to what. Starting at `native-360x` would display a capability
+  nobody has observed, so the honest initial value is the one that assumes least.
+- **`recordPartyAddress()` drops an unmatched address rather than raising.** A message from a
+  stranger must not fail the thread write that is recording it, and correlating unknown senders is
+  PRD-28's job.
+- **`seedIntakeAddress()` tolerates both parties sharing one address.** In a loopback demo the
+  referrer and receiving addresses are the same mailbox, and the unique index would otherwise fail
+  the whole seed. First claim wins.
+- **`syncOwnerParticipant()` runs after the assignment event**, so the activity feed reads "assigned
+  to X" and then "X added as Manager". A previous owner is not removed from the roster — they really
+  were involved.
