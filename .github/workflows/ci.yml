@@ -1,0 +1,95 @@
+# CI for the 360X referral workflow.
+#
+# The application lives in Projects/referral_workflow, not at the repository
+# root, so every step sets working-directory. The root holds only this workflow
+# and a README.
+#
+# Four gates, in the order a contributor would run them locally:
+#
+#   typecheck  tsc --noEmit equivalent via `npm run build`
+#   test       the full Jest suite
+#   lint       a REGRESSION BUDGET, not a clean bill of health (see below)
+#   smoke      boots the server and reads the bytes a browser would get
+#
+# On lint: src/ carries 111 pre-existing problems. A job that ran `npm run lint`
+# directly would be red from the first commit and stay red, which teaches people
+# to ignore it. `npm run lint:budget` fails only when the count RISES above the
+# baseline in .lint-baseline.json, so new code cannot add debt while the
+# existing debt stays visible with a number on it.
+#
+# On smoke: the unit tests assert payloads and never render a page. Two defects
+# shipped straight through them — a C-CDA panel wired to an API that does not
+# exist, and page data embedded without escaping, which let a patient name close
+# the script element. Both were obvious on sight. This gate exists so the next
+# one is caught by a machine instead.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same PR makes the first run's answer worthless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: Projects/referral_workflow
+
+jobs:
+  verify:
+    name: build · test · lint · smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # config.ts requires these at import time, so every step that loads the
+      # app needs them present. None is reachable: no step makes an outbound
+      # connection, and the smoke check inserts its fixtures directly rather
+      # than seeding over IMAP/SMTP.
+      IMAP_HOST: imap.invalid
+      IMAP_PORT: '993'
+      IMAP_USER: ci
+      IMAP_PASSWORD: ci
+      SMTP_HOST: smtp.invalid
+      SMTP_PORT: '587'
+      SMTP_USER: ci
+      SMTP_PASSWORD: ci
+      RECEIVING_DIRECT_ADDRESS: receiving@specialist.direct
+      GEMINI_API_KEY: ci-not-a-real-key
+      DATABASE_URL: ./ci-smoke.db
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: Projects/referral_workflow/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # Runs even when the tests fail: knowing about both at once saves a cycle.
+      - name: Lint budget
+        if: ${{ !cancelled() }}
+        run: npm run lint:budget
+
+      - name: Migrate the smoke database
+        if: ${{ !cancelled() }}
+        run: npm run db:migrate
+
+      - name: Smoke check the rendered pages
+        if: ${{ !cancelled() }}
+        run: npm run smoke
