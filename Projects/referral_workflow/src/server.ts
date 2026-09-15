@@ -54,10 +54,22 @@ import {
   WorkspaceNotFoundError,
 } from './modules/workspace/workspaceService';
 import {
+  OwnerFilter,
   buildWorkspacePayload,
   listWorkspaceRows,
   workspaceIdForReferral,
 } from './modules/workspace/workspaceView';
+import {
+  OwnerNotFoundError,
+  OwnershipConflictError,
+  ReleaseReasonRequiredError,
+  WorkspaceArchivedError,
+  WorkspaceNotFoundError as AssignmentWorkspaceNotFoundError,
+  assignOwner,
+  claimOwnership,
+  getMyWork,
+  releaseOwnership,
+} from './modules/workspace/assignmentService';
 import {
   InvalidWorkStatusTransitionError,
   allowedTransitions,
@@ -307,10 +319,25 @@ async function resolveClinicianId(body: {
 app.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const allReferrals = await db.select().from(referrals).orderBy(desc(referrals.createdAt));
+
+    // PRD-21 AC11/AC12: the dashboard lists referrals, not workspaces, so the
+    // owner has to be attached. One listing query keyed by referral id — not a
+    // per-row lookup, which is already the pattern's weak point below.
+    const ownerByReferral = new Map(
+      (await listWorkspaceRows()).map((w) => [
+        w.referralId,
+        { ownerUserId: w.ownerUserId, ownerDisplayName: w.ownerDisplayName, ownerInactive: w.ownerInactive },
+      ]),
+    );
+
     const items = await Promise.all(
       allReferrals.map(async (r) => {
         const [patient] = await db.select().from(patients).where(eq(patients.id, r.patientId));
-        return { referral: r, patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' } };
+        return {
+          referral: r,
+          patient: patient ?? { firstName: '', lastName: '', dateOfBirth: '' },
+          owner: ownerByReferral.get(r.id) ?? null,
+        };
       }),
     );
     const templatePath = path.join(__dirname, 'views', 'dashboard.html');
@@ -361,14 +388,37 @@ app.post('/api/workspaces/backfill', async (_req: Request, res: Response, next: 
  * Unfiltered and unscoped on purpose. PRD-20 adds queue grouping, the tab
  * vocabulary and allQueuesAccess scoping, and may replace this page outright.
  */
-app.get('/workspaces', async (_req: Request, res: Response, next: NextFunction) => {
+app.get('/workspaces', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const rows = await listWorkspaceRows();
+    // PRD-21: ?owner=me | unassigned. `me` is resolved here, server-side, and
+    // never reaches the query layer as a string — so a shared or bookmarked
+    // link cannot be made to show somebody else's work.
+    const ownerParam = typeof req.query.owner === 'string' ? req.query.owner : '';
+    const actor = ownerParam === 'me' ? await tryGetActingUser(req) : null;
+
+    const owner: OwnerFilter =
+      ownerParam === 'unassigned'
+        ? { kind: 'unassigned' }
+        : ownerParam === 'me' && actor
+          ? { kind: 'user', userId: actor.id }
+          : { kind: 'any' };
+
+    // `?owner=me` with nobody seeded would otherwise silently list everything,
+    // which reads as "you own all of this". Say so instead.
+    const ownerFilterUnavailable = ownerParam === 'me' && !actor;
+
+    const rows = await listWorkspaceRows(owner);
     const templatePath = path.join(__dirname, 'views', 'workspaceIndex.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__WORKSPACE_ROWS__*/',
-      `window.__WORKSPACE_ROWS__ = ${embedJson(rows)};`,
+      `window.__WORKSPACE_ROWS__ = ${embedJson(rows)};\n` +
+        `window.__WORKSPACE_INDEX__ = ${embedJson({
+          ownerFilter: owner.kind === 'user' ? 'me' : owner.kind === 'unassigned' ? 'unassigned' : 'any',
+          actingUserId: actor?.id ?? null,
+          actingUserName: actor?.displayName ?? null,
+          ownerFilterUnavailable,
+        })};`,
     );
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(html));
@@ -508,6 +558,112 @@ app.post('/api/workspaces/:id/resync', async (req: Request, res: Response, next:
       res.status(404).json({ error: 'Workspace not found' });
       return;
     }
+    next(err);
+  }
+});
+
+/**
+ * PRD-21 — the one endpoint behind claim, assign, reassign and release.
+ *
+ * The body must carry EXACTLY ONE of `ownerUserId`, `self` or `release`. The
+ * PRD's first draft encoded release as `"ownerUserId": null`, which made an
+ * empty body indistinguishable from a release — a request that forgot its
+ * payload would have silently unassigned the workspace. Hence the explicit
+ * three-way discrimination and a 400 for anything else.
+ */
+app.post('/api/workspaces/:id/owner', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as {
+      ownerUserId?: unknown;
+      self?: unknown;
+      release?: unknown;
+      reason?: unknown;
+    };
+
+    const wantsAssign = typeof body.ownerUserId === 'number';
+    const wantsClaim = body.self === true;
+    const wantsRelease = body.release === true;
+    const chosen = [wantsAssign, wantsClaim, wantsRelease].filter(Boolean).length;
+
+    if (chosen !== 1) {
+      res.status(400).json({
+        error:
+          'Send exactly one of ownerUserId (number), self: true, or release: true.',
+        received: Object.keys(body),
+      });
+      return;
+    }
+
+    // Ownership is attribution. With nobody to attribute to there is nothing
+    // meaningful to record, so this refuses rather than writing `user:undefined`.
+    const actor = await tryGetActingUser(req);
+    if (!actor) {
+      res.status(401).json({
+        error: 'No acting user. Seed users before assigning ownership.',
+      });
+      return;
+    }
+
+    const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : undefined;
+
+    const result = wantsClaim
+      ? await claimOwnership(workspaceId, actor)
+      : wantsRelease
+        ? await releaseOwnership(workspaceId, actor, reason)
+        : await assignOwner(workspaceId, body.ownerUserId as number, actor, reason);
+
+    res.json({ success: true, ...result });
+  } catch (err) {
+    if (err instanceof OwnershipConflictError) {
+      res.status(409).json({
+        error: err.message,
+        currentOwnerUserId: err.currentOwnerUserId,
+        currentOwnerDisplayName: err.currentOwnerDisplayName,
+      });
+      return;
+    }
+    if (err instanceof WorkspaceArchivedError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    if (err instanceof ReleaseReasonRequiredError) {
+      res.status(422).json({ error: err.message });
+      return;
+    }
+    if (err instanceof OwnerNotFoundError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    if (err instanceof AssignmentWorkspaceNotFoundError) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    next(err);
+  }
+});
+
+/**
+ * Everything the acting user owns.
+ *
+ * No user id in the path or query on purpose — it is resolved server-side from
+ * the acting user, so a bookmarked or shared link can never show somebody
+ * else's work.
+ */
+app.get('/api/my-work', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const actor = await tryGetActingUser(req);
+    if (!actor) {
+      res.status(401).json({ error: 'No acting user. Seed users first.' });
+      return;
+    }
+    res.json({ actingUserId: actor.id, items: await getMyWork(actor.id) });
+  } catch (err) {
     next(err);
   }
 });

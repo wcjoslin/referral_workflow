@@ -11,9 +11,39 @@ npm test                   # Run all tests (Jest)
 npm run test:watch        # Run tests in watch mode
 npm run test:coverage     # Run tests with coverage report
 npm run lint              # Check for linting errors
+npm run lint:budget       # Fail only if lint problems rose above .lint-baseline.json
 npm run lint:fix          # Fix linting errors
 npm run format            # Auto-format with Prettier
 ```
+
+**Smoke check (what CI runs, and what unit tests cannot catch):**
+```bash
+DATABASE_URL=./smoke.db npm run db:migrate
+DATABASE_URL=./smoke.db npm run smoke
+```
+
+`config.ts` requires the IMAP/SMTP vars at import time, so an unconfigured shell
+fails before the first check with `Missing required environment variable`. None
+of them is reachable — nothing here makes an outbound connection — so any
+placeholder works; the CI job's `env:` block is the reference set.
+
+Boots the real server against a throwaway database and reads the bytes a browser
+would receive: the workspace pages render, the C-CDA viewer is wired to the real
+Sialia frame rather than a stand-in, hostile patient data stays escaped, the
+ownership endpoint refuses an ambiguous body and a losing claim, the `?owner=`
+index filters resolve per-user server-side, and unknown ids 404. Added because
+two defects shipped through a green unit suite — a viewer panel calling an API
+that does not exist, and page data embedded without escaping. Run it before
+pushing anything that touches a view or a page route.
+
+**CI** lives at `.github/workflows/ci.yml` in the *repository root* (one level
+above this directory) and runs build, test, lint budget and smoke on every push
+to `main` and every pull request.
+
+The lint step is a **regression budget**, not a clean bill of health: `src/` has
+111 pre-existing problems recorded in `.lint-baseline.json`, and CI fails only
+when the count rises. Lower the baseline in the same commit that fixes any of
+them; never raise it.
 
 **Database & Development:**
 ```bash

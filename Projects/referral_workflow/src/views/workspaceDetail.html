@@ -222,6 +222,20 @@
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { font-size: 0.75rem; background: var(--color-table-header); border: 1px solid var(--color-border); border-radius: 12px; padding: 2px 9px; }
 
+  /* ── Owner panel (PRD-21) ────────────────────────────────────────────────── */
+  .owner-now { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+  .owner-name { font-size: 0.95rem; font-weight: 600; }
+  .owner-none { font-size: 0.95rem; color: var(--color-text-muted); font-style: italic; }
+  .owner-inactive-tag {
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    color: #997404; border: 1px solid #997404; border-radius: 3px; padding: 1px 4px;
+  }
+  .owner-you {
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    color: #0a7d4b; border: 1px solid #0a7d4b; border-radius: 3px; padding: 1px 4px;
+  }
+  .owner-hint { font-size: 0.72rem; color: var(--color-text-muted); margin-top: 6px; line-height: 1.45; }
+
   /* Reserved panels. Rendered, not absent — so the layout is the real layout. */
   .slot-empty {
     font-size: 0.82rem;
@@ -256,12 +270,21 @@
   <div class="cols" id="wsCols">
     <div>
       <div class="card" id="wsTimeline"></div>
+      <!--
+        Ownership lives in the MAIN column, high up, because it is an action
+        about the work rather than reference material — and because when a
+        referral has no C-CDA the layout collapses to one column and the side
+        column stacks after everything in this one. PRD-19 originally put this
+        slot in the side column; filling it in PRD-21 showed the consequence:
+        the claim and release controls sat a thousand pixels down, beneath three
+        empty placeholder panels.
+      -->
+      <div class="card" id="wsOwner"></div>
       <div class="card" id="wsConversation"></div>
       <div class="card" id="wsThread"></div>
       <div class="card" id="wsActivity"></div>
     </div>
     <div class="viewer-col" id="wsSide">
-      <div class="card" id="wsOwner"></div>
       <div class="card" id="wsParticipants"></div>
       <div class="card" id="wsRouting"></div>
       <div class="card" id="wsClinical"></div>
@@ -731,6 +754,113 @@
       '<div class="slot-empty">' + esc(description) + '</div>';
   }
 
+  // ── Ownership (PRD-21) ────────────────────────────────────────────────────
+
+  /** Active users for the reassign picker. AC4 sources these from /api/users. */
+  var ownerUsers = [];
+
+  function renderOwner() {
+    var ws2 = P.workspace;
+    var readOnly = !!ws2.archivedAt;
+    var acting = P.actingUser;
+
+    var current = ws2.ownerUserId === null
+      ? '<span class="owner-none">Unassigned</span>'
+      : '<span class="owner-name">' + esc(ws2.ownerDisplayName || ('User ' + ws2.ownerUserId)) + '</span>' +
+        (ws2.ownerInactive ? '<span class="owner-inactive-tag" title="This person is no longer active">inactive</span>' : '') +
+        (acting && acting.id === ws2.ownerUserId ? '<span class="owner-you">you</span>' : '');
+
+    var controls = '';
+    if (!readOnly) {
+      var opts = ownerUsers
+        .filter(function (u) { return u.id !== ws2.ownerUserId; })
+        .map(function (u) {
+          return '<option value="' + esc(u.id) + '">' + esc(u.displayName) + ' \u00B7 ' + esc(u.jobRole) + '</option>';
+        }).join('');
+
+      if (ws2.ownerUserId === null) {
+        // AC1: one click, no picker. AC3 is the mirror of this — an owned
+        // workspace never offers a one-click steal.
+        controls =
+          '<div class="ctl-row">' +
+            '<button class="btn btn-primary" id="btnClaim">Claim</button>' +
+            '<select class="ctl" id="assignSelect"><option value="">Assign to\u2026</option>' + opts + '</select>' +
+            '<button class="btn" id="btnAssign">Assign</button>' +
+          '</div>';
+      } else {
+        controls =
+          '<div class="ctl-row">' +
+            '<select class="ctl" id="assignSelect"><option value="">Reassign to\u2026</option>' + opts + '</select>' +
+            '<button class="btn" id="btnAssign">Reassign</button>' +
+            '<button class="btn" id="btnRelease">Release</button>' +
+          '</div>' +
+          '<div class="ctl-row">' +
+            '<input class="ctl" id="ownerReason" placeholder="Reason' +
+              (ws2.workStatus === 'Triage' ? ' (optional)' : ' (required to release)') +
+              '" style="min-width:230px;" />' +
+          '</div>';
+      }
+    }
+
+    document.getElementById('wsOwner').innerHTML =
+      '<h2>Ownership</h2>' +
+      '<div class="owner-now">' + current + '</div>' +
+      (readOnly ? '<div class="owner-hint">This workspace is archived; ownership is fixed.</div>' : controls) +
+      '<div class="msg" id="ownerMsg"></div>' +
+      (readOnly ? '' :
+        '<div class="owner-hint">Releasing returns the work to its queue without ' +
+        'reassigning it. The 360X status is unaffected either way.</div>');
+
+    if (readOnly) return;
+    var claim = document.getElementById('btnClaim');
+    if (claim) claim.addEventListener('click', function () { ownerAction({ self: true }); });
+    var assign = document.getElementById('btnAssign');
+    if (assign) assign.addEventListener('click', function () {
+      var sel = document.getElementById('assignSelect');
+      if (!sel.value) { ownerMsg('Pick a person first.', false); return; }
+      ownerAction({ ownerUserId: Number(sel.value) });
+    });
+    var release = document.getElementById('btnRelease');
+    if (release) release.addEventListener('click', function () { ownerAction({ release: true }); });
+  }
+
+  function ownerMsg(text, ok) {
+    var el = document.getElementById('ownerMsg');
+    if (!el) return;
+    el.className = 'msg ' + (ok ? 'ok' : 'err');
+    el.textContent = text;
+  }
+
+  async function ownerAction(payload) {
+    var reasonEl = document.getElementById('ownerReason');
+    var reason = reasonEl ? reasonEl.value.trim() : '';
+    if (reason) payload.reason = reason;
+
+    ownerMsg('Saving\u2026', true);
+    var r = await post('/api/workspaces/' + encodeURIComponent(ws.id) + '/owner', payload);
+    if (r.ok) { location.reload(); return; }
+
+    // 409 on a claim carries the winner; say who rather than just "failed".
+    var msg = (r.json && r.json.error) || 'Could not change the owner.';
+    if (r.status === 409 && r.json && r.json.currentOwnerDisplayName) {
+      msg = 'Already claimed by ' + r.json.currentOwnerDisplayName + '.';
+    }
+    ownerMsg(msg, false);
+  }
+
+  async function loadOwnerUsers() {
+    try {
+      var res = await fetch('/api/users');
+      if (!res.ok) throw new Error('users fetch failed');
+      var json = await res.json();
+      ownerUsers = json.users || json || [];
+    } catch (err) {
+      ownerUsers = [];
+      console.warn('[Workspace/Owner]', err);
+    }
+    renderOwner();
+  }
+
   function renderSlots() {
     if (!P.slots.owner) {
       renderSlot('wsOwner', 'Ownership', 'PRD-21',
@@ -767,6 +897,7 @@
   renderPriorAuth();
   renderCcda();
   renderSlots();
+  if (P.slots.owner) loadOwnerUsers();
   loadThread();
 })();
 </script>

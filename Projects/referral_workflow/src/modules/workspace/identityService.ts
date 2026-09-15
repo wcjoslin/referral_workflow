@@ -28,6 +28,15 @@ export interface ActingUser {
   legacyClinicianId: string | null;
   /** The explicit see-all-queues grant PRD-20 reads. Never inferred from jobRole. */
   allQueuesAccess: boolean;
+  /**
+   * Whether this person is still in service (PRD-17 v1.2, added for PRD-21).
+   *
+   * The column shipped with the table; the type never surfaced it, so nothing
+   * downstream could tell an active user from a deactivated one. PRD-21 needs it
+   * twice: to refuse assigning work to an inactive user, and to render an owner
+   * who was deactivated AFTER being assigned as inactive rather than as nobody.
+   */
+  active: boolean;
 }
 
 export const ACTING_USER_COOKIE = 'actingUserId';
@@ -48,6 +57,7 @@ function toActingUser(row: UserRow): ActingUser {
     jobRole: row.jobRole as JobRole,
     legacyClinicianId: row.legacyClinicianId,
     allQueuesAccess: row.allQueuesAccess,
+    active: row.active,
   };
 }
 
@@ -58,6 +68,19 @@ export async function listUsers(includeInactive = false): Promise<ActingUser[]> 
   return rows.map(toActingUser);
 }
 
+/**
+ * Looks up one user by id, ACTIVE OR NOT.
+ *
+ * The lack of an `active` filter here is deliberate and load-bearing. A
+ * workspace can outlive its owner's employment; filtering would make that
+ * owner's display name resolve to null, and the workspace header would then read
+ * "Unassigned" for work somebody owns. A greyed-out name is honest, an empty
+ * cell is not. Callers that must exclude inactive users check `.active` — see
+ * assignmentService, which refuses to assign to one.
+ *
+ * `listUsers()` does filter by default, because a picker should not offer people
+ * who have left.
+ */
 export async function getUser(id: number): Promise<ActingUser | null> {
   if (!Number.isInteger(id)) return null;
   const [row] = await db.select().from(users).where(eq(users.id, id)).limit(1);

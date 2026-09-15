@@ -117,7 +117,21 @@ function clearTables(): void {
   sqlite().exec('DELETE FROM workflow_events; DELETE FROM referrals; DELETE FROM patients; DELETE FROM users;');
 }
 
-const NOW = new Date('2026-04-11T12:00:00Z');
+/*
+ * Anchored to TODAY at noon UTC, not a fixed calendar date.
+ *
+ * These fixtures used to sit at a hardcoded 2026-04-11. The queries filter with
+ * `created_at >= DATE('now', '-N days')` against the real clock, so the moment
+ * real time moved more than N days past that date every windowed query returned
+ * nothing and four tests failed permanently. They were time bombs: green when
+ * written, red forever after, and red for months before anyone connected the
+ * two.
+ *
+ * Noon rather than midnight so the +1 and +30 minute offsets below cannot spill
+ * into the next calendar day and break the DATE() grouping getDailyIntake
+ * asserts on.
+ */
+const NOW = new Date(`${new Date().toISOString().slice(0, 10)}T12:00:00Z`);
 const TS = (offsetMinutes: number): string => {
   const d = new Date(NOW.getTime() + offsetMinutes * 60 * 1000);
   return d.toISOString().replace('T', ' ').replace('Z', '');

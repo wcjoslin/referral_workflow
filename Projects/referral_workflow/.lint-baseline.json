@@ -1,0 +1,4 @@
+{
+  "_comment": "Maximum ESLint problems (errors + warnings) allowed in src/. Enforced by `npm run lint:budget`, which fails when the count rises above this. These 111 are pre-existing; lower this number in the same commit that fixes any of them so the ratchet only turns one way. Never raise it.",
+  "maxProblems": 111
+}

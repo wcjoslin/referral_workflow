@@ -12,7 +12,7 @@
  * discover a missing key at runtime.
  */
 
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, isNull } from 'drizzle-orm';
 import { db } from '../../db';
 import {
   referrals,
@@ -69,6 +69,8 @@ export interface WorkspacePayload {
     workStatusSetAt: string | null;
     ownerUserId: number | null;
     ownerDisplayName: string | null;
+    /** True when the owner has since been deactivated (PRD-21 AC7a). */
+    ownerInactive: boolean;
     queueId: number | null;
     /** Always null until PRD-20 adds the queues table — there is nothing to join. */
     queueName: string | null;
@@ -125,7 +127,10 @@ export interface WorkspaceRowSummary {
   protocolState: ReferralState;
   workStatus: WorkStatus;
   workStatusIsManual: boolean;
+  ownerUserId: number | null;
   ownerDisplayName: string | null;
+  /** True when the owner has since been deactivated (AC7a). */
+  ownerInactive: boolean;
   routingDepartment: string;
   priorityFlag: boolean;
   archived: boolean;
@@ -202,6 +207,7 @@ export async function buildWorkspacePayload(
       workStatusSetAt: iso(workspace.workStatusSetAt),
       ownerUserId: workspace.ownerUserId,
       ownerDisplayName: owner?.displayName ?? null,
+      ownerInactive: owner !== null && owner.active === false,
       queueId: workspace.queueId,
       queueName: null,
       nextAction: workspace.nextAction,
@@ -262,7 +268,8 @@ export async function buildWorkspacePayload(
       documents: false,
       activity: false,
       participants: false,
-      owner: false,
+      // PRD-21 filled this one. The shell stops rendering its placeholder.
+      owner: true,
     },
   };
 }
@@ -277,13 +284,33 @@ export async function workspaceIdForReferral(referralId: number): Promise<number
 }
 
 /**
+ * How `listWorkspaceRows()` narrows by ownership (PRD-21).
+ *
+ * `'me'` is resolved by the caller into a user id before it gets here; the
+ * literal never reaches the query. Keeping the string out of this layer means a
+ * future caller cannot accidentally pass an attacker-supplied "me".
+ */
+export type OwnerFilter = { kind: 'any' } | { kind: 'unassigned' } | { kind: 'user'; userId: number };
+
+/**
  * Every workspace, newest activity first, for the flat index.
  *
  * Deliberately unfiltered and unscoped. PRD-20 adds queue grouping, the tab
  * vocabulary and `allQueuesAccess` scoping, and may replace this page outright
  * rather than extend it — this exists so the detail page is reachable.
  */
-export async function listWorkspaceRows(): Promise<WorkspaceRowSummary[]> {
+export async function listWorkspaceRows(
+  owner: OwnerFilter = { kind: 'any' },
+): Promise<WorkspaceRowSummary[]> {
+  // Filtered in SQL rather than in the browser: PRD-20 inherits this function
+  // for the queue view, and a paged list cannot filter client-side.
+  const ownerClause =
+    owner.kind === 'unassigned'
+      ? isNull(referralWorkspaces.ownerUserId)
+      : owner.kind === 'user'
+        ? eq(referralWorkspaces.ownerUserId, owner.userId)
+        : undefined;
+
   const rows = await db
     .select({
       workspaceId: referralWorkspaces.id,
@@ -302,6 +329,7 @@ export async function listWorkspaceRows(): Promise<WorkspaceRowSummary[]> {
     .from(referralWorkspaces)
     .innerJoin(referrals, eq(referrals.id, referralWorkspaces.referralId))
     .innerJoin(patients, eq(patients.id, referrals.patientId))
+    .where(ownerClause)
     .orderBy(desc(referralWorkspaces.updatedAt));
 
   // One lookup per distinct owner rather than per row. Phase 2 has no owners at
@@ -309,10 +337,13 @@ export async function listWorkspaceRows(): Promise<WorkspaceRowSummary[]> {
   const ownerIds = [
     ...new Set(rows.map((r) => r.ownerUserId).filter((id): id is number => id !== null)),
   ];
-  const ownerNames = new Map<number, string>();
+  // Name AND active flag: getUser() returns deactivated users on purpose, so a
+  // workspace whose owner has left still shows who holds it rather than reading
+  // as unassigned (AC7a).
+  const owners = new Map<number, { displayName: string; active: boolean }>();
   for (const id of ownerIds) {
     const user = await getUser(id);
-    if (user) ownerNames.set(id, user.displayName);
+    if (user) owners.set(id, { displayName: user.displayName, active: user.active });
   }
 
   return rows.map((r) => ({
@@ -322,7 +353,10 @@ export async function listWorkspaceRows(): Promise<WorkspaceRowSummary[]> {
     protocolState: r.protocolState as ReferralState,
     workStatus: r.workStatus as WorkStatus,
     workStatusIsManual: r.workStatusIsManual,
-    ownerDisplayName: r.ownerUserId === null ? null : (ownerNames.get(r.ownerUserId) ?? null),
+    ownerUserId: r.ownerUserId,
+    ownerDisplayName:
+      r.ownerUserId === null ? null : (owners.get(r.ownerUserId)?.displayName ?? null),
+    ownerInactive: r.ownerUserId !== null && owners.get(r.ownerUserId)?.active === false,
     routingDepartment: r.routingDepartment,
     priorityFlag: !!r.priorityFlag,
     archived: r.archivedAt !== null,
