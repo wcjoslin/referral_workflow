@@ -311,7 +311,7 @@ The logical order for PRD development:
 - Transport identity: Mode A address-on-file by default, Mode B delegated mailbox as the upgrade
 - **Prerequisite:** PRD-24 (PRD-30 for the guest half)
 
-**Status:** 📋 Drafting
+**Status:** 📋 Ready for Dev (refined 2026-09-15, v1.1)
 **Module:** `workspace/`
 
 ---
@@ -445,7 +445,7 @@ The logical order for PRD development:
 | [[PRD-26 - Next Action & Due Dates\|26]] | Next Action & Due Dates | 📋 | Config-driven actions, awaited-by, overdue sweep | `workspace/` |
 | [[PRD-27 - Notifications\|27]] | Notifications | 📋 | Nine triggers, one funnel, guest allow list | `workspace/` |
 | [[PRD-28 - Correlation & Exception Queue\|28]] | Correlation & Exception Queue | 📋 | Idempotent intake, exceptions, manual reassociation | `workspace/`, `prd01/` |
-| [[PRD-29 - 360X Protocol Gateway\|29]] | 360X Protocol Gateway | 📋 | Context authoring, artifact rendering, record-then-transmit | `workspace/` |
+| [[PRD-29 - 360X Protocol Gateway\|29]] | 360X Protocol Gateway | 📋 Ready | Context authoring, artifact rendering, record-then-transmit | `workspace/` |
 | [[PRD-30 - Guest Participation\|30]] | Guest Participation | ◐ | Scoped invitations, guest view, audited external access | `workspace/` |
 
 ---
