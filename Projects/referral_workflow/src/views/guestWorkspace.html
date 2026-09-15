@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Referral</title>
+<!--
+  PRD-30 — the guest workspace.
+
+  A STANDALONE DOCUMENT, not the internal page with panels hidden. There is no
+  `injectNav()` call on the route that serves this, and this file contains no
+  markup for owner, work status, queue, participants, internal comments or any
+  other internal surface. It cannot hide what it never receives: the payload
+  built by `buildGuestPayload()` has no such fields, and this page reads only
+  what is in it.
+
+  That is why it duplicates some styling from workspaceDetail.html rather than
+  sharing a stylesheet. Sharing one would invite sharing a template, and a
+  shared template is one CSS mistake away from showing a guest an internal
+  field. The duplication is the point.
+
+  The page also deliberately shows a guest their own scope — which organization
+  they are acting for, and when their access ends — because somebody who cannot
+  see why a page is sparse assumes it is broken.
+-->
+<style>
+  :root {
+    --ink: #212529; --muted: #6c757d; --line: #dee2e6; --card: #fff; --bg: #f8f9fa;
+    --brand: #0d6efd; --ok: #198754; --warn: #664d03; --warn-bg: #fff3cd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e9ecef; --muted: #adb5bd; --line: #343a40; --card: #1b1e21; --bg: #121416;
+      --brand: #6ea8fe; --ok: #75b798; --warn: #ffda6a; --warn-bg: #332701;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); padding: 0 16px 48px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+
+  .topbar {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 18px 0 14px; border-bottom: 1px solid var(--line); margin-bottom: 18px;
+  }
+  .topbar h1 { font-size: 1.05rem; margin: 0; }
+  .topbar .as { font-size: 0.8rem; color: var(--muted); }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
+             color: var(--muted); margin: 0 0 12px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+  .field .label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  .field .value { font-size: 0.92rem; margin-top: 3px; word-break: break-word; }
+  .reason { grid-column: 1 / -1; }
+
+  .badge {
+    display: inline-block; padding: 3px 10px; border-radius: 20px;
+    font-size: 0.75rem; font-weight: 600; background: #e9ecef; color: #495057;
+  }
+
+  /* Timeline — same visual idea as the internal page, its own implementation. */
+  .tl { display: flex; align-items: flex-start; overflow-x: auto; padding: 4px 0 2px; }
+  .tl-step { display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 88px; position: relative; }
+  .tl-dot {
+    width: 26px; height: 26px; border-radius: 50%; border: 3px solid var(--line);
+    background: var(--card); z-index: 1; display: flex; align-items: center;
+    justify-content: center; font-size: 0.66rem; font-weight: 700; color: var(--muted);
+  }
+  .tl-dot.reached { border-color: var(--ok); color: var(--ok); }
+  .tl-dot.current { border-color: var(--brand); color: var(--brand); }
+  .tl-step:not(:last-child)::after {
+    content: ''; position: absolute; top: 13px; left: 50%; width: 100%;
+    height: 3px; background: var(--line);
+  }
+  .tl-step.reached:not(:last-child)::after { background: var(--ok); }
+  .tl-label { font-size: 0.68rem; margin-top: 7px; text-align: center; color: var(--muted); line-height: 1.3; }
+  .tl-step.current .tl-label { color: var(--ink); font-weight: 600; }
+
+  .notice {
+    background: var(--warn-bg); color: var(--warn); border-radius: 8px;
+    padding: 10px 14px; font-size: 0.8rem; line-height: 1.55; margin-bottom: 16px;
+  }
+  .soon { font-size: 0.82rem; color: var(--muted); line-height: 1.6; font-style: italic; }
+  .foot { font-size: 0.74rem; color: var(--muted); line-height: 1.6; margin-top: 22px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <h1 id="gTitle">Referral</h1>
+    <span class="as" id="gAs"></span>
+  </div>
+  <div id="gNotice"></div>
+  <div class="card" id="gHeader"></div>
+  <div class="card" id="gTimeline"></div>
+  <div class="card" id="gCollab"></div>
+  <div class="foot" id="gFoot"></div>
+</div>
+
+<script>
+/*__GUEST_DATA__*/
+</script>
+<script>
+(function () {
+  'use strict';
+
+  var P = window.__GUEST__;
+  if (!P) return;
+
+  function esc(str) {
+    return String(str === null || str === undefined ? '' : str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function field(label, value, extraClass) {
+    return '<div class="field ' + (extraClass || '') + '">' +
+      '<div class="label">' + esc(label) + '</div>' +
+      '<div class="value">' + (value || '<span style="color:var(--muted)">—</span>') + '</div>' +
+    '</div>';
+  }
+
+  var MODE_TEXT = {
+    'native-360x': 'Your system exchanges 360X messages directly.',
+    'workspace-mediated': 'You are working inside this shared referral; we render your actions into conformant 360X artifacts.',
+    'local-only': 'No Direct address is on file for your organization, so updates are recorded here but not transmitted.'
+  };
+
+  document.title = 'Referral — ' + (P.workspace.patientName || 'shared with you');
+  document.getElementById('gTitle').textContent =
+    'Referral for ' + P.workspace.patientName;
+  document.getElementById('gAs').textContent =
+    'You are viewing this as ' + P.party.orgName +
+    (P.guest.displayName ? ' (' + P.guest.displayName + ')' : '');
+
+  // Say when access ends. A link that stops working without warning reads as a
+  // fault; a stated expiry reads as a policy.
+  var ends = new Date(P.guest.expiresAt);
+  document.getElementById('gNotice').innerHTML =
+    '<div class="notice">Your access to this referral ends on ' +
+    esc(ends.toLocaleString()) + '. This link shows this one referral only.</div>';
+
+  document.getElementById('gHeader').innerHTML =
+    '<h2>Referral</h2>' +
+    '<div class="grid">' +
+      field('Patient', esc(P.workspace.patientName)) +
+      field('Date of birth', esc(P.workspace.patientDob)) +
+      field('360X status', '<span class="badge">' + esc(P.workspace.referralState) + '</span>') +
+      field('Referring organization', esc(P.workspace.initiatingOrg)) +
+      field('Receiving organization', esc(P.workspace.receivingOrg)) +
+      field('Reason for referral', esc(P.workspace.reasonForReferral), 'reason') +
+    '</div>';
+
+  var steps = (P.protocolTimeline || []).map(function (s) {
+    var cls = 'tl-step' + (s.reached ? ' reached' : '') + (s.current ? ' current' : '');
+    var dot = 'tl-dot' + (s.reached ? ' reached' : '') + (s.current ? ' current' : '');
+    return '<div class="' + cls + '">' +
+      '<div class="' + dot + '">' + (s.reached ? '✓' : '') + '</div>' +
+      '<div class="tl-label">' + esc(s.state) + '</div>' +
+    '</div>';
+  }).join('');
+  document.getElementById('gTimeline').innerHTML =
+    '<h2>Progress</h2><div class="tl">' + steps + '</div>';
+
+  // Phase 2a: these three collections are present in the payload and empty,
+  // because PRD-22, PRD-23 and PRD-29 have not been built. Saying so beats
+  // rendering three empty boxes that look broken.
+  var hasCollab = (P.sharedComments || []).length > 0 ||
+                  (P.sharedDocuments || []).length > 0 ||
+                  (P.availableAssertions || []).length > 0;
+
+  document.getElementById('gCollab').innerHTML =
+    '<h2>Your organization</h2>' +
+    '<div class="grid">' +
+      field('Acting for', esc(P.party.orgName)) +
+      field('Role on this referral', esc(P.party.partyRole)) +
+    '</div>' +
+    '<div class="soon" style="margin-top:12px;">' +
+      esc(MODE_TEXT[P.party.protocolMode] || P.party.protocolMode) +
+    '</div>' +
+    (hasCollab ? '' :
+      '<div class="soon" style="margin-top:12px;">Messaging, shared documents and ' +
+      'responding to this referral from here are not switched on yet. For now, this ' +
+      'page is a read-only view of where the referral stands.</div>');
+
+  document.getElementById('gFoot').innerHTML =
+    'This page shows a single referral shared with your organization. It contains no ' +
+    'other patient and no internal notes from the referring organization.';
+})();
+</script>
+</body>
+</html>

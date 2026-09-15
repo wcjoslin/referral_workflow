@@ -354,6 +354,96 @@ export const workspaceParticipants = sqliteTable(
   }),
 );
 
+// ── Guest Participation (PRD-30) ────────────────────────────────────────────
+//
+// An invitation grants access to ONE workspace, for ONE referral, for ONE
+// patient, with an expiry. It is not an account. A guest cannot browse other
+// workspaces, see a queue, see internal comments, or see another patient.
+//
+// A guest is deliberately NOT a row in `users`. Internal staff and external
+// guests have different lifecycles, different scoping and different audit
+// requirements, and merging them is how an external party ends up in an
+// internal picker.
+//
+// TOKENS ARE STORED AS HASHES ONLY. The raw invitation token exists in exactly
+// one place — the URL in the delivered email — and the raw session token exists
+// in exactly one place, the guest's cookie. Neither is ever written to a row, a
+// log line, an audit metadata blob or an error message.
+export const workspaceInvitations = sqliteTable(
+  'workspace_invitations',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workspaceId: integer('workspace_id')
+      .references(() => referralWorkspaces.id)
+      .notNull(),
+    // The PARTY is the access scope: what a guest may see is decided by which
+    // organization they represent. Deliberately no FK to party_addresses — see
+    // PRD-30 v1.1. An address FK would add nothing to the access decision and
+    // would imply verification PRD-24 may only have inferred from a domain.
+    partyId: integer('party_id')
+      .references(() => workspaceParties.id)
+      .notNull(),
+
+    // Where the invitation went. Need not be one of the party's observed
+    // addresses — for a first invitation it usually is not.
+    recipientEmail: text('recipient_email').notNull(),
+
+    tokenHash: text('token_hash').notNull().unique(),
+    invitedByUserId: integer('invited_by_user_id')
+      .references(() => users.id)
+      .notNull(),
+
+    expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+    acceptedAt: integer('accepted_at', { mode: 'timestamp' }),
+    revokedAt: integer('revoked_at', { mode: 'timestamp' }),
+    revokedByUserId: integer('revoked_by_user_id').references(() => users.id),
+    // Set on the OLD row when re-issued, so the chain is auditable.
+    supersededById: integer('superseded_by_id'),
+    // False when SMTP failed. The invitation still exists and can be resent —
+    // losing it because the mail bounced would be worse than showing it
+    // undelivered.
+    emailDelivered: integer('email_delivered', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    workspaceIdx: index('idx_workspace_invitations_workspace').on(
+      table.workspaceId,
+      table.revokedAt,
+    ),
+    tokenIdx: index('idx_workspace_invitations_token').on(table.tokenHash),
+  }),
+);
+
+export const workspaceGuests = sqliteTable(
+  'workspace_guests',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    invitationId: integer('invitation_id')
+      .references(() => workspaceInvitations.id)
+      .notNull(),
+    // Denormalised from the invitation on purpose: the guard resolves a session
+    // to a (workspaceId, partyId) pair, and reading that pair from one row
+    // rather than joining is what keeps the guard a single short function with
+    // no opportunity to widen scope by accident.
+    workspaceId: integer('workspace_id')
+      .references(() => referralWorkspaces.id)
+      .notNull(),
+    partyId: integer('party_id')
+      .references(() => workspaceParties.id)
+      .notNull(),
+
+    displayName: text('display_name'), // self-supplied on acceptance, optional
+    sessionTokenHash: text('session_token_hash'),
+    sessionExpiresAt: integer('session_expires_at', { mode: 'timestamp' }),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp' }),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    workspaceIdx: index('idx_workspace_guests_workspace').on(table.workspaceId),
+    sessionIdx: index('idx_workspace_guests_session').on(table.sessionTokenHash),
+  }),
+);
+
 export const attachmentRequests = sqliteTable('attachment_requests', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   patientId: integer('patient_id').references(() => patients.id), // nullable until FHIR patient matched

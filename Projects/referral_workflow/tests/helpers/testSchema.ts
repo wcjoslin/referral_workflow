@@ -181,4 +181,35 @@ export const TEST_SCHEMA_DDL = `
     related_state_transition TEXT,
     created_at INTEGER NOT NULL
   );
+
+  -- ── Guest participation (PRD-30) ──────────────────────────────────────────
+  -- token_hash is UNIQUE here as in the real schema: two invitations cannot
+  -- collide on a hash, and a test that inserted a duplicate would be testing
+  -- something the database forbids.
+  CREATE TABLE workspace_invitations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id INTEGER NOT NULL,
+    party_id INTEGER NOT NULL,
+    recipient_email TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    invited_by_user_id INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    accepted_at INTEGER,
+    revoked_at INTEGER,
+    revoked_by_user_id INTEGER,
+    superseded_by_id INTEGER,
+    email_delivered INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE workspace_guests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invitation_id INTEGER NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    party_id INTEGER NOT NULL,
+    display_name TEXT,
+    session_token_hash TEXT,
+    session_expires_at INTEGER,
+    last_seen_at INTEGER,
+    created_at INTEGER NOT NULL
+  );
 `
