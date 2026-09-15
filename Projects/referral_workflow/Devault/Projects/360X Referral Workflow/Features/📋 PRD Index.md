@@ -220,7 +220,7 @@ The logical order for PRD development:
 - `user:<id>` added to the audit actor vocabulary without breaking analytics parsing
 - **Prerequisite:** None
 
-**Status:** 📋 Ready for Dev (refined 2026-09-14)
+**Status:** ✅ Shipped (PR #13, merged 2026-09-14). Doc at v1.2 — `active` exposed on `ActingUser` for PRD-21.
 **Module:** `workspace/`
 
 ---
@@ -229,12 +229,14 @@ The logical order for PRD development:
 **The structural foundation.** One workspace row per referral, plus a second status dimension that cannot touch the protocol state.
 
 - `referral_workspaces` table: work status, owner, queue, next action, due date, correlation ids
-- `workStatusMachine.ts` following the existing three-export state-machine pattern
+- `workStatusMachine.ts` following the existing six-export state-machine pattern
 - Protocol→work status mapping is advisory; a manually set work status is never overwritten
-- `Follow-up-Required` resolves the closure conflict — protocol closed, internal work open
+- `Closed-Confirmed` resolves in Phase 1; `Follow-up-Required` becomes derivable once PRD-28 and
+  PRD-22 supply a real open-item source (corrected in v1.2 — the original rule made every closed
+  referral look like it needed follow-up)
 - **Prerequisite:** PRD-17
 
-**Status:** 📋 Ready for Dev (refined 2026-09-14)
+**Status:** ✅ Shipped (PR #14, merged 2026-09-14). Doc at v1.2 — closure rule, backfill and proposal ordering corrected after running against real data.
 **Module:** `workspace/`, `state/`
 
 ---
@@ -247,9 +249,10 @@ The logical order for PRD development:
 - Header: patient, reason, organizations, owner, due date, next action, two distinct status badges
 - Reuses the journey timeline, embedded message thread and C-CDA viewer already built
 - Labelled placeholder slots so PRD-21…29 each land as one self-contained panel
+- Adds a minimal flat index at `/workspaces` so the page is reachable before PRD-20's queue view
 - **Prerequisite:** PRD-18
 
-**Status:** 📋 Drafting
+**Status:** ✅ Shipped (PR #15, merged 2026-09-14; viewer and header fixes in PR #16). Doc at v1.1.
 **Module:** `workspace/`, `views/`
 
 ---
@@ -258,11 +261,13 @@ The logical order for PRD development:
 **Who owns the next action.** One accountable owner per workspace, or an explicitly visible unassigned state.
 
 - Assign, reassign, claim and release, each with a from→to audit event
-- "My work" view resolving the acting user server-side
+- "My work" as a filter on `/workspaces`, resolving the acting user server-side — not a new page
+- A losing concurrent claim fails cleanly via a conditional update, writing and emitting nothing
 - `referrals.clinician_id` stays the disposition record, not the owner
-- **Prerequisite:** PRD-17, PRD-19
+- Ships the PRD-17 v1.2 `active` amendment it depends on
+- **Prerequisite:** PRD-17 (incl. v1.2), PRD-19
 
-**Status:** 📋 Drafting
+**Status:** 📋 Ready for Dev (refined 2026-09-15, v1.1)
 **Module:** `workspace/`
 
 ---
