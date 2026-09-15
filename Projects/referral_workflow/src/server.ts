@@ -101,17 +101,32 @@ import {
   reissueInvitation,
   revokeInvitation,
 } from './modules/workspace/invitationService';
+import { randomUUID } from 'crypto';
 import { emitEvent } from './modules/analytics/eventService';
 import {
   GUEST_SESSION_COOKIE,
+  GuestContext,
   GuestAccessRevokedError,
   GuestScopeMismatchError,
   GuestSessionExpiredError,
   GuestSessionMissingError,
   buildGuestPayload,
+  formatGuestActor,
   guestCookiePresent,
   requireGuest,
 } from './modules/workspace/guestAccess';
+import {
+  AssertionNotAvailableError,
+  AssertionNotPermittedError,
+  AssertionWorkspaceNotFoundError,
+  MissingAssertionContextError,
+  PartyNotOnWorkspaceError as AssertionPartyNotOnWorkspaceError,
+  assertionsAvailableFor,
+  getAssertions,
+  submitAssertion,
+  transmitPending,
+} from './modules/workspace/protocolGateway';
+import { isAssertionType } from './modules/workspace/assertionCatalog';
 import {
   InvalidWorkStatusTransitionError,
   allowedTransitions,
@@ -1006,6 +1021,199 @@ app.delete(
     }
   },
 );
+
+// ── Protocol assertions (PRD-29) ─────────────────────────────────────────────
+
+/**
+ * The party a LICENSED internal user acts for.
+ *
+ * Always the RECEIVING party: that is our organization on this workspace. A
+ * coordinator here cannot assert on the referring organization's behalf, and
+ * resolving this server-side rather than accepting a partyId is what makes that
+ * true — a request body could otherwise claim to be the other side.
+ */
+async function internalPartyId(workspaceId: number): Promise<number | null> {
+  const parties = await getParties(workspaceId);
+  return parties.find((p) => p.partyRole === 'receiving')?.id ?? null;
+}
+
+/** Maps a gateway rejection to a status code. Shared so no route omits a case. */
+function sendAssertionError(err: unknown, res: Response): boolean {
+  if (err instanceof AssertionNotPermittedError) {
+    // 403: the request was well-formed and the caller is simply not allowed.
+    res.status(403).json({ error: err.message });
+    return true;
+  }
+  if (err instanceof AssertionNotAvailableError) {
+    // 409: allowed in principle, refused by the current protocol state.
+    res.status(409).json({ error: err.message });
+    return true;
+  }
+  if (err instanceof MissingAssertionContextError) {
+    res.status(400).json({ error: err.message, missing: err.missing });
+    return true;
+  }
+  if (err instanceof InvalidStateTransitionError) {
+    res.status(409).json({ error: err.message });
+    return true;
+  }
+  if (
+    err instanceof AssertionWorkspaceNotFoundError ||
+    err instanceof AssertionPartyNotOnWorkspaceError
+  ) {
+    res.status(404).json({ error: err.message });
+    return true;
+  }
+  return false;
+}
+
+app.get(
+  '/api/workspaces/:id/assertions/available',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      if (workspaceId === null) {
+        res.status(404).json({ error: 'Workspace not found' });
+        return;
+      }
+      res.json(await assertionsAvailableFor(workspaceId, await internalPartyId(workspaceId)));
+    } catch (err) {
+      if (!sendAssertionError(err, res)) next(err);
+    }
+  },
+);
+
+app.get('/api/workspaces/:id/assertions', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    res.json({ assertions: await getAssertions(workspaceId) });
+  } catch (err) {
+    if (!sendAssertionError(err, res)) next(err);
+  }
+});
+
+app.post('/api/workspaces/:id/assertions', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as {
+      assertionType?: unknown;
+      assertionKey?: unknown;
+      context?: unknown;
+    };
+    if (typeof body.assertionType !== 'string' || !isAssertionType(body.assertionType)) {
+      res.status(400).json({ error: 'assertionType is not a known assertion.', received: body.assertionType });
+      return;
+    }
+
+    const actor = await tryGetActingUser(req);
+    if (!actor) {
+      res.status(401).json({ error: 'No acting user. Seed users before asserting.' });
+      return;
+    }
+
+    const partyId = await internalPartyId(workspaceId);
+    if (partyId === null) {
+      res.status(409).json({
+        error: 'This workspace has no receiving party. Run `npm run backfill:parties`.',
+      });
+      return;
+    }
+
+    // A caller that supplies no key gets one, so a retry without a key is not
+    // silently non-idempotent — but a client that wants retry safety across a
+    // dropped connection has to supply its own.
+    const assertionKey =
+      typeof body.assertionKey === 'string' && body.assertionKey.trim()
+        ? body.assertionKey.trim()
+        : randomUUID();
+
+    const result = await submitAssertion({
+      workspaceId,
+      assertionKey,
+      assertionType: body.assertionType,
+      partyId,
+      actor: formatActor(actor),
+      context: (body.context ?? {}) as Record<string, unknown>,
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    if (!sendAssertionError(err, res)) next(err);
+  }
+});
+
+/** Transmit a previously local-only artifact. Explicit, never automatic (AC11). */
+app.post(
+  '/api/workspaces/:id/assertions/:assertionId/transmit',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const assertionId = Number(req.params.assertionId);
+      if (!Number.isInteger(assertionId) || assertionId <= 0) {
+        res.status(404).json({ error: 'Assertion not found' });
+        return;
+      }
+      res.json({ success: true, ...(await transmitPending(assertionId, await actingActor(req))) });
+    } catch (err) {
+      if (!sendAssertionError(err, res)) next(err);
+    }
+  },
+);
+
+/**
+ * A GUEST making an assertion. The party comes from the SESSION, never the body
+ * — that is the whole point of the guard.
+ */
+app.post('/api/guest/assertions', async (req: Request, res: Response) => {
+  // Typed rather than inferred from the assignment below: an untyped `let` here
+  // widens to `any`, and `any` flowing into submitAssertion's partyId is exactly
+  // the thing the guard exists to prevent.
+  let guest: GuestContext;
+  try {
+    guest = await requireGuest(req);
+  } catch (err) {
+    sendGuestDenied(err, req, res, true);
+    return;
+  }
+  try {
+    const body = (req.body ?? {}) as {
+      assertionType?: unknown;
+      assertionKey?: unknown;
+      context?: unknown;
+    };
+    if (typeof body.assertionType !== 'string' || !isAssertionType(body.assertionType)) {
+      res.status(400).json({ error: 'assertionType is not a known assertion.' });
+      return;
+    }
+
+    const assertionKey =
+      typeof body.assertionKey === 'string' && body.assertionKey.trim()
+        ? body.assertionKey.trim()
+        : randomUUID();
+
+    const result = await submitAssertion({
+      workspaceId: guest.workspaceId,
+      assertionKey,
+      assertionType: body.assertionType,
+      partyId: guest.partyId,
+      actor: formatGuestActor(guest),
+      context: (body.context ?? {}) as Record<string, unknown>,
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    if (!sendAssertionError(err, res)) {
+      console.error('[Guest/Assertion]', err);
+      res.status(500).json({ error: 'Something went wrong.' });
+    }
+  }
+});
 
 // ── Guest participation (PRD-30) ─────────────────────────────────────────────
 

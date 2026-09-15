@@ -625,6 +625,117 @@ async function main(): Promise<void> {
   }
 
 
+  // ── Protocol assertions (PRD-29) ──────────────────────────────────────────
+  //
+  // wsWith is Waiting-External on a Scheduled referral, so the receiving party
+  // can assert `encounter` and `interim-update` and nothing from earlier in the
+  // lifecycle. That is the catalog doing its job, and asserting on it here
+  // checks the SERVER's answer rather than a hand-written list.
+  const availApi = await get(`/api/workspaces/${wsWith.id}/assertions/available`);
+  check('GET the available assertions returns 200', availApi.status === 200, `status ${availApi.status}`);
+  check(
+    'a licensed user acts for the RECEIVING party, resolved server-side',
+    availApi.body.includes('"partyRole":"receiving"'),
+    'the internal party was not resolved, so a coordinator could assert as the other side',
+  );
+  check(
+    'the offered set matches the protocol state rather than listing everything',
+    availApi.body.includes('"encounter"') && !availApi.body.includes('"accept"'),
+    'accept was offered on a Scheduled referral',
+  );
+  check(
+    'every offered assertion is labelled without a protocol acronym',
+    !/"label":"[^"]*(RRI|SIU|C-CDA|MDN|HL7)/.test(availApi.body),
+    'a guest who knows no HL7 could not act on these labels',
+  );
+
+  // An assertion the state forbids must be refused, and must leave nothing.
+  const tooEarly = await post(`/api/workspaces/${wsWith.id}/assertions`, { assertionType: 'accept' });
+  check('an assertion the state forbids is refused', tooEarly.status === 409, `status ${tooEarly.status}`);
+  const notAThing = await post(`/api/workspaces/${wsWith.id}/assertions`, { assertionType: 'elope' });
+  check('an unknown assertion type is refused', notAThing.status === 400, `status ${notAThing.status}`);
+
+  // An assertion the initiating party owns must be refused to our staff.
+  const notOurs = await post(`/api/workspaces/${wsWith.id}/assertions`, {
+    assertionType: 'interim-update',
+    context: { note: 'ok' },
+  });
+  check('an assertion our role does permit succeeds', notOurs.status === 200, `status ${notOurs.status}`);
+
+  const assertKey = `smoke-encounter-${Date.now()}`;
+  const encounterRes = await post(`/api/workspaces/${wsWith.id}/assertions`, {
+    assertionType: 'encounter',
+    assertionKey: assertKey,
+    context: {},
+  });
+  check('a permitted assertion renders and advances the protocol', encounterRes.status === 200, `status ${encounterRes.status}`);
+  check(
+    'and it moved the referral state through the machine',
+    encounterRes.json.toState === 'Encounter',
+    `toState was ${String(encounterRes.json.toState)}`,
+  );
+
+  const replay = await post(`/api/workspaces/${wsWith.id}/assertions`, {
+    assertionType: 'encounter',
+    assertionKey: assertKey,
+    context: {},
+  });
+  check(
+    'a replayed assertion key emits nothing new',
+    replay.status === 200 && replay.json.idempotentReplay === true &&
+      replay.json.assertionId === encounterRes.json.assertionId,
+    'a double-clicked button would emit a second artifact',
+  );
+
+  // The consult note is the one that proves the point of the PRD: a real C-CDA
+  // rendered by the existing builder, closing the loop.
+  const outcome = await post(`/api/workspaces/${wsWith.id}/assertions`, {
+    assertionType: 'final-outcome',
+    context: { assessment: 'Stable angina, medical management', plan: 'Review in three months' },
+  });
+  check('the consult note assertion closes the referral', outcome.status === 200 && outcome.json.toState === 'Closed', `status ${outcome.status}`);
+
+  const listed = await get(`/api/workspaces/${wsWith.id}/assertions`);
+  check(
+    'the assertions are listed with their delivery outcome',
+    listed.status === 200 && listed.body.includes('"assertionType":"final-outcome"'),
+    `status ${listed.status}`,
+  );
+  check(
+    'the artifact points at a stored message row rather than nowhere',
+    /"artifactMessageId":\d+/.test(listed.body),
+    'an artifact was recorded with no bytes behind it',
+  );
+
+  // The C-CDA must actually be a C-CDA, built by the real builder — and must
+  // carry no internal field. This is read from the stored artifact, not asserted
+  // about in the abstract.
+  const { db: smokeDb } = await import('../src/db');
+  const { referralMessages: smokeMessages } = await import('../src/db/schema');
+  const { eq: smokeEq } = await import('drizzle-orm');
+  const stored = await smokeDb
+    .select()
+    .from(smokeMessages)
+    .where(smokeEq(smokeMessages.referralId, withCcda.id));
+  const consultNote = stored.find((m) => m.messageType === 'ConsultNote');
+  check(
+    'the consult note is real C-CDA from the existing builder',
+    !!consultNote?.contentXml?.includes('ClinicalDocument') &&
+      !!consultNote?.contentXml?.includes('2.16.840.1.113883.10.20.22.1.4'),
+    'the stored artifact is not a Consultation Note document',
+  );
+  const allPayloads = stored.map((m) => `${m.contentHl7 ?? ''}${m.contentXml ?? ''}${m.contentBody ?? ''}`).join('');
+  for (const internal of ['Waiting-External', 'exceptionReason', 'ownerUserId', 'workStatus']) {
+    check(
+      `no internal field "${internal}" reaches any rendered artifact`,
+      !allPayloads.includes(internal),
+      'internal workspace data leaked into a protocol artifact',
+    );
+  }
+
+  check('the workspace page carries the assertion panel', reDetail.body.includes('renderAssertions'));
+
+
   // ── Escaping: the other defect that shipped ───────────────────────────────
   const pages: [string, string][] = [
     ['/', dashboard.body],

@@ -171,6 +171,20 @@
   .msg.ok { color: #0a7d4b; }
   .msg.err { color: var(--color-priority); }
 
+  /* ── Protocol assertions (PRD-29) ─────────────────────────────────────────── */
+  .asrt { border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .asrt-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .asrt-label { font-size: 0.9rem; font-weight: 600; }
+  .asrt-desc { font-size: 0.78rem; color: var(--color-text-muted); margin-top: 3px; line-height: 1.5; }
+  .asrt-ctx { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .asrt-none { font-size: 0.82rem; color: var(--color-text-muted); font-style: italic; }
+  .hist { list-style: none; padding: 0; margin: 8px 0 0; }
+  .hist li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--color-border); flex-wrap: wrap; font-size: 0.8rem; }
+  .hist li:first-child { border-top: none; }
+  .del-transmitted { background: var(--color-badge-accepted); color: var(--color-badge-accepted-text); }
+  .del-local { background: #fff3cd; color: #664d03; }
+  .del-failed { background: var(--color-badge-declined); color: var(--color-badge-declined-text); }
+
   /* ── Parties & participants (PRD-24) ──────────────────────────────────────── */
   .party { border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
   .party-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -310,6 +324,7 @@
         the claim and release controls sat a thousand pixels down, beneath three
         empty placeholder panels.
       -->
+      <div class="card" id="wsAssertions"></div>
       <div class="card" id="wsOwner"></div>
       <!--
         Parties & participants also sits in the MAIN column, but for a different
@@ -902,6 +917,158 @@
     renderOwner();
   }
 
+  // ── Protocol assertions (PRD-29) ──────────────────────────────────────────
+  //
+  // The authoring surface. What it offers comes from the SERVER, derived from
+  // the assertion catalog for this party's role and the referral's protocol
+  // state — never a list written here. The gateway re-checks from the same
+  // catalog, so this cannot offer something that would then be refused.
+
+  var available = { available: [], partyRole: null, protocolState: null };
+  var assertions = [];
+
+  function renderAssertions() {
+    var readOnly = !!P.workspace.archivedAt;
+
+    var options = (available.available || []).map(function (a) {
+      // Only the context this assertion actually requires gets a field. A
+      // scheduling form on an accept button would be noise.
+      var fields = (a.requiredContext || []).map(function (c) {
+        return '<input class="ctl" id="ctx-' + esc(a.type) + '-' + esc(c) + '" placeholder="' +
+          esc(CTX_LABEL[c] || c) + '" style="min-width:170px;" />';
+      }).join('');
+
+      return '<div class="asrt">' +
+        '<div class="asrt-top">' +
+          '<span class="asrt-label">' + esc(a.label) + '</span>' +
+        '</div>' +
+        '<div class="asrt-desc">' + esc(a.description) + '</div>' +
+        (readOnly ? '' :
+          '<div class="asrt-ctx">' + fields +
+            '<button class="btn btn-primary" data-assert="' + esc(a.type) + '">Send</button>' +
+          '</div>') +
+      '</div>';
+    }).join('');
+
+    var history = assertions.length === 0 ? '' :
+      '<div class="subhead">Artifacts sent from here</div>' +
+      '<ul class="hist">' + assertions.map(function (a) {
+        var cls = a.deliveryStatus === 'Failed' ? 'del-failed'
+          : (a.deliveryMode === 'local-only' ? 'del-local' : 'del-transmitted');
+        var label = a.deliveryMode === 'local-only' ? 'recorded, not sent' : a.deliveryStatus.toLowerCase();
+        return '<li>' +
+          '<span style="font-weight:600;">' + esc(a.assertionType) + '</span>' +
+          '<span class="tag ' + cls + '">' + esc(label) + '</span>' +
+          (a.toState ? '<span class="p-meta">' + esc(a.fromState) + ' \u2192 ' + esc(a.toState) + '</span>' : '') +
+          '<span class="p-spacer"></span>' +
+          '<span class="p-meta">' + esc(new Date(a.createdAt).toLocaleString()) + '</span>' +
+          // AC11: transmitting a previously local-only artifact is an explicit
+          // action, so it needs an explicit button.
+          (!readOnly && (a.deliveryMode === 'local-only' || a.deliveryStatus === 'Failed')
+            ? '<button class="btn" data-transmit="' + esc(a.assertionId) + '">Send now</button>' : '') +
+        '</li>';
+      }).join('') + '</ul>';
+
+    document.getElementById('wsAssertions').innerHTML =
+      '<h2>360X Actions</h2>' +
+      (available.protocolState
+        ? '<div class="party-extra" style="margin-bottom:10px;">Acting for this organization as the <strong>' +
+          esc(available.partyRole || '\u2014') + '</strong> party. The referral is ' +
+          esc(available.protocolState) + '.</div>'
+        : '') +
+      (options || '<div class="asrt-none">Nothing to send from this state. The other side acts next, ' +
+        'or the referral is finished.</div>') +
+      history +
+      '<div class="msg" id="asrtMsg"></div>' +
+      '<div class="party-extra">Each action is turned into a conformant 360X artifact and delivered to ' +
+      'the other organization\u2019s Direct address. If they have no address on file it is still ' +
+      'recorded here, and you can send it later.</div>';
+
+    if (readOnly) return;
+
+    Array.prototype.forEach.call(document.querySelectorAll('[data-assert]'), function (btn) {
+      btn.addEventListener('click', function () { sendAssertion(btn.getAttribute('data-assert')); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-transmit]'), function (btn) {
+      btn.addEventListener('click', function () { retransmit(Number(btn.getAttribute('data-transmit'))); });
+    });
+  }
+
+  var CTX_LABEL = {
+    reason: 'Reason (sent to them)',
+    note: 'Note',
+    appointmentDate: 'Appointment date/time',
+    location: 'Location',
+    assessment: 'Assessment',
+    plan: 'Plan',
+    chiefComplaint: 'Chief complaint'
+  };
+
+  function asrtMsg(text, ok) {
+    var el = document.getElementById('asrtMsg');
+    if (!el) return;
+    el.className = 'msg ' + (ok ? 'ok' : 'err');
+    el.textContent = text;
+  }
+
+  async function sendAssertion(type) {
+    var spec = (available.available || []).filter(function (a) { return a.type === type; })[0];
+    if (!spec) return;
+
+    var context = {};
+    for (var i = 0; i < (spec.requiredContext || []).length; i++) {
+      var c = spec.requiredContext[i];
+      var input = document.getElementById('ctx-' + type + '-' + c);
+      var v = input ? input.value.trim() : '';
+      if (!v) { asrtMsg((CTX_LABEL[c] || c) + ' is required — it is sent to the other side.', false); return; }
+      context[c] = v;
+    }
+
+    try {
+      var res = await fetch('/api/workspaces/' + ws.id + '/assertions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // A key generated per click, so a double-click replays rather than
+        // emitting a second artifact.
+        body: JSON.stringify({ assertionType: type, assertionKey: ws.id + '-' + type + '-' + Date.now(), context: context })
+      });
+      var json = await res.json();
+      if (!res.ok) { asrtMsg(json.error || 'Could not send that.', false); return; }
+      await reloadAssertions();
+      asrtMsg(json.deliveryMode === 'local-only'
+        ? 'Recorded. The other organization has no Direct address on file, so nothing was transmitted.'
+        : 'Sent as a conformant 360X artifact.', true);
+    } catch (err) {
+      asrtMsg('Could not send that: ' + err.message, false);
+    }
+  }
+
+  async function retransmit(assertionId) {
+    try {
+      var res = await fetch('/api/workspaces/' + ws.id + '/assertions/' + assertionId + '/transmit', { method: 'POST' });
+      var json = await res.json();
+      if (!res.ok) { asrtMsg(json.error || 'Could not send it.', false); return; }
+      await reloadAssertions();
+      asrtMsg(json.deliveryMode === 'transmitted' ? 'Sent.' : 'Still no address on file for them.', json.deliveryMode === 'transmitted');
+    } catch (err) {
+      asrtMsg('Could not send it: ' + err.message, false);
+    }
+  }
+
+  async function reloadAssertions() {
+    try {
+      var both = await Promise.all([
+        fetch('/api/workspaces/' + ws.id + '/assertions/available').then(function (r) { return r.json(); }),
+        fetch('/api/workspaces/' + ws.id + '/assertions').then(function (r) { return r.json(); })
+      ]);
+      available = both[0] || { available: [] };
+      assertions = both[1].assertions || [];
+    } catch (err) {
+      console.warn('[Workspace/Assertions]', err);
+    }
+    renderAssertions();
+  }
+
   // ── Parties & participants (PRD-24) ───────────────────────────────────────
 
   /**
@@ -1275,6 +1442,7 @@
   renderSlots();
   if (P.slots.owner) loadOwnerUsers();
   if (P.slots.participants) { renderParties(); loadRoster(); reloadParties(); }
+  reloadAssertions();
   loadThread();
 })();
 </script>
