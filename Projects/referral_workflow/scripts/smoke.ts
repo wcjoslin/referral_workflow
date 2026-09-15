@@ -388,6 +388,118 @@ async function main(): Promise<void> {
     'the Owner column would be empty for a workspace that has an owner',
   );
 
+  // ── Parties & participants (PRD-24) ───────────────────────────────────────
+  //
+  // Continues from the ownership section above: wsWith is owned by `other`, so
+  // they must already be a Manager participant without anyone adding them.
+  const partiesApi = await get(`/api/workspaces/${wsWith.id}/parties`);
+  check('GET the parties returns 200', partiesApi.status === 200, `status ${partiesApi.status}`);
+  check(
+    'both parties were seeded on creation, with no manual step',
+    partiesApi.body.includes('"partyRole":"initiating"') &&
+      partiesApi.body.includes('"partyRole":"receiving"'),
+    'a workspace exists without its counterparties',
+  );
+  check(
+    'the receiving party is named from config, not guessed from our own domain',
+    partiesApi.body.includes('"orgName":"Specialist Care Group"') &&
+      partiesApi.body.includes('"orgNameVerified":true'),
+  );
+  check(
+    'the initiating party falls back to its domain and says so',
+    partiesApi.body.includes('"orgName":"primary.direct"') &&
+      partiesApi.body.includes('"orgNameVerified":false'),
+    'a derived name was presented as though somebody had confirmed it',
+  );
+  check(
+    'a party with an address starts assumed, not verified',
+    partiesApi.body.includes('"capabilityVerifiedAt":null'),
+    'a capability nobody has exercised is being shown as proven',
+  );
+
+  // The three-step lookup, exercised through the observer: a message from an
+  // address nobody has seen before must still reach the right party.
+  const { recordThreadMessage } = await import('../src/modules/messaging/threadService');
+  await recordThreadMessage({
+    referralId: withCcda.id,
+    direction: 'inbound',
+    messageType: 'InfoReply',
+    summary: 'Follow-up from a clinician at the referring organization',
+    senderAddress: 'e.chen@primary.direct',
+  });
+  await new Promise((r) => setTimeout(r, 300));
+
+  const afterObserve = await get(`/api/workspaces/${wsWith.id}/parties`);
+  check(
+    'an inbound sender teaches the party a new address',
+    afterObserve.body.includes('e.chen@primary.direct'),
+    'the domain fallback did not file it, so the next message would not match exactly',
+  );
+
+  const modeBad = await post(`/api/workspaces/${wsWith.id}/parties/1/protocol-mode`, {
+    protocolMode: 'carrier-pigeon',
+  });
+  check('an unknown protocol mode is refused', modeBad.status === 400, `status ${modeBad.status}`);
+
+  const participantsApi = await get(`/api/workspaces/${wsWith.id}/participants`);
+  check(
+    'GET the participants returns 200',
+    participantsApi.status === 200,
+    `status ${participantsApi.status}`,
+  );
+  check(
+    'the owner is already a Manager participant, unprompted',
+    participantsApi.body.includes(`"userId":${other.id}`) &&
+      participantsApi.body.includes('"role":"Manager"') &&
+      participantsApi.body.includes('"isOwner":true'),
+    'the accountable person is missing from the list of people involved',
+  );
+
+  const addBad = await post(`/api/workspaces/${wsWith.id}/participants`, {
+    userId: roster[3].id,
+    role: 'Admin',
+  });
+  check('an unknown participant role is refused', addBad.status === 400, `status ${addBad.status}`);
+  const addOk = await post(`/api/workspaces/${wsWith.id}/participants`, {
+    userId: roster[3].id,
+    role: 'Viewer',
+  });
+  check('a participant can be added', addOk.status === 200, `status ${addOk.status}`);
+  const reAdd = await post(`/api/workspaces/${wsWith.id}/participants`, {
+    userId: roster[3].id,
+    role: 'Collaborator',
+  });
+  const afterReAdd = await get(`/api/workspaces/${wsWith.id}/participants`);
+  check(
+    're-adding updates the role rather than duplicating the person',
+    reAdd.status === 200 && afterReAdd.body.split(`"userId":${roster[3].id}`).length - 1 === 1,
+    'the same person appears twice on one roster',
+  );
+
+  const removeOwner = await fetch(`${BASE}/api/workspaces/${wsWith.id}/participants/${other.id}`, {
+    method: 'DELETE',
+  });
+  check(
+    'the owner cannot be removed from the roster',
+    removeOwner.status === 409,
+    `status ${removeOwner.status}`,
+  );
+
+  check(
+    'the participants panel is live, not a PRD-24 placeholder',
+    reDetail.body.includes('"participants":true') && reDetail.body.includes('renderParties'),
+    'slots.participants was not true — the page would render the coming-soon card',
+  );
+  check(
+    'the panel explains protocol mode in plain language rather than echoing the enum',
+    reDetail.body.includes('speaks 360X') && reDetail.body.includes('nothing is transmitted'),
+  );
+  check(
+    'the panel says roles are not access control yet',
+    reDetail.body.includes('not access control yet'),
+    'a reader could take Viewer for a permission',
+  );
+
   // ── Escaping: the other defect that shipped ───────────────────────────────
   const pages: [string, string][] = [
     ['/', dashboard.body],

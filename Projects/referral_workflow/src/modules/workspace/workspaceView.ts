@@ -25,6 +25,8 @@ import { ReferralState } from '../../state/referralStateMachine';
 import { WorkStatus, allowedTransitions } from '../../state/workStatusMachine';
 import { getWorkspace, getWorkspaceByReferralId } from './workspaceService';
 import { ActingUser, getUser } from './identityService';
+import { Party, PartyRole, ProtocolMode, getParties } from './partyService';
+import { Participant, ParticipantRole, getParticipants } from './participantService';
 import { getDepartments, getResources } from '../prd03/resourceCalendar';
 import { ExtendedReferralData } from '../prd01/cdaParser';
 import { RoutingAssessment } from '../prd02/claudeService';
@@ -43,10 +45,37 @@ export interface PriorAuthSummary {
 }
 
 /**
- * PRD-24 defines the real shape. Until then `parties` is always `[]`, so this
- * placeholder exists only to keep the payload type honest about the field.
+ * One organization on the referral, as the page renders it (PRD-24).
+ *
+ * `addresses` is every address seen from this party, which is usually more than
+ * one: an organization provisions org intake, departmental and per-clinician
+ * addresses, often all at once. `directAddress` is the single canonical intake
+ * address — the one PRD-29 replies to — not the whole picture.
  */
-export type PartySummary = Record<string, never>;
+export interface PartySummary {
+  id: number;
+  orgName: string;
+  orgNameVerified: boolean;
+  directAddress: string | null;
+  partyRole: PartyRole;
+  protocolMode: ProtocolMode;
+  /** Null => the mode is assumed rather than proven by a real exchange. */
+  capabilityVerifiedAt: string | null;
+  contactName: string | null;
+  addresses: { address: string; addressKind: string | null }[];
+}
+
+/** One internal person on the referral beyond the owner (PRD-24). */
+export interface ParticipantSummary {
+  userId: number;
+  displayName: string;
+  jobRole: string;
+  role: ParticipantRole;
+  addedAt: string;
+  addedByDisplayName: string | null;
+  inactive: boolean;
+  isOwner: boolean;
+}
 
 export interface OutboundMessageSummary {
   id: number;
@@ -98,6 +127,7 @@ export interface WorkspacePayload {
   };
   patient: { firstName: string; lastName: string; dateOfBirth: string };
   parties: PartySummary[];
+  participants: ParticipantSummary[];
   clinicalData: ExtendedReferralData | null;
   assessment: RoutingAssessment | null;
   priorAuth: PriorAuthSummary[];
@@ -196,6 +226,12 @@ export async function buildWorkspacePayload(
     .from(outboundMessages)
     .where(eq(outboundMessages.referralId, referral.id));
 
+  // PRD-24. Both are fetched even for a workspace that has neither, so the
+  // panel renders an explicit empty state rather than disappearing — a missing
+  // parties list means the backfill has not run, which is worth seeing.
+  const parties: Party[] = await getParties(workspace.id);
+  const participants: Participant[] = await getParticipants(workspace.id);
+
   return {
     workspace: {
       id: workspace.id,
@@ -239,7 +275,27 @@ export async function buildWorkspacePayload(
           dateOfBirth: patient.dateOfBirth,
         }
       : { firstName: '', lastName: '', dateOfBirth: '' },
-    parties: [],
+    parties: parties.map((p) => ({
+      id: p.id,
+      orgName: p.orgName,
+      orgNameVerified: p.orgNameVerified,
+      directAddress: p.directAddress,
+      partyRole: p.partyRole,
+      protocolMode: p.protocolMode,
+      capabilityVerifiedAt: iso(p.capabilityVerifiedAt),
+      contactName: p.contactName,
+      addresses: p.addresses.map((a) => ({ address: a.address, addressKind: a.addressKind })),
+    })),
+    participants: participants.map((p) => ({
+      userId: p.userId,
+      displayName: p.displayName,
+      jobRole: p.jobRole,
+      role: p.role,
+      addedAt: p.addedAt.toISOString(),
+      addedByDisplayName: p.addedByDisplayName,
+      inactive: p.inactive,
+      isOwner: p.isOwner,
+    })),
     clinicalData: parseJson<ExtendedReferralData>(referral.clinicalData),
     assessment: parseJson<RoutingAssessment>(referral.aiAssessment),
     priorAuth: paRequests.map((r) => ({
@@ -267,8 +323,8 @@ export async function buildWorkspacePayload(
       conversation: false,
       documents: false,
       activity: false,
-      participants: false,
-      // PRD-21 filled this one. The shell stops rendering its placeholder.
+      // PRD-21 and PRD-24 filled these. The shell stops rendering their placeholders.
+      participants: true,
       owner: true,
     },
   };
