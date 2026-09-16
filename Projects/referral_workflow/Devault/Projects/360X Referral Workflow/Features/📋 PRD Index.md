@@ -368,7 +368,7 @@ The logical order for PRD development:
 - Answers the open question: which receipts prove delivery versus human access
 - **Prerequisite:** PRD-14 Phase 1, PRD-19
 
-**Status:** 📋 Drafting
+**Status:** ✅ Implemented (2026-09-16, v1.2)
 **Module:** `workspace/`, `analytics/`
 
 ---
@@ -455,12 +455,12 @@ The logical order for PRD development:
 | [[PRD-22 - Referral Conversation\|22]] | Referral Conversation | ✅ | One thread, Internal/Shared visibility, versioned | `workspace/` |
 | [[PRD-23 - Document Collection\|23]] | Document Collection | ✅ | Index over existing artifacts, delivery + access evidence | `workspace/` |
 | [[PRD-24 - Parties & Participants\|24]] | Parties & Participants | ✅ | Organizations + Direct address + protocol mode; internal roles | `workspace/` |
-| [[PRD-25 - Activity History & Audit\|25]] | Activity History & Audit | 📋 | Per-referral event reader, merged feed, gaps closed | `workspace/`, `analytics/` |
+| [[PRD-25 - Activity History & Audit\|25]] | Activity History & Audit | ✅ | Per-referral event reader, merged feed, gaps closed | `workspace/`, `analytics/` |
 | [[PRD-26 - Next Action & Due Dates\|26]] | Next Action & Due Dates | 📋 | Config-driven actions, awaited-by, overdue sweep | `workspace/` |
 | [[PRD-27 - Notifications\|27]] | Notifications | 📋 | Nine triggers, one funnel, guest allow list | `workspace/` |
 | [[PRD-28 - Correlation & Exception Queue\|28]] | Correlation & Exception Queue | 📋 | Idempotent intake, exceptions, manual reassociation | `workspace/`, `prd01/` |
 | [[PRD-29 - 360X Protocol Gateway\|29]] | 360X Protocol Gateway | ✅ | Context authoring, artifact rendering, record-then-transmit | `workspace/` |
-| [[PRD-30 - Guest Participation\|30]] | Guest Participation | ◐ | Scoped invitations, guest view, audited external access | `workspace/` |
+| [[PRD-30 - Guest Participation\|30]] | Guest Participation | ✅ | Scoped invitations, guest view, audited external access | `workspace/` |
 
 ---
 

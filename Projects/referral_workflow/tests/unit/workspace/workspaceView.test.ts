@@ -340,22 +340,24 @@ describe('buildWorkspacePayload()', () => {
     expect(new Date(payload!.workspace.archivedAt as string).getTime()).not.toBeNaN();
   });
 
-  it('switches on the panels that are built and leaves the rest for their PRDs', async () => {
+  it('switches on every panel now that all five are built', async () => {
     const workspace = await createWorkspace(insertReferral());
 
     const payload = await buildWorkspacePayload(workspace.id, NOBODY);
 
-    // A slot flips to true exactly when its PRD lands: `owner` in PRD-21,
-    // `participants` in PRD-24, `conversation` in PRD-22, `documents` in
-    // PRD-23. Only PRD-25's activity feed is left. Asserting the whole object
-    // rather than one key means the next PRD has to come past this test, so a
-    // panel cannot be half-wired — live code behind a flag saying otherwise.
+    // PRD-19 built the shell with five placeholders and PRD-21, 22, 23, 24 and
+    // 25 each replaced their own. This test came past every one of them, which
+    // was the point of asserting the whole object rather than one key: a panel
+    // could not be half-wired with live code behind a flag saying otherwise.
+    //
+    // The flags stay rather than being deleted, so a future panel has somewhere
+    // to declare itself unbuilt — and this assertion will make it say so.
     expect(payload!.slots).toEqual({
       owner: true,
       participants: true,
       conversation: true,
       documents: true,
-      activity: false,
+      activity: true,
     });
   });
 

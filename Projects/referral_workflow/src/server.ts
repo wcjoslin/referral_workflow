@@ -170,6 +170,13 @@ import {
   uploadDocument,
 } from './modules/workspace/documentService';
 import {
+  ActivityWorkspaceNotFoundError,
+  getActivityFeed,
+  getGuestActivityFeed,
+} from './modules/workspace/activityService';
+import { ACTIVITY_KINDS, ActivityKind, ReferralEvents } from './modules/workspace/eventCatalog';
+import { NotReopenableError, reopenReferral } from './modules/workspace/dispositionOverride';
+import {
   InvalidWorkStatusTransitionError,
   allowedTransitions,
   isValidState as isValidWorkStatus,
@@ -1954,6 +1961,56 @@ app.post('/api/guest/documents', uploadBody, async (req: Request, res: Response)
   }
 });
 
+// ── Activity history (PRD-25) ───────────────────────────────────
+
+function parseActivityKind(raw: unknown): ActivityKind | undefined {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== 'string' || !value) return undefined;
+  return (ACTIVITY_KINDS as readonly string[]).includes(value)
+    ? (value as ActivityKind)
+    : undefined;
+}
+
+app.get('/api/workspaces/:id/activity', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    // An unrecognised ?kind is treated as no filter rather than as an error: a
+    // stale bookmark should show the whole feed, not a 400.
+    res.json(await getActivityFeed(workspaceId, parseActivityKind(req.query.kind)));
+  } catch (err) {
+    if (err instanceof ActivityWorkspaceNotFoundError) {
+      res.status(404).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+/**
+ * The guest feed. Built from an allow-list of protocol milestones, not the
+ * internal feed with entries removed — so an internal event type added by a
+ * later PRD cannot surface here by default.
+ */
+app.get('/api/guest/activity', async (req: Request, res: Response) => {
+  let guest: GuestContext;
+  try {
+    guest = await requireGuest(req);
+  } catch (err) {
+    sendGuestDenied(err, req, res, true);
+    return;
+  }
+  try {
+    res.json(await getGuestActivityFeed(guest));
+  } catch (err) {
+    console.error('[Guest/Activity]', err);
+    res.status(500).json({ error: 'Something went wrong.' });
+  }
+});
+
 // ── Guest participation (PRD-30) ─────────────────────────────────────────────
 
 /**
@@ -2584,6 +2641,24 @@ app.post('/api/referrals/:id/routing', async (req: Request, res: Response, next:
     }
 
     await db.update(referrals).set(updates).where(eq(referrals.id, referralId));
+
+    // PRD-25: this route changed the department and recorded NOTHING, so a
+    // coordinator rerouting a referral left no trace at all. Both the previous
+    // and the new value are recorded — a change event with only the new value
+    // cannot answer "what did somebody change it FROM", which is the question
+    // an auditor actually asks.
+    void emitEvent({
+      eventType: ReferralEvents.ROUTING_CHANGED,
+      entityType: 'referral',
+      entityId: referralId,
+      actor: await actingActor(req),
+      metadata: {
+        previousDepartment: referral.routingDepartment,
+        department: updates.routingDepartment ?? referral.routingDepartment,
+        previousEquipment: referral.routingEquipment,
+        equipment: updates.routingEquipment ?? referral.routingEquipment,
+      },
+    }).catch((err) => console.error('[Routing]', err));
 
     res.json({
       success: true,
@@ -3509,32 +3584,21 @@ app.post('/referrals/:id/override', async (req: Request, res: Response, next: Ne
       })
       .where(eq(skillExecutions.id, execution.id));
 
-    // If the skill auto-declined, transition back to Acknowledged
+    // PRD-25 fixed the bypass this route used to carry. It wrote `state` twice
+    // from string literals; now both reversals go through reopenReferral(),
+    // which uses transition() for the legal one (Pending-Information) and is the
+    // single audited exception for the illegal one (Declined is terminal).
     const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
-    if (referral && referral.state === 'Declined') {
-      await db
-        .update(referrals)
-        .set({
-          state: 'Acknowledged',
-          declineReason: null,
-          clinicianId: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(referrals.id, referralId));
-    } else if (referral && referral.state === 'Pending-Information') {
-      await db
-        .update(referrals)
-        .set({
-          state: 'Acknowledged',
-          updatedAt: new Date(),
-        })
-        .where(eq(referrals.id, referralId));
-    }
+    const reopenable =
+      referral &&
+      (referral.state === ReferralState.DECLINED ||
+        referral.state === ReferralState.PENDING_INFORMATION);
 
-    // PRD-18: keep the work status in step after an override. Like the
-    // pendingInfoChecker escalation, this route writes `state` directly rather
-    // than through transition() — that bypass is PRD-25's to fix.
-    if (referral && referral.state !== 'Acknowledged') {
+    if (reopenable) {
+      await reopenReferral(referralId, await actingActor(req), reason);
+      // PRD-18: keep the work status in step. Only after a reopen actually
+      // happened — proposing for a referral that was already Acknowledged was
+      // always a no-op the old condition happened to allow.
       await proposeForReferral(referralId, ReferralState.ACKNOWLEDGED);
     }
 
@@ -3548,6 +3612,13 @@ app.post('/referrals/:id/override', async (req: Request, res: Response, next: Ne
 
     res.json({ success: true, overriddenExecution: execution.id });
   } catch (err) {
+    // 409, not a 500: the request was well formed and the referral's current
+    // state refused it. Reachable if the state changes between the read above
+    // and the reopen.
+    if (err instanceof NotReopenableError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 });

@@ -1116,6 +1116,146 @@ async function main(): Promise<void> {
     'the placeholder is still being rendered alongside the real panel',
   );
 
+  // ── Activity history (PRD-25) ─────────────────────────────────────────────
+  //
+  // Inside the guest block so the guest feed can be checked against the bytes
+  // while internal events for the same referral exist.
+
+  // The routing route recorded NOTHING before PRD-25. Driven through the real
+  // route so the event is proved end to end rather than at the service.
+  const reroute = await post(
+    `/api/referrals/${withCcda.id}/routing`,
+    { department: 'Neurology' },
+    me.id,
+  );
+  check('the routing route accepts a change', reroute.status === 200, `status ${reroute.status}`);
+
+  const activity = await get(`/api/workspaces/${wsWith.id}/activity`, me.id);
+  check('GET the activity feed returns 200', activity.status === 200, `status ${activity.status}`);
+  check(
+    'the routing change is now recorded, with the value it changed FROM',
+    activity.body.includes('referral.routing_changed') &&
+      activity.body.includes('"previousDepartment":"Cardiology"') &&
+      activity.body.includes('Neurology'),
+    'a routing change left no usable trace',
+  );
+
+  const feed = JSON.parse(activity.body) as {
+    total: number;
+    counts: Record<string, number>;
+    entries: { kind: string; eventType: string; actorLabel: string; evidence: string | null }[];
+  };
+  check('the feed reads the log for this referral', feed.total > 5, `${feed.total} entries`);
+  check(
+    'it carries every kind the referral has generated',
+    feed.counts.status > 0 && feed.counts.user > 0 && feed.counts.access > 0,
+    `counts ${JSON.stringify(feed.counts)}`,
+  );
+  check(
+    'delivery and access are distinct evidence, never one "seen" flag',
+    feed.entries.some((e) => e.evidence === 'access') &&
+      feed.entries.every((e) => e.evidence === null || e.evidence === 'access' || e.evidence === 'delivery'),
+    'evidence is not being classified',
+  );
+  check(
+    'a real person is named rather than a raw actor string',
+    feed.entries.some((e) => e.actorLabel.includes('Chen')),
+    'the actor resolver did not resolve anybody',
+  );
+  check(
+    'no actor renders as an unresolved prefix',
+    !feed.entries.some((e) => /^(user|guest|clinician|skill|payer):/.test(e.actorLabel)),
+    'an actor string reached the feed unresolved',
+  );
+
+  const filtered = await get(`/api/workspaces/${wsWith.id}/activity?kind=user`, me.id);
+  const filteredFeed = JSON.parse(filtered.body) as {
+    total: number;
+    counts: Record<string, number>;
+    entries: { kind: string }[];
+  };
+  check(
+    'a kind filter narrows the entries but keeps the unfiltered counts',
+    filteredFeed.entries.every((e) => e.kind === 'user') &&
+      filteredFeed.total === feed.total &&
+      filteredFeed.counts.status === feed.counts.status,
+    'a filtered feed reported filtered counts, so every other tab would read zero',
+  );
+
+  const badKind = await get(`/api/workspaces/${wsWith.id}/activity?kind=nonsense`, me.id);
+  check(
+    'an unrecognised kind shows everything rather than erroring',
+    badKind.status === 200 && (JSON.parse(badKind.body) as { entries: unknown[] }).entries.length === feed.total,
+    `status ${badKind.status}`,
+  );
+
+  // ── The guest feed, read from the bytes ───────────────────────────────────
+  const guestActivity = await getRaw('/api/guest/activity', guestCookie);
+  check('the guest activity API returns 200', guestActivity.status === 200, `status ${guestActivity.status}`);
+  for (const internal of [
+    'workspace.assigned',
+    'workspace.work_status_changed',
+    'workspace.comment_added',
+    'workspace.document_viewed',
+    'referral.routing_changed',
+    'INTERNAL-ONLY-MARKER',
+  ]) {
+    check(
+      `the guest feed withholds ${internal}`,
+      !guestActivity.body.includes(internal),
+      'an internal event reached a guest',
+    );
+  }
+  // NOT asserting the feed is non-empty here: the smoke fixtures are inserted
+  // directly rather than driven through ingest, so no `referral.*` event was
+  // ever emitted for them. What this block can prove is the security property —
+  // every entry that DOES appear is allow-listed — and the end of the script
+  // asserts the feed fills up once real protocol events exist.
+  const guestEntries = (JSON.parse(guestActivity.body) as {
+    entries: { eventType: string }[];
+  }).entries;
+  check(
+    'every entry a guest can see is an allow-listed protocol milestone',
+    guestEntries.every((e) => e.eventType.startsWith('referral.')),
+    `a non-protocol event reached a guest: ${guestEntries.map((e) => e.eventType).join(', ')}`,
+  );
+  check(
+    'and never names which member of staff acted',
+    !guestActivity.body.includes('Chen') && !guestActivity.body.includes('"user:'),
+    'internal staffing detail reached a guest',
+  );
+
+  const guestPageActivity = await getRaw('/guest/workspace', guestCookie);
+  check(
+    'the guest page carries its history section',
+    guestPageActivity.body.includes('gActivity') && guestPageActivity.body.includes('/api/guest/activity'),
+    'the guest history section is not wired in',
+  );
+
+  const activityDenied = await getRaw(`/api/workspaces/${wsWith.id}/activity`, guestCookie);
+  check(
+    'a guest cookie is refused at the internal activity API',
+    activityDenied.status === 403,
+    `status ${activityDenied.status}`,
+  );
+
+  const actPanel = await get(`/workspaces/${wsWith.id}`, me.id);
+  check(
+    'the workspace page carries the activity panel',
+    actPanel.body.includes('renderActivity') && actPanel.body.includes('act-tabs'),
+    'the activity panel is not wired into the page',
+  );
+  check(
+    'every reserved panel is now filled',
+    // Asserted against the embedded payload, not the page text: renderSlots()
+    // carries the string 'slot-tag' in its source whether or not it is ever
+    // called, so searching the bytes proves nothing.
+    /"slots":\{"activity":true,"documents":true,"conversation":true,"participants":true,"owner":true\}/.test(
+      actPanel.body,
+    ),
+    'a reserved panel is still flagged unbuilt',
+  );
+
   await revokeInvitation(invitation.id, other);
   const afterRevoke = await getRaw('/api/guest/workspace', guestCookie);
   check(
@@ -1290,6 +1430,38 @@ async function main(): Promise<void> {
       `page ${page.status}, api ${api.status}`,
     );
   }
+
+  // ── PRD-25: no orphaned events ────────────────────────────────────────────
+  //
+  // Placed last, once every assertion in this run has been made. Before PRD-25
+  // the retransmit path emitted `workspace.assertion_made` with `entityId: 0`,
+  // which belongs to no referral and would never appear in a per-referral feed.
+  const { workflowEvents: smokeEvents } = await import('../src/db/schema');
+  const orphaned = await smokeDb
+    .select()
+    .from(smokeEvents)
+    .where(smokeEq(smokeEvents.entityId, 0));
+  const orphanTypes = [...new Set(orphaned.map((e) => e.eventType))].sort();
+  check(
+    'no workspace event is orphaned at entityId 0',
+    !orphanTypes.includes('workspace.assertion_made'),
+    `orphaned event types: ${orphanTypes.join(', ')}`,
+  );
+
+  const finalFeed = await get(`/api/workspaces/${wsWith.id}/activity`, me.id);
+  const finalEntries = (JSON.parse(finalFeed.body) as {
+    entries: { eventType: string; kind: string }[];
+  }).entries;
+  check(
+    'the feed carries the protocol assertions made during this run',
+    finalEntries.some((e) => e.eventType === 'workspace.assertion_made'),
+    'assertion events are not reaching the per-referral feed',
+  );
+  check(
+    'and the protocol state changes alongside them',
+    finalEntries.some((e) => e.kind === 'status'),
+    'no status entry reached the feed',
+  );
 
   // ── Report ────────────────────────────────────────────────────────────────
   const failed = checks.filter((c) => !c.ok);
