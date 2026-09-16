@@ -54,6 +54,22 @@ import {
   WorkspaceNotFoundError,
 } from './modules/workspace/workspaceService';
 import {
+  QueueFilters,
+  QueueNotFoundError,
+  QueueNotVisibleError,
+  SavedFilterNotFoundError,
+  addQueueMember,
+  deleteSavedFilter,
+  getQueueRows,
+  listQueueMembers,
+  listQueues,
+  listSavedFilters,
+  moveWorkspace,
+  parseFilters,
+  removeQueueMember,
+  saveFilter,
+} from './modules/workspace/queueService';
+import {
   OwnerFilter,
   buildWorkspacePayload,
   listWorkspaceRows,
@@ -233,9 +249,14 @@ app.use(express.json({ type: ['application/json', 'application/fhir+json'] }));
  * different patient's internal workspace. This closes exactly that path: a
  * browser holding a guest session cannot reach an internal surface with it.
  *
- * It does NOT stop an unauthenticated stranger, and it is not meant to. PRD-20
- * owns the real boundary; deploying guest access to a publicly reachable host is
- * gated on it.
+ * It does NOT stop an unauthenticated stranger, and it is not meant to.
+ *
+ * PRD-20 was originally going to own the real boundary. It does not: that work
+ * was deferred out of the epic by an explicit decision and is tracked as PRD-31.
+ * PRD-20 ships queue scoping as a server-side least-privilege DEFAULT — the
+ * predicate is real and a caller cannot widen its own scope — but it scopes
+ * against this same forgeable identity, so it is not an access control either.
+ * Deploying guest access to a publicly reachable host is gated on PRD-31.
  *
  * Deliberately placed before every route so no future internal route can forget
  * it, and deliberately allowing `/guest` and `/api/guest`, which are the only
@@ -290,6 +311,7 @@ const NAV_HTML = `<style>
 <nav style="background:var(--color-nav-bg);padding:12px 24px;display:flex;gap:24px;align-items:center;position:sticky;top:0;z-index:100;box-shadow:0 2px 4px rgba(0,0,0,0.4);">
   <span style="color:#fff;font-weight:700;font-size:0.95rem;letter-spacing:0.02em;">360X Referral</span>
   <a href="/" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;margin-left:8px;">Home</a>
+  <a href="/queues" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Queues</a>
   <a href="/workspaces" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Workspaces</a>
   <a href="/overview" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Overview</a>
   <a href="/claims" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Claims</a>
@@ -575,6 +597,332 @@ app.post('/api/workspaces/backfill', async (_req: Request, res: Response, next: 
   try {
     const result = await backfillWorkspaces();
     res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── PRD-20 shared queues ─────────────────────────────────────────────────────
+
+/**
+ * Turns a query string into filters.
+ *
+ * Everything goes through `parseFilters()`, which is an allow-list — an
+ * unrecognised value is dropped rather than passed down. Note what is NOT read
+ * here: any notion of a queue. The queue is the slug in the path, resolved
+ * server-side against the caller's scope, so there is no second and unscoped way
+ * to choose one.
+ */
+function queueFiltersFrom(req: Request): QueueFilters {
+  const q = req.query as Record<string, unknown>;
+  return parseFilters({
+    tab: q.tab,
+    workStatus: q.workStatus,
+    referralState: q.referralState,
+    ownerUserId: q.owner,
+    partyOrgName: q.org,
+    department: q.department,
+    dueBefore: q.dueBefore,
+    dueAfter: q.dueAfter,
+    overdueOnly: q.overdueOnly,
+  } as Record<string, unknown>);
+}
+
+/**
+ * Resolves the acting user for a queue surface, or answers the empty state.
+ *
+ * Queue surfaces cannot fall back to "show everything" when there is no user,
+ * which is what an unresolved identity would otherwise mean. Returns null after
+ * having already answered the request.
+ */
+async function requireQueueUser(
+  req: Request,
+  res: Response,
+  asJson: boolean,
+): Promise<Awaited<ReturnType<typeof tryGetActingUser>> | null> {
+  const user = await tryGetActingUser(req);
+  if (user) return user;
+  if (asJson) {
+    res.status(409).json({
+      error: 'no-acting-user',
+      message: 'No users are seeded. Run: npm run seed',
+    });
+  } else {
+    res
+      .status(409)
+      .send(notFoundPage('No users are seeded, so no queue can be scoped. Run: npm run seed'));
+  }
+  return null;
+}
+
+/** The queue list, each queue with its per-tab counts, scoped to the caller. */
+app.get('/queues', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, false);
+    if (!user) return;
+
+    const queues = await listQueues(user);
+    const templatePath = path.join(__dirname, 'views', 'queueList.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__QUEUE_LIST__*/',
+      `window.__QUEUE_LIST__ = ${embedJson({
+        queues,
+        actingUser: { id: user.id, displayName: user.displayName, allQueuesAccess: user.allQueuesAccess },
+      })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * One queue's view. 403 for a queue outside the caller's scope (AC4).
+ *
+ * `all` is a reserved slug meaning "every queue in MY scope" — for a user
+ * without the grant that is still only their memberships, never everything.
+ */
+app.get('/queues/:slug', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, false);
+    if (!user) return;
+
+    const slug = String(req.params.slug);
+    const filters = queueFiltersFrom(req);
+
+    let data;
+    try {
+      data = await getQueueRows(user, slug, filters);
+    } catch (err) {
+      if (err instanceof QueueNotVisibleError) {
+        res.status(403).send(notFoundPage('That queue is not available to you.'));
+        return;
+      }
+      throw err;
+    }
+
+    const templatePath = path.join(__dirname, 'views', 'queueView.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__QUEUE_VIEW__*/',
+      `window.__QUEUE_VIEW__ = ${embedJson({
+        slug,
+        queue: data.queue,
+        counts: data.counts,
+        rows: data.rows,
+        filters: { ...filters, dueBefore: undefined, dueAfter: undefined },
+        queues: await listQueues(user),
+        departments: getDepartments(),
+        users: (await listUsers()).map((u) => ({ id: u.id, displayName: u.displayName })),
+        savedFilters: await listSavedFilters(user.id),
+        actingUser: { id: user.id, displayName: user.displayName },
+      })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** The rows behind the queue view, for the client-side filter round trip. */
+app.get('/api/queues/:slug/rows', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+
+    const slug = String(req.params.slug);
+    try {
+      const data = await getQueueRows(user, slug, queueFiltersFrom(req));
+      res.json({
+        queue: data.queue ? { slug: data.queue.slug, name: data.queue.name } : null,
+        counts: data.counts,
+        rows: data.rows,
+      });
+    } catch (err) {
+      if (err instanceof QueueNotVisibleError) {
+        // 403 and NO data — deliberately identical for a queue that exists but
+        // is out of scope and one that does not exist, so the response cannot be
+        // used to enumerate queues.
+        res.status(403).json({ error: 'queue-not-visible' });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Queue membership. */
+app.get('/api/queues/:slug/members', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+    const { resolveVisibleQueue } = await import('./modules/workspace/queueService');
+    try {
+      const queue = await resolveVisibleQueue(user, String(req.params.slug));
+      res.json({ queue: { slug: queue.slug, name: queue.name }, members: await listQueueMembers(queue.id) });
+    } catch (err) {
+      if (err instanceof QueueNotVisibleError) {
+        res.status(403).json({ error: 'queue-not-visible' });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/queues/:slug/members', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+
+    const body = (req.body ?? {}) as { userId?: unknown; accessLevel?: unknown };
+    const userId = typeof body.userId === 'number' ? body.userId : Number(body.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      res.status(400).json({ error: 'userId must be a positive integer' });
+      return;
+    }
+    const accessLevel = body.accessLevel === 'manager' ? 'manager' : 'member';
+
+    const { resolveVisibleQueue } = await import('./modules/workspace/queueService');
+    try {
+      const queue = await resolveVisibleQueue(user, String(req.params.slug));
+      await addQueueMember(queue.id, userId, user, accessLevel);
+      res.json({ ok: true, members: await listQueueMembers(queue.id) });
+    } catch (err) {
+      if (err instanceof QueueNotVisibleError) {
+        res.status(403).json({ error: 'queue-not-visible' });
+        return;
+      }
+      if (err instanceof QueueNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/api/queues/:slug/members/:userId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+    const userId = parseInt(String(req.params.userId), 10);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      res.status(400).json({ error: 'userId must be a positive integer' });
+      return;
+    }
+    const { resolveVisibleQueue } = await import('./modules/workspace/queueService');
+    try {
+      const queue = await resolveVisibleQueue(user, String(req.params.slug));
+      await removeQueueMember(queue.id, userId, user);
+      res.json({ ok: true, members: await listQueueMembers(queue.id) });
+    } catch (err) {
+      if (err instanceof QueueNotVisibleError) {
+        res.status(403).json({ error: 'queue-not-visible' });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Manual re-queue of one workspace (AC17). */
+app.post('/api/workspaces/:id/queue', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(400).json({ error: 'workspace id must be a positive integer' });
+      return;
+    }
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+
+    const body = (req.body ?? {}) as { queueId?: unknown; reason?: unknown };
+    const queueId = typeof body.queueId === 'number' ? body.queueId : Number(body.queueId);
+    if (!Number.isInteger(queueId) || queueId <= 0) {
+      res.status(400).json({ error: 'queueId must be a positive integer' });
+      return;
+    }
+    const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : undefined;
+
+    try {
+      await moveWorkspace(workspaceId, queueId, user, reason);
+      res.json({ ok: true, workspaceId, queueId });
+    } catch (err) {
+      if (err instanceof QueueNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Per-user saved filter sets (AC12). */
+app.get('/api/saved-filters', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+    res.json({ savedFilters: await listSavedFilters(user.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/saved-filters', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+    const body = (req.body ?? {}) as { name?: unknown; filters?: unknown };
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    // The stored set goes through the same allow-list as a query string, so a
+    // saved filter is not a privileged path into the filter object.
+    const filters = parseFilters((body.filters ?? {}) as Record<string, unknown>);
+    const saved = await saveFilter(user.id, name, filters);
+    res.json({ ok: true, savedFilter: saved });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/api/saved-filters/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'id must be a positive integer' });
+      return;
+    }
+    try {
+      // Scoped to the owner inside the service, so this is a miss rather than a
+      // cross-user delete.
+      await deleteSavedFilter(user.id, id);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err instanceof SavedFilterNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   } catch (err) {
     next(err);
   }

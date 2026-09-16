@@ -2,12 +2,12 @@
 title: PRD Index - All Product Requirements
 tags: [prd, features, index]
 up: "[[🎯 PROJECT OVERVIEW]]"
-down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[PRD-12 - Prior Authorization]]", "[[PRD-13 - Department Classification]]", "[[PRD-14 - Analytics Agent (Phase 1)]]", "[[PRD-14 - Analytics Agent (Phase 2)]]", "[[PRD-15 - Analytics Agent AI]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]", "[[Feature - No-Show & Consult Demo Scenarios]]", "[[Feature - Full Demo Seed Expansion (100 Scenarios)]]", "[[PRD-16 - 360X Referral Collaboration Workspace]]", "[[PRD-17 - Identity & Acting User]]", "[[PRD-18 - Workspace Entity & Dual Status]]", "[[PRD-19 - Workspace Shell]]", "[[PRD-20 - Shared Queues & Queue View]]", "[[PRD-21 - Ownership & Assignment]]", "[[PRD-22 - Referral Conversation]]", "[[PRD-23 - Document Collection]]", "[[PRD-24 - Parties & Participants]]", "[[PRD-25 - Activity History & Audit]]", "[[PRD-26 - Next Action & Due Dates]]", "[[PRD-27 - Notifications]]", "[[PRD-28 - Correlation & Exception Queue]]", "[[PRD-29 - 360X Protocol Gateway]]", "[[PRD-30 - Guest Participation]]"]
+down: ["[[PRD-01 - Receive & Acknowledge]]", "[[PRD-02 - Process & Disposition]]", "[[PRD-03 - Schedule Patient]]", "[[PRD-04 - Generate Consult Note]]", "[[PRD-05 - Patient Encounter]]", "[[PRD-06 - Close Loop]]", "[[PRD-07 - Ack Tracking]]", "[[PRD-10 - UI Modernization & CCDA Viewer]]", "[[PRD-11 - No-Show & Consult States]]", "[[PRD-12 - Prior Authorization]]", "[[PRD-13 - Department Classification]]", "[[PRD-14 - Analytics Agent (Phase 1)]]", "[[PRD-14 - Analytics Agent (Phase 2)]]", "[[PRD-15 - Analytics Agent AI]]", "[[Feature - Human-Readable Email Summaries]]", "[[Feature - Human-Readable Message Type Labels]]", "[[Feature - No-Show & Consult Demo Scenarios]]", "[[Feature - Full Demo Seed Expansion (100 Scenarios)]]", "[[PRD-16 - 360X Referral Collaboration Workspace]]", "[[PRD-17 - Identity & Acting User]]", "[[PRD-18 - Workspace Entity & Dual Status]]", "[[PRD-19 - Workspace Shell]]", "[[PRD-20 - Shared Queues & Queue View]]", "[[PRD-21 - Ownership & Assignment]]", "[[PRD-22 - Referral Conversation]]", "[[PRD-23 - Document Collection]]", "[[PRD-24 - Parties & Participants]]", "[[PRD-25 - Activity History & Audit]]", "[[PRD-26 - Next Action & Due Dates]]", "[[PRD-27 - Notifications]]", "[[PRD-28 - Correlation & Exception Queue]]", "[[PRD-29 - 360X Protocol Gateway]]", "[[PRD-30 - Guest Participation]]", "[[PRD-31 - Caller Authentication]]"]
 ---
 
 # 📋 PRD Index
 
-Product Requirements Documents for the 360X Referral Workflow project. PRD-01 through PRD-15 map to phases of the closed-loop referral process. PRD-16 through PRD-30 form the [[PRD-16 - 360X Referral Collaboration Workspace|Collaboration Workspace epic]], which layers a persistent referral workspace over that protocol core and makes the workspace itself the 360X enablement layer for both parties.
+Product Requirements Documents for the 360X Referral Workflow project. PRD-01 through PRD-15 map to phases of the closed-loop referral process. PRD-16 through PRD-30 form the [[PRD-16 - 360X Referral Collaboration Workspace|Collaboration Workspace epic]], with [[PRD-31 - Caller Authentication]] recorded as a deferred follow-up outside it, which layers a persistent referral workspace over that protocol core and makes the workspace itself the 360X enablement layer for both parties.
 
 ---
 
@@ -298,7 +298,7 @@ The logical order for PRD development:
 - Every guest action and every guest document view audited
 - **Prerequisite:** PRD-24
 
-**Status:** ✅ Complete (2026-09-16). PRD-29 filled the assertions, PRD-22 the shared comments and PRD-23 the shared documents, so Phase 2b is done. The authentication gap recorded against it is PRD-20's to close.
+**Status:** ✅ Complete (2026-09-16). PRD-29 filled the assertions, PRD-22 the shared comments and PRD-23 the shared documents, so Phase 2b is done. The authentication gap recorded against it was reassigned from PRD-20 to [[PRD-31 - Caller Authentication]] by an explicit decision, and deploying guest access to a publicly reachable host is gated on it.
 **Module:** `workspace/`
 
 ---
@@ -375,16 +375,44 @@ The logical order for PRD development:
 
 #### Phase 4 — Operational layer
 
-### 20. **[[PRD-20 - Shared Queues & Queue View|PRD-20: Shared Queues & Referral Queue View]]** 📋
-**Queues as a real entity**, with membership as the least-privilege PHI boundary.
+### 20. **[[PRD-20 - Shared Queues & Queue View|PRD-20: Shared Queues & Referral Queue View]]** ✅
+**Queues as a real entity**, with membership as a server-side least-privilege default.
 
-- `queues` + `queue_members`; a user sees the queues they belong to, not every patient
-- Open / Waiting / Exception / Completed tabs with server-side filtering and saved filters
-- Auto-routing from the PRD-13 department classification, with a default triage queue
+- `queues` + `queue_members` + `saved_filters`; a user sees the queues they belong to, and a user in
+  no queue sees an explanatory empty state rather than every patient
+- Open / Waiting / Exception / Completed tabs, server-side filtering and sorting, removable filter
+  chips, per-user saved filter sets
+- Auto-routing from the PRD-13 department classification at workspace creation, with a default
+  triage queue and a `needsTriage` flag for a department nothing claimed
+- Department vocabulary reconciled: `Oncology` and `General Surgery` added to the resource catalogue,
+  so no seeded referral lands in triage because of a catalogue omission
 - **Prerequisite:** PRD-13, PRD-18
 
-**Status:** 📋 Drafting
+**Status:** ✅ Complete (2026-09-16). **Scoping is a least-privilege DEFAULT, not authentication** —
+the draft claimed this PRD would close the authentication gap; that was reassigned out of the epic by
+an explicit decision and is now [[PRD-31 - Caller Authentication]]. The predicate is real (scope
+resolves before any caller filter; an out-of-scope slug is refused, not filtered), but it scopes
+against a forgeable cookie identity. Deploying to a publicly reachable host is gated on PRD-31.
 **Module:** `workspace/`, `views/`
+
+---
+
+### 31. **[[PRD-31 - Caller Authentication|PRD-31: Caller Authentication]]** ⏸️
+**The application authenticates nothing.** A named follow-up, deliberately outside the epic.
+
+- `tryGetActingUser()` reads a cookie anyone can set and otherwise falls back to the first active
+  user, so every internal page and API is served to an unauthenticated caller as real staff
+- PRD-20's queue scoping, PRD-22's visibility boundary and PRD-23's document gates are all correct
+  relative to this identity, and none of them is stronger than it
+- Scope sketch only: a real credential and session, a login surface, and an explicit decision
+  between local and federated identity. Nothing is specified.
+- **Prerequisite:** none technically; PRD-17 created the cookie this replaces
+
+**Status:** ⏸️ Deferred, not scheduled. Created by an explicit decision while refining PRD-20, which
+had claimed to own this work. **Deploying this application to a publicly reachable host is gated on
+it** — PRD-30 hands an invitation URL to an external organization, which is the first feature that
+assumes a reachable host.
+**Module:** `workspace/`, `server.ts`
 
 ---
 
@@ -450,7 +478,7 @@ The logical order for PRD development:
 | [[PRD-17 - Identity & Acting User\|17]] | Identity & Acting User | ✅ | Users table, acting-user picker, `user:<id>` actors | `workspace/` |
 | [[PRD-18 - Workspace Entity & Dual Status\|18]] | Workspace Entity & Dual Status | ✅ | Workspace row, work status machine, closure conflict | `workspace/`, `state/` |
 | [[PRD-19 - Workspace Shell\|19]] | Workspace Shell | ✅ | `/workspaces/:id`, header, dual badges, panel slots | `workspace/`, `views/` |
-| [[PRD-20 - Shared Queues & Queue View\|20]] | Shared Queues & Queue View | 📋 | Queue entity, membership scope, four-tab queue view | `workspace/`, `views/` |
+| [[PRD-20 - Shared Queues & Queue View\|20]] | Shared Queues & Queue View | ✅ | Queue entity, membership scope, four-tab queue view, saved filters | `workspace/`, `views/` |
 | [[PRD-21 - Ownership & Assignment\|21]] | Ownership & Assignment | ✅ | Claim, assign, release, My work, audited | `workspace/` |
 | [[PRD-22 - Referral Conversation\|22]] | Referral Conversation | ✅ | One thread, Internal/Shared visibility, versioned | `workspace/` |
 | [[PRD-23 - Document Collection\|23]] | Document Collection | ✅ | Index over existing artifacts, delivery + access evidence | `workspace/` |
@@ -461,6 +489,7 @@ The logical order for PRD development:
 | [[PRD-28 - Correlation & Exception Queue\|28]] | Correlation & Exception Queue | 📋 | Idempotent intake, exceptions, manual reassociation | `workspace/`, `prd01/` |
 | [[PRD-29 - 360X Protocol Gateway\|29]] | 360X Protocol Gateway | ✅ | Context authoring, artifact rendering, record-then-transmit | `workspace/` |
 | [[PRD-30 - Guest Participation\|30]] | Guest Participation | ✅ | Scoped invitations, guest view, audited external access | `workspace/` |
+| [[PRD-31 - Caller Authentication\|31]] | Caller Authentication | ⏸️ | Deferred out of the epic; gates public deployment | `workspace/`, `server.ts` |
 
 ---
 

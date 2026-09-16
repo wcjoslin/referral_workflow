@@ -111,6 +111,49 @@ function buildCatalogue(): Resource[] {
       department: 'General',
       blockedSlots: [],
     },
+    // Oncology (PRD-20). Added to reconcile the department vocabulary: this
+    // catalogue is the source of `getDepartments()`, which PRD-20 seeds one
+    // queue per, while `routing_department` on a referral comes from PRD-13's
+    // classifier. `Oncology` was the one department present in real referral
+    // data (17 of the demo dataset, the third largest) with no catalogue entry,
+    // so those referrals had no queue to route to and piled into default
+    // triage — making the needsTriage flag meaningless on the only dataset
+    // anyone looks at. Adding the department here is the smaller, more honest
+    // fix than teaching the queue layer about departments the catalogue denies.
+    {
+      id: 'infusion-suite',
+      name: 'Infusion Suite',
+      department: 'Oncology',
+      blockedSlots: [
+        { start: new Date('2026-03-31T08:00:00'), end: new Date('2026-03-31T12:00:00') },
+      ],
+    },
+    {
+      id: 'radiation-oncology-vault',
+      name: 'Radiation Oncology Vault',
+      department: 'Oncology',
+      blockedSlots: [],
+    },
+    // General Surgery (PRD-20), for the same reason as Oncology above. Distinct
+    // from the `General` department, which is generic exam rooms — this is a
+    // surgical specialty, and `seed-analytics-demo.ts` routes referrals to it by
+    // name. Both departments the draft PRD flagged as missing were genuinely
+    // missing; the refinement's first pass measured only the full-demo database
+    // and wrongly concluded this one was unused.
+    {
+      id: 'or-suite-1',
+      name: 'Operating Room 1',
+      department: 'General Surgery',
+      blockedSlots: [
+        { start: new Date('2026-03-30T07:00:00'), end: new Date('2026-03-30T13:00:00') },
+      ],
+    },
+    {
+      id: 'pre-op-holding',
+      name: 'Pre-Op Holding',
+      department: 'General Surgery',
+      blockedSlots: [],
+    },
   ];
 }
 

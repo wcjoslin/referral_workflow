@@ -12,6 +12,7 @@ import { processInboundMessage } from '../src/modules/prd01/messageProcessor';
 import { ingestReferral } from '../src/modules/prd02/referralService';
 import { buildRawEmail } from '../src/demoScenarios';
 import { seedUsers } from '../src/modules/workspace/userRoster';
+import { seedQueues } from '../src/modules/workspace/queueService';
 
 const FIXTURE = path.resolve(__dirname, '../tests/fixtures/sample-referral.xml');
 const cdaXml = fs.readFileSync(FIXTURE, 'utf-8');
@@ -23,6 +24,13 @@ async function main(): Promise<void> {
   // real ingest pipeline — so seeding users is a new capability here.
   const { created, skipped } = await seedUsers();
   console.log(`Seeded staff roster: ${created} created, ${skipped} already present.`);
+
+  // PRD-20: queues, BEFORE the referral is ingested. createWorkspace() routes
+  // from the department, and routing with no queues seeded leaves queue_id null
+  // — recoverable by `npm run backfill:queues`, but the demo would first render
+  // an empty queue view, which is exactly the wrong first impression.
+  const q = await seedQueues();
+  console.log(`Seeded queues: ${q.created} created, ${q.existing} already present.`);
 
   console.log('Seeding demo referral...\n');
 

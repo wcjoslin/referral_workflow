@@ -150,6 +150,13 @@ async function main(): Promise<void> {
     })
     .returning();
 
+  // PRD-20: queues BEFORE the workspaces, because backfillWorkspaces() goes
+  // through createWorkspace(), which routes. Seeding after would leave both
+  // fixtures unrouted and therefore invisible in every queue view — the exact
+  // failure the ordering note in backfill-queues.ts describes.
+  const { seedQueues } = await import('../src/modules/workspace/queueService');
+  await seedQueues();
+
   await backfillWorkspaces();
   const wsWith = await getWorkspaceByReferralId(withCcda.id);
   const wsWithout = await getWorkspaceByReferralId(noCcda.id);
@@ -1461,6 +1468,258 @@ async function main(): Promise<void> {
     'and the protocol state changes alongside them',
     finalEntries.some((e) => e.kind === 'status'),
     'no status entry reached the feed',
+  );
+
+  // ── PRD-20: shared queues ─────────────────────────────────────────────────
+
+  // Resolve the two identities FIRST, because every queue read depends on which
+  // one is asking. seedUsers() grants allQueuesAccess to exactly one person, so
+  // find them rather than assuming a roster index.
+  //
+  // Note what this ordering revealed: the first version of these checks read the
+  // Cardiology queue as the DEFAULT acting user and expected 200. It got 403,
+  // correctly — the default user holds neither the grant nor any membership, so
+  // being refused is the module working. The assertion was wrong, not the code.
+  const rosterAll = await listUsers();
+  const granted = rosterAll.find((u) => u.allQueuesAccess);
+  const ungranted = rosterAll.find((u) => !u.allQueuesAccess);
+  check('the seeded roster has a user holding allQueuesAccess', granted !== undefined);
+  check('and one without it', ungranted !== undefined);
+  if (!granted || !ungranted) throw new Error('the seeded roster cannot exercise queue scope');
+
+  const queueList = await get('/queues', granted.id);
+  check('GET /queues returns 200', queueList.status === 200, `status ${queueList.status}`);
+  check('the queue list embeds its payload', queueList.body.includes('__QUEUE_LIST__'));
+  check('the nav carries the Queues entry', queueList.body.includes('href="/queues"'));
+
+  // The fixtures are Cardiology and Neurology, so both department queues must
+  // exist and routing must have put one workspace in each.
+  const cardio = await get('/api/queues/cardiology/rows', granted.id);
+  check('GET /api/queues/cardiology/rows returns 200', cardio.status === 200, `status ${cardio.status}`);
+  const cardioJson = JSON.parse(cardio.body) as {
+    queue: { slug: string } | null;
+    counts: Record<string, number>;
+    rows: Array<Record<string, unknown>>;
+  };
+  check(
+    'routing put the Cardiology fixture in the Cardiology queue',
+    cardioJson.rows.length === 1 && cardioJson.rows[0].workspaceId === wsWith.id,
+    `got ${cardioJson.rows.length} row(s): ${JSON.stringify(cardioJson.rows.map((r) => r.workspaceId))}`,
+  );
+  check(
+    'and the other fixture is NOT in it',
+    !cardioJson.rows.some((r) => r.workspaceId === wsWithout.id),
+  );
+
+  /**
+   * AC18, end to end and by accident at first.
+   *
+   * The PRD-13 section above already changed this referral's department from
+   * Cardiology to Neurology through the real route. It is still in the
+   * Cardiology queue, which is exactly the required behaviour: a department
+   * change OFFERS a move, it does not perform one, because silently re-queueing
+   * an owned workspace moves work out from under whoever is doing it.
+   *
+   * The first version of this check asserted the row's department was still
+   * 'Cardiology' and failed. The code was right and the assertion was wrong —
+   * so it now asserts the thing that actually matters.
+   */
+  check(
+    'a department change does NOT silently re-queue the workspace (AC18)',
+    cardioJson.rows.length === 1 && cardioJson.rows[0].department === 'Neurology',
+    `department reads ${JSON.stringify(cardioJson.rows[0]?.department)}; ` +
+      'it should have changed while the queue did not',
+  );
+
+  const neuro = await get('/api/queues/neurology/rows', granted.id);
+  const neuroJson = JSON.parse(neuro.body) as { rows: Array<Record<string, unknown>> };
+  check(
+    'routing put the Neurology fixture in the Neurology queue',
+    neuroJson.rows.length === 1 && neuroJson.rows[0].department === 'Neurology',
+    `got ${neuroJson.rows.length} row(s)`,
+  );
+
+  // A department queue nothing routed to must be empty rather than absent or
+  // showing everything — the "no filter means no WHERE clause" failure.
+  const empty = await get('/api/queues/imaging/rows', granted.id);
+  const emptyJson = JSON.parse(empty.body) as { rows: unknown[]; counts: Record<string, number> };
+  check(
+    'a queue with nothing routed to it is empty, not unfiltered',
+    emptyJson.rows.length === 0,
+    `Imaging returned ${emptyJson.rows.length} row(s)`,
+  );
+
+  const queuePage = await get('/queues/cardiology', granted.id);
+  check('GET /queues/:slug returns 200', queuePage.status === 200, `status ${queuePage.status}`);
+  check('the queue view embeds its payload', queuePage.body.includes('__QUEUE_VIEW__'));
+  // Asserted against the SOURCE, because the strip is built client-side — the
+  // rendered `Open<span class="n">` never appears in the bytes. Checking for it
+  // is the mistake PRD-23's smoke section already made once.
+  check('the queue view carries the tab strip', queuePage.body.includes('id="tabstrip"'));
+  for (const [key, label] of [
+    ['open', 'Open'],
+    ['waiting', 'Waiting'],
+    ['exception', 'Exception'],
+    ['completed', 'Completed'],
+  ]) {
+    check(
+      `the queue view defines the ${label} tab`,
+      queuePage.body.includes(`${key}: '${label}'`),
+    );
+  }
+  check(
+    'and the tab counts came from the server rather than being computed in the browser',
+    /"counts":\s*\{/.test(queuePage.body),
+  );
+  check(
+    'the queue view reuses the analytics filter-panel vocabulary rather than a new component',
+    ['filter-panel', 'filter-group', 'filter-select', 'day-btn', 'active-tag', 'reset-btn'].every(
+      (cls) => queuePage.body.includes(cls),
+    ),
+  );
+  check(
+    'the queue view reuses the dashboard row preview endpoint',
+    queuePage.body.includes('/api/referrals/'),
+  );
+  check(
+    'the hostile patient name is escaped on the queue view',
+    !queuePage.body.includes('<script>alert(1)</script>'),
+    'the embedded payload closed the script element',
+  );
+
+  // AC4 / the security check. The grant is what decides, never jobRole and never
+  // an empty membership list.
+  const asGranted = await get('/api/queues/cardiology/rows', granted.id);
+  check(
+    'a user with the grant can read a queue they do not belong to',
+    asGranted.status === 200,
+    `status ${asGranted.status}`,
+  );
+
+  const asUngranted = await get('/api/queues/cardiology/rows', ungranted.id);
+  check(
+    'a user with neither the grant nor membership is refused with 403',
+    asUngranted.status === 403,
+    `status ${asUngranted.status}`,
+  );
+  check(
+    'and the refusal carries no rows',
+    !asUngranted.body.includes('"rows"'),
+    'the 403 body leaked row data',
+  );
+
+  // The empty state, not every workspace — the failure this module is shaped
+  // around. `all` is the slug most likely to be implemented as "no filter".
+  const allAsUngranted = await get('/api/queues/all/rows', ungranted.id);
+  const allJson = JSON.parse(allAsUngranted.body) as { rows: unknown[] };
+  check(
+    'a user in no queue sees NOTHING from /api/queues/all/rows, not everything',
+    allAsUngranted.status === 200 && allJson.rows.length === 0,
+    `status ${allAsUngranted.status}, ${allJson.rows?.length} row(s)`,
+  );
+
+  const listAsUngranted = await get('/queues', ungranted.id);
+  check(
+    'and the queue list shows them the explanatory empty state',
+    listAsUngranted.body.includes('do not belong to any queue'),
+  );
+
+  // An unknown slug and an out-of-scope one must be indistinguishable, so the
+  // response cannot be used to enumerate queues.
+  const unknownSlug = await get('/api/queues/no-such-queue/rows', ungranted.id);
+  check(
+    'an unknown queue slug is refused the same way as an out-of-scope one',
+    unknownSlug.status === 403,
+    `status ${unknownSlug.status}`,
+  );
+
+  // Membership makes a queue readable, which is the other half of AC1.
+  const added = await post('/api/queues/cardiology/members', { userId: ungranted.id }, granted.id);
+  check('a member can be added to a queue', added.status === 200, `status ${added.status}`);
+
+  const nowVisible = await get('/api/queues/cardiology/rows', ungranted.id);
+  check(
+    'membership makes the queue readable to that user',
+    nowVisible.status === 200,
+    `status ${nowVisible.status}`,
+  );
+  const nowJson = JSON.parse(nowVisible.body) as { rows: unknown[] };
+  check('and they see its rows', nowJson.rows.length === 1, `${nowJson.rows.length} row(s)`);
+
+  // Still only that queue — membership in one is not membership in all.
+  const stillRefused = await get('/api/queues/neurology/rows', ungranted.id);
+  check(
+    'but not a queue they are still not a member of',
+    stillRefused.status === 403,
+    `status ${stillRefused.status}`,
+  );
+
+  // AC17: a manual re-queue, audited.
+  const defaultQueueId = (
+    JSON.parse(
+      (await get('/queues', granted.id)).body.match(/__QUEUE_LIST__ = (.*);/)?.[1] ?? '{}',
+    ) as { queues?: Array<{ id: number; isDefault: boolean }> }
+  ).queues?.find((q) => q.isDefault)?.id;
+  check('the queue list payload identifies the default queue', typeof defaultQueueId === 'number');
+
+  if (typeof defaultQueueId === 'number') {
+    const moved = await post(
+      `/api/workspaces/${wsWith.id}/queue`,
+      { queueId: defaultQueueId, reason: 'smoke check' },
+      granted.id,
+    );
+    check('a workspace can be re-queued by hand', moved.status === 200, `status ${moved.status}`);
+
+    const cardioAfter = await get('/api/queues/cardiology/rows', granted.id);
+    const afterJson = JSON.parse(cardioAfter.body) as { rows: unknown[] };
+    check(
+      'and it leaves the queue it came from',
+      afterJson.rows.length === 0,
+      `${afterJson.rows.length} row(s) remain in Cardiology`,
+    );
+
+    const feedAfter = await get(`/api/workspaces/${wsWith.id}/activity`, granted.id);
+    const feedEntries = (JSON.parse(feedAfter.body) as { entries: { eventType: string }[] }).entries;
+    check(
+      'the re-queue reaches the activity feed as workspace.queue_changed',
+      feedEntries.some((e) => e.eventType === 'workspace.queue_changed'),
+      'PRD-25 did not pick up the queue change',
+    );
+  }
+
+  // AC12: a saved filter round-trips.
+  const savedPost = await post(
+    '/api/saved-filters',
+    { name: 'Smoke set', filters: { tab: 'open', department: 'Neurology' } },
+    granted.id,
+  );
+  check('a filter set can be saved', savedPost.status === 200, `status ${savedPost.status}`);
+  const savedList = await get('/api/saved-filters', granted.id);
+  const savedJson = JSON.parse(savedList.body) as {
+    savedFilters: Array<{ id: number; name: string; filters: Record<string, unknown> }>;
+  };
+  const mineSaved = savedJson.savedFilters.find((f) => f.name === 'Smoke set');
+  check('and read back', mineSaved !== undefined);
+  check(
+    'with the department preserved through JSON',
+    mineSaved?.filters.department === 'Neurology',
+    JSON.stringify(mineSaved?.filters),
+  );
+
+  // Guests have no queue surface at all. The global middleware refuses any
+  // request carrying a guest cookie on a non-guest route, so this asserts the
+  // queue routes are actually behind it rather than accidentally exempt.
+  const guestAtQueue = await getRaw('/queues', 'guestSession=anything');
+  check(
+    'a request carrying a guest cookie is refused the queue list',
+    guestAtQueue.status === 403,
+    `status ${guestAtQueue.status}`,
+  );
+  const guestAtQueueApi = await getRaw('/api/queues/cardiology/rows', 'guestSession=anything');
+  check(
+    'and the queue rows API',
+    guestAtQueueApi.status === 403,
+    `status ${guestAtQueueApi.status}`,
   );
 
   // ── Report ────────────────────────────────────────────────────────────────

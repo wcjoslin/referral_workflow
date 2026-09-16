@@ -160,7 +160,7 @@ export const referralWorkspaces = sqliteTable(
 
     // Ownership (PRD-21) and routing (PRD-20).
     ownerUserId: integer('owner_user_id').references(() => users.id),
-    queueId: integer('queue_id'), // real FK added by PRD-20
+    queueId: integer('queue_id').references(() => queues.id),
 
     // Next action. Columns here; the values are computed by PRD-26.
     nextAction: text('next_action'),
@@ -518,6 +518,81 @@ export const workspaceAssertions = sqliteTable(
       table.createdAt,
     ),
     keyIdx: index('idx_workspace_assertions_key').on(table.assertionKey),
+  }),
+);
+
+// ── Shared Queues (PRD-20) ───────────────────────────────────────
+//
+// There was no queue entity before this. What looked like queues were view-level
+// filters: /scheduler/queue selects referrals in Accepted or No-Show, the
+// dashboard selects everything and filters by department in the BROWSER. No
+// membership, no per-queue ordering, no access boundary.
+//
+// WHAT QUEUE SCOPING IS AND IS NOT. Every query is constrained by the acting
+// user's membership before any user-supplied filter, server-side, so a client
+// cannot widen its own scope by changing a query parameter. That is real and
+// worth having.
+//
+// It is NOT authentication. `tryGetActingUser()` reads a cookie anybody can
+// set, so somebody who wants to read another queue can claim to be a user who
+// belongs to it. Making queue scoping an actual PHI boundary needs a real
+// caller identity, which is deferred to PRD-31 by an explicit decision. Until
+// then this is a least-privilege DEFAULT, not a control, and no comment in this
+// file should imply otherwise.
+export const queues = sqliteTable(
+  'queues',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    slug: text('slug').notNull().unique(),
+    description: text('description'),
+    // Matches referrals.routing_department. Null on the default queue, which
+    // takes everything that matches nothing.
+    departmentFilter: text('department_filter'),
+    isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({ slugIdx: index('idx_queues_slug').on(table.slug) }),
+);
+
+export const queueMembers = sqliteTable(
+  'queue_members',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    queueId: integer('queue_id')
+      .references(() => queues.id)
+      .notNull(),
+    userId: integer('user_id')
+      .references(() => users.id)
+      .notNull(),
+    accessLevel: text('access_level').notNull().default('member'), // 'member' | 'manager'
+    addedAt: integer('added_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    queueIdx: index('idx_queue_members_queue').on(table.queueId),
+    userIdx: index('idx_queue_members_user').on(table.userId),
+    // One membership row per person per queue. Re-adding revives rather than
+    // duplicating, the same shape PRD-24 used for participants.
+    uniqueIdx: uniqueIndex('idx_queue_members_unique').on(table.queueId, table.userId),
+  }),
+);
+
+export const savedFilters = sqliteTable(
+  'saved_filters',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: integer('user_id')
+      .references(() => users.id)
+      .notNull(),
+    name: text('name').notNull(),
+    surface: text('surface').notNull().default('queue'),
+    filtersJson: text('filters_json').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    userIdx: index('idx_saved_filters_user').on(table.userId, table.surface),
+    uniqueIdx: uniqueIndex('idx_saved_filters_name').on(table.userId, table.surface, table.name),
   }),
 );
 

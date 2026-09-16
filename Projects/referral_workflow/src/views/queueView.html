@@ -1,0 +1,558 @@
+<!--
+  PRD-20 — the referral queue view.
+
+  Four tabs over work status (Open / Waiting / Exception / Completed), filters
+  for work status, protocol status, owner, party organization, department and
+  due-date range, removable filter chips, a reset, and per-user saved filter
+  sets.
+
+  FILTERING IS SERVER-SIDE. Every filter change re-fetches
+  /api/queues/:slug/rows rather than hiding rows already on the page. That is
+  the deliberate difference from the dashboard, which filters by department in
+  the BROWSER — fine for a demo table, wrong for a queue, and impossible to
+  scope. The only client-side filter here is the text box, which narrows what is
+  already loaded and is labelled as such.
+
+  The filter panel reuses the analytics vocabulary (.filter-panel,
+  .filter-group, .filter-select, .day-btn, .active-tag, .reset-btn) rather than
+  introducing a second filter component, and the row preview reuses the
+  dashboard's /api/referrals/:id/preview.
+-->
+<meta charset="utf-8" />
+<title>Queue</title>
+<style>
+  :root {
+    --color-nav-bg: #0d2d3a;
+    --color-brand: #009aab;
+    --color-brand-hover: #007d8a;
+    --color-bg-page: #f0f2f5;
+    --color-text: #212529;
+    --color-text-muted: #6c757d;
+    --color-border: #dee2e6;
+    --color-card: #fff;
+    --color-table-header: #f0f2f4;
+    --color-priority: #dc3545;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: var(--color-bg-page); color: var(--color-text); }
+  .wrap { max-width: 1500px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: var(--color-text-muted); font-size: 0.88rem; margin-bottom: 14px; }
+  a { color: var(--color-brand); }
+
+  /* Analytics filter-panel vocabulary, reused verbatim. */
+  .filter-panel { background: var(--color-card); border-radius: 10px; padding: 16px 20px;
+                  box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 18px; }
+  .filter-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+  .filter-group { display: flex; flex-direction: column; gap: 3px; }
+  .filter-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
+                  color: var(--color-text-muted); font-weight: 600; }
+  .filter-select, .filter-input {
+    font-size: 0.83rem; padding: 5px 10px; border: 1px solid var(--color-border);
+    border-radius: 6px; background: #fff; min-width: 140px; color: var(--color-text); }
+  .filter-select:focus, .filter-input:focus { outline: none; border-color: var(--color-brand); }
+  .day-btns { display: flex; gap: 4px; }
+  .day-btn { font-size: 0.8rem; padding: 5px 12px; border: 1px solid var(--color-border);
+             border-radius: 6px; background: #fff; cursor: pointer; color: var(--color-text-muted);
+             transition: all 0.15s; }
+  .day-btn:hover { border-color: var(--color-brand); color: var(--color-brand); }
+  .day-btn.active { background: var(--color-brand); border-color: var(--color-brand); color: #fff;
+                    font-weight: 600; }
+  .reset-btn { font-size: 0.8rem; padding: 5px 14px; border: 1px solid #dc3545; border-radius: 6px;
+               background: #fff; color: #dc3545; cursor: pointer; margin-left: auto;
+               transition: all 0.15s; }
+  .reset-btn:hover { background: #dc3545; color: #fff; }
+  .active-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .active-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 0.75rem;
+                background: #e0e7ff; color: #3730a3; border-radius: 20px; padding: 3px 10px;
+                font-weight: 600; }
+  .active-tag .rm { cursor: pointer; font-size: 0.85rem; line-height: 1; opacity: 0.6; }
+  .active-tag .rm:hover { opacity: 1; }
+
+  .tabstrip { display: flex; gap: 4px; margin-bottom: 14px; flex-wrap: wrap; }
+  .tabbtn { font-size: 0.86rem; padding: 8px 16px; border: 1px solid var(--color-border);
+            border-radius: 8px 8px 0 0; background: #fff; cursor: pointer; color: var(--color-text-muted);
+            font-weight: 600; border-bottom: 3px solid transparent; }
+  .tabbtn:hover { color: var(--color-brand); }
+  .tabbtn.active { color: var(--color-brand); border-bottom-color: var(--color-brand); background: #fff; }
+  .tabbtn .n { display: inline-block; margin-left: 6px; background: var(--color-table-header);
+               border-radius: 20px; padding: 1px 8px; font-size: 0.76rem; }
+  .tabbtn.active .n { background: #e0e7ff; color: #3730a3; }
+
+  .card { background: var(--color-card); border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+  th { background: var(--color-table-header); text-align: left; padding: 9px 12px; font-weight: 600;
+       font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.03em;
+       color: var(--color-text-muted); white-space: nowrap; }
+  td { padding: 9px 12px; border-top: 1px solid var(--color-border); vertical-align: middle; }
+  tbody tr.data-row { cursor: pointer; }
+  tbody tr.data-row:hover { background: #f8f9fa; }
+  tbody tr.data-row.expanded { background: #eef7f8; }
+  .preview-row > td { background: #f8f9fa; padding: 0; }
+  .spinner { margin: 16px 20px; width: 18px; height: 18px; border: 2px solid var(--color-border);
+             border-top-color: var(--color-brand); border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .muted { color: var(--color-text-muted); }
+  .chip { display: inline-block; font-size: 0.72rem; font-weight: 700; border-radius: 20px;
+          padding: 2px 9px; background: var(--color-table-header); color: #495057; white-space: nowrap; }
+  .chip-exception { background: #f8d7da; color: #58151c; }
+  .chip-resolved { background: #d1e7dd; color: #0a3622; }
+  .chip-waiting { background: #fff3cd; color: #664d03; }
+  .dept { display: inline-block; font-size: 0.74rem; background: #eef2f5; color: #495057;
+          border-radius: 4px; padding: 2px 7px; }
+  .overdue { color: #dc3545; font-weight: 700; }
+  .tag-followup { font-size: 0.64rem; background: #ffe8cc; color: #8a4b00; border-radius: 20px;
+                  padding: 1px 7px; font-weight: 700; margin-left: 5px; }
+  .tag-triage { font-size: 0.64rem; background: #f8d7da; color: #58151c; border-radius: 20px;
+                padding: 1px 7px; font-weight: 700; margin-left: 5px; }
+  .tag-inactive { font-size: 0.64rem; background: #e9ecef; color: #495057; border-radius: 20px;
+                  padding: 1px 7px; font-weight: 700; margin-left: 5px; }
+  .prio { color: var(--color-priority); font-weight: 700; margin-right: 4px; }
+  .empty { padding: 28px 24px; color: var(--color-text-muted); font-size: 0.9rem; }
+  .saved { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px;
+           padding-top: 10px; border-top: 1px dashed var(--color-border); }
+  .saved-chip { font-size: 0.75rem; background: #f1f3f5; border: 1px solid var(--color-border);
+                border-radius: 20px; padding: 3px 10px; cursor: pointer; }
+  .saved-chip:hover { border-color: var(--color-brand); color: var(--color-brand); }
+  .saved-chip .del { margin-left: 6px; opacity: 0.5; }
+  .saved-chip .del:hover { opacity: 1; color: #dc3545; }
+  .mini-btn { font-size: 0.78rem; padding: 4px 10px; border: 1px solid var(--color-brand);
+              border-radius: 6px; background: #fff; color: var(--color-brand); cursor: pointer; }
+  .mini-btn:hover { background: var(--color-brand); color: #fff; }
+  .note { background: #e7f5ff; border-left: 3px solid var(--color-brand); padding: 9px 14px;
+          border-radius: 4px; font-size: 0.8rem; color: #0b4f5c; margin-bottom: 14px; }
+</style>
+<!--__NAV__-->
+<div class="wrap">
+  <h1 id="title">Queue</h1>
+  <div class="sub" id="sub"></div>
+  <div class="note" id="note"></div>
+
+  <div class="filter-panel">
+    <div class="filter-row" id="filterRow"></div>
+    <div class="active-tags" id="activeTags"></div>
+    <div class="saved" id="savedRow"></div>
+  </div>
+
+  <div class="tabstrip" id="tabstrip"></div>
+
+  <input class="filter-input" id="textFilter" type="search" style="min-width:320px;margin-bottom:12px;"
+         placeholder="Narrow the rows already loaded (client-side)&hellip;" />
+
+  <div class="card" style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Patient</th>
+          <th>DOB</th>
+          <th>360X Status</th>
+          <th>Work Status</th>
+          <th>Owner</th>
+          <th>Organization</th>
+          <th>Department</th>
+          <th>Next Action</th>
+          <th>Due</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  /*__QUEUE_VIEW__*/
+</script>
+<script>
+(function () {
+  'use strict';
+  var D = window.__QUEUE_VIEW__ || {};
+  var slug = D.slug || 'all';
+  var state = {
+    tab: (D.filters && D.filters.tab) || 'open',
+    workStatus: '',
+    referralState: '',
+    owner: (D.filters && D.filters.ownerUserId) || '',
+    org: (D.filters && D.filters.partyOrgName) || '',
+    department: (D.filters && D.filters.department) || '',
+    dueDays: '',
+    overdueOnly: !!(D.filters && D.filters.overdueOnly)
+  };
+  var rows = D.rows || [];
+  var counts = D.counts || { open: 0, waiting: 0, exception: 0, completed: 0 };
+  var savedFilters = D.savedFilters || [];
+  var previewCache = {};
+
+  var WORK_STATUSES = ['Triage','In-Progress','Waiting-External','Waiting-Internal',
+                       'Follow-up-Required','Exception','Resolved'];
+  var REFERRAL_STATES = ['Received','Acknowledged','Pending-Information','Declined','Scheduled',
+                         'No-Show','Encounter-Complete','Consult-Requested','Closed','Closed-Confirmed'];
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined,
+      { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  document.getElementById('title').textContent =
+    D.queue ? D.queue.name : 'All queues in scope';
+  document.getElementById('sub').textContent =
+    (D.queue ? (D.queue.description || '') : 'Every queue you belong to, in one list.') +
+    '  Acting as ' + ((D.actingUser && D.actingUser.displayName) || 'nobody') + '.';
+  document.getElementById('note').innerHTML =
+    'Filters and sorting run <strong>on the server</strong> &mdash; each change re-queries, so this ' +
+    'stays usable with thousands of workspaces. The search box below the tabs is the one exception ' +
+    'and narrows only the rows already loaded. Ordering is due date ascending with undated last, ' +
+    'then newest first.';
+
+  // ── Filter panel ──────────────────────────────────────────────────────────
+
+  function selectGroup(label, key, options, selected, includeAny) {
+    var opts = (includeAny ? '<option value="">Any</option>' : '') +
+      options.map(function (o) {
+        var v = typeof o === 'string' ? o : o.value;
+        var l = typeof o === 'string' ? o : o.label;
+        return '<option value="' + esc(v) + '"' + (String(selected) === String(v) ? ' selected' : '') +
+               '>' + esc(l) + '</option>';
+      }).join('');
+    return '<div class="filter-group"><span class="filter-label">' + esc(label) + '</span>' +
+      '<select class="filter-select" data-key="' + key + '">' + opts + '</select></div>';
+  }
+
+  function renderFilterPanel() {
+    var ownerOptions = [{ value: 'unassigned', label: 'Unassigned' }, { value: 'me', label: 'Me' }]
+      .concat((D.users || []).map(function (u) { return { value: String(u.id), label: u.displayName }; }));
+
+    var queueOptions = [{ value: 'all', label: 'All queues in scope' }]
+      .concat((D.queues || []).map(function (q) { return { value: q.slug, label: q.name }; }));
+
+    document.getElementById('filterRow').innerHTML =
+      selectGroup('Queue', 'queueSlug', queueOptions, slug, false) +
+      selectGroup('Work Status', 'workStatus', WORK_STATUSES, state.workStatus, true) +
+      selectGroup('360X Status', 'referralState', REFERRAL_STATES, state.referralState, true) +
+      selectGroup('Owner', 'owner', ownerOptions, state.owner, true) +
+      selectGroup('Department', 'department', D.departments || [], state.department, true) +
+      '<div class="filter-group"><span class="filter-label">Organization</span>' +
+        '<input class="filter-input" data-key="org" value="' + esc(state.org) + '" placeholder="Any" /></div>' +
+      '<div class="filter-group"><span class="filter-label">Due Within</span><div class="day-btns">' +
+        [['7','7d'],['14','14d'],['30','30d']].map(function (p) {
+          return '<button class="day-btn' + (state.dueDays === p[0] ? ' active' : '') +
+                 '" data-days="' + p[0] + '">' + p[1] + '</button>';
+        }).join('') +
+        '<button class="day-btn' + (state.overdueOnly ? ' active' : '') + '" data-overdue="1">Overdue</button>' +
+      '</div></div>' +
+      '<button class="reset-btn" id="resetBtn">Reset all</button>';
+
+    var row = document.getElementById('filterRow');
+    row.querySelectorAll('select[data-key], input[data-key]').forEach(function (el) {
+      var ev = el.tagName === 'INPUT' ? 'change' : 'change';
+      el.addEventListener(ev, function () {
+        var key = el.getAttribute('data-key');
+        if (key === 'queueSlug') { window.location.href = '/queues/' + encodeURIComponent(el.value); return; }
+        state[key] = el.value;
+        reload();
+      });
+    });
+    row.querySelectorAll('.day-btn').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (b.getAttribute('data-overdue')) {
+          state.overdueOnly = !state.overdueOnly;
+        } else {
+          var d = b.getAttribute('data-days');
+          state.dueDays = state.dueDays === d ? '' : d;
+        }
+        reload();
+      });
+    });
+    document.getElementById('resetBtn').addEventListener('click', function () {
+      state = { tab: state.tab, workStatus: '', referralState: '', owner: '', org: '',
+                department: '', dueDays: '', overdueOnly: false };
+      reload();
+    });
+  }
+
+  /** AC11: every active filter as a removable chip. */
+  function renderActiveTags() {
+    var tags = [];
+    function add(key, label, value) { if (value) tags.push({ key: key, label: label, value: value }); }
+    add('workStatus', 'Work status', state.workStatus);
+    add('referralState', '360X status', state.referralState);
+    add('owner', 'Owner', state.owner === 'me' ? 'Me' : state.owner === 'unassigned' ? 'Unassigned'
+        : (function () {
+            var u = (D.users || []).filter(function (x) { return String(x.id) === String(state.owner); })[0];
+            return u ? u.displayName : state.owner;
+          })());
+    add('org', 'Organization', state.org);
+    add('department', 'Department', state.department);
+    add('dueDays', 'Due within', state.dueDays ? state.dueDays + ' days' : '');
+    if (state.overdueOnly) tags.push({ key: 'overdueOnly', label: 'Overdue', value: 'only' });
+
+    var el = document.getElementById('activeTags');
+    el.innerHTML = tags.length
+      ? tags.map(function (t) {
+          return '<span class="active-tag">' + esc(t.label) + ': ' + esc(t.value) +
+                 '<span class="rm" data-key="' + t.key + '" title="Remove">&times;</span></span>';
+        }).join('')
+      : '<span class="muted" style="font-size:0.78rem;">No filters active.</span>';
+
+    el.querySelectorAll('.rm').forEach(function (x) {
+      x.addEventListener('click', function () {
+        var k = x.getAttribute('data-key');
+        state[k] = k === 'overdueOnly' ? false : '';
+        reload();
+      });
+    });
+  }
+
+  /** AC12: per-user saved filter sets. */
+  function renderSaved() {
+    var el = document.getElementById('savedRow');
+    el.innerHTML =
+      '<span class="filter-label">Saved</span>' +
+      (savedFilters.length
+        ? savedFilters.map(function (f) {
+            return '<span class="saved-chip" data-id="' + f.id + '">' + esc(f.name) +
+                   '<span class="del" data-del="' + f.id + '" title="Delete">&times;</span></span>';
+          }).join('')
+        : '<span class="muted" style="font-size:0.78rem;">None yet.</span>') +
+      '<button class="mini-btn" id="saveBtn">Save current filters</button>';
+
+    el.querySelectorAll('.saved-chip').forEach(function (chip) {
+      chip.addEventListener('click', function (e) {
+        if (e.target.getAttribute('data-del')) return;
+        var f = savedFilters.filter(function (x) { return String(x.id) === chip.getAttribute('data-id'); })[0];
+        if (!f) return;
+        var s = f.filters || {};
+        state.tab = s.tab || state.tab;
+        state.workStatus = (s.workStatus && s.workStatus[0]) || '';
+        state.referralState = (s.referralState && s.referralState[0]) || '';
+        state.owner = s.ownerUserId == null ? '' : String(s.ownerUserId);
+        state.org = s.partyOrgName || '';
+        state.department = s.department || '';
+        state.overdueOnly = !!s.overdueOnly;
+        state.dueDays = '';
+        renderFilterPanel();
+        reload();
+      });
+    });
+    el.querySelectorAll('[data-del]').forEach(function (d) {
+      d.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var id = d.getAttribute('data-del');
+        fetch('/api/saved-filters/' + id, { method: 'DELETE' })
+          .then(function () { return fetch('/api/saved-filters'); })
+          .then(function (r) { return r.json(); })
+          .then(function (j) { savedFilters = j.savedFilters || []; renderSaved(); });
+      });
+    });
+    document.getElementById('saveBtn').addEventListener('click', function () {
+      var name = window.prompt('Name this filter set:');
+      if (!name) return;
+      fetch('/api/saved-filters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, filters: currentFilterPayload() })
+      })
+        .then(function () { return fetch('/api/saved-filters'); })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { savedFilters = j.savedFilters || []; renderSaved(); });
+    });
+  }
+
+  function currentFilterPayload() {
+    var p = { tab: state.tab };
+    if (state.workStatus) p.workStatus = state.workStatus;
+    if (state.referralState) p.referralState = state.referralState;
+    if (state.owner) p.ownerUserId = state.owner;
+    if (state.org) p.partyOrgName = state.org;
+    if (state.department) p.department = state.department;
+    if (state.overdueOnly) p.overdueOnly = true;
+    if (state.dueDays) {
+      p.dueBefore = new Date(Date.now() + Number(state.dueDays) * 86400000).toISOString();
+    }
+    return p;
+  }
+
+  function queryString() {
+    var p = currentFilterPayload();
+    var parts = [];
+    Object.keys(p).forEach(function (k) {
+      var key = k === 'ownerUserId' ? 'owner' : k === 'partyOrgName' ? 'org' : k;
+      parts.push(encodeURIComponent(key) + '=' + encodeURIComponent(p[k]));
+    });
+    return parts.join('&');
+  }
+
+  // ── Tabs ──────────────────────────────────────────────────────────────────
+
+  function renderTabs() {
+    var labels = { open: 'Open', waiting: 'Waiting', exception: 'Exception', completed: 'Completed' };
+    var strip = document.getElementById('tabstrip');
+    strip.innerHTML = ['open','waiting','exception','completed'].map(function (t) {
+      return '<button class="tabbtn' + (state.tab === t ? ' active' : '') + '" data-tab="' + t + '">' +
+        labels[t] + '<span class="n">' + (counts[t] || 0) + '</span></button>';
+    }).join('');
+    strip.querySelectorAll('.tabbtn').forEach(function (b) {
+      b.addEventListener('click', function () { state.tab = b.getAttribute('data-tab'); reload(); });
+    });
+  }
+
+  // ── Rows ──────────────────────────────────────────────────────────────────
+
+  function workChip(s) {
+    var cls = s === 'Exception' ? ' chip-exception'
+      : s === 'Resolved' ? ' chip-resolved'
+      : (s === 'Waiting-External' || s === 'Waiting-Internal') ? ' chip-waiting' : '';
+    return '<span class="chip' + cls + '">' + esc(s) + '</span>';
+  }
+
+  function renderRows(text) {
+    var q = (text || '').toLowerCase();
+    var shown = !q ? rows : rows.filter(function (r) {
+      return [r.patientName, r.department, r.workStatus, r.referralState,
+              r.initiatingOrgName, r.ownerDisplayName, r.nextAction]
+        .filter(Boolean).join(' ').toLowerCase().indexOf(q) !== -1;
+    });
+
+    var tbody = document.getElementById('rows');
+    if (!shown.length) {
+      tbody.innerHTML = '<tr><td colspan="10"><div class="empty">' +
+        (rows.length
+          ? 'No rows match the text filter. ' + rows.length + ' loaded in this tab.'
+          : 'Nothing in this tab with the current filters.') +
+        '</div></td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = shown.map(function (r) {
+      var due = r.nextActionDueAt
+        ? '<span class="' + (r.overdue ? 'overdue' : '') + '">' + esc(fmtDate(r.nextActionDueAt)) +
+          (r.overdue ? ' (overdue)' : '') + '</span>'
+        : '<span class="muted">&mdash;</span>';
+      return '<tr id="row-' + r.referralId + '" class="data-row" data-id="' + r.referralId + '">' +
+        '<td>' + (r.priorityFlag ? '<span class="prio" title="Priority">&#9873;</span>' : '') +
+          esc(r.patientName) +
+          (r.needsTriage ? '<span class="tag-triage" title="Routed to the default queue because no queue claimed its department">NEEDS TRIAGE</span>' : '') +
+        '</td>' +
+        '<td class="muted" style="white-space:nowrap;">' + esc(r.patientDob) + '</td>' +
+        '<td><span class="chip">' + esc(r.referralState) + '</span></td>' +
+        '<td>' + workChip(r.workStatus) +
+          (r.workStatus === 'Follow-up-Required'
+            ? '<span class="tag-followup" title="The protocol loop closed but something is still outstanding">FOLLOW-UP</span>'
+            : '') + '</td>' +
+        '<td>' + (r.ownerDisplayName
+          ? esc(r.ownerDisplayName) +
+            (r.ownerInactive ? '<span class="tag-inactive" title="No longer active">inactive</span>' : '')
+          : '<span class="muted">Unassigned</span>') + '</td>' +
+        '<td>' + (r.initiatingOrgName ? esc(r.initiatingOrgName) : '<span class="muted">&mdash;</span>') + '</td>' +
+        '<td><span class="dept">' + esc(r.department) + '</span>' +
+          (slug === 'all' && r.queueName ? '<br><span class="muted" style="font-size:0.72rem;">' + esc(r.queueName) + '</span>' : '') +
+        '</td>' +
+        '<td>' + (r.nextAction ? esc(r.nextAction) : '<span class="muted">&mdash;</span>') + '</td>' +
+        '<td style="white-space:nowrap;">' + due + '</td>' +
+        '<td style="white-space:nowrap;"><a href="/workspaces/' + r.workspaceId + '">Open &rarr;</a></td>' +
+      '</tr>';
+    }).join('');
+
+    tbody.querySelectorAll('tr.data-row').forEach(function (tr) {
+      tr.addEventListener('click', function (e) { togglePreview(e, Number(tr.getAttribute('data-id'))); });
+    });
+  }
+
+  /** AC9: the existing dashboard row preview, reused rather than rebuilt. */
+  function togglePreview(event, id) {
+    if (event.target.closest('a, button, input, select')) return;
+    var dataRow = document.getElementById('row-' + id);
+    var existing = document.getElementById('preview-' + id);
+    if (existing) {
+      var hidden = existing.style.display === 'none';
+      existing.style.display = hidden ? '' : 'none';
+      dataRow.classList.toggle('expanded', hidden);
+      return;
+    }
+    dataRow.classList.add('expanded');
+    var loading = document.createElement('tr');
+    loading.id = 'preview-' + id;
+    loading.className = 'preview-row';
+    loading.innerHTML = '<td colspan="10"><div class="spinner"></div></td>';
+    dataRow.after(loading);
+
+    if (previewCache[id]) { loading.innerHTML = '<td colspan="10">' + previewCache[id] + '</td>'; return; }
+    fetch('/api/referrals/' + id + '/preview')
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (p) {
+        previewCache[id] = renderPreview(p);
+        loading.innerHTML = '<td colspan="10">' + previewCache[id] + '</td>';
+      })
+      .catch(function () {
+        loading.innerHTML = '<td colspan="10"><div class="empty" style="color:#842029;">' +
+          'Failed to load preview. <a href="/referrals/' + id + '/review">Open full view &rarr;</a></div></td>';
+      });
+  }
+
+  function renderPreview(p) {
+    if (!p) return '<div class="empty">No preview.</div>';
+    function row(label, value) {
+      if (!value) return '';
+      return '<div style="display:flex;gap:8px;margin-bottom:4px;">' +
+        '<span class="filter-label" style="min-width:150px;">' + esc(label) + '</span>' +
+        '<span>' + esc(value) + '</span></div>';
+    }
+    return '<div style="padding:14px 20px;font-size:0.85rem;">' +
+      row('Reason for referral', p.reasonForReferral) +
+      row('Referrer', p.referrerAddress) +
+      row('Appointment', p.appointmentDate) +
+      row('Location', p.appointmentLocation) +
+      row('Provider', p.scheduledProvider) +
+      row('Decline reason', p.declineReason) +
+      '<div style="margin-top:8px;">' +
+        '<a href="/referrals/' + p.id + '/review">Open full review &rarr;</a>' +
+      '</div></div>';
+  }
+
+  // ── Reload ────────────────────────────────────────────────────────────────
+
+  function reload() {
+    renderActiveTags();
+    var url = '/api/queues/' + encodeURIComponent(slug) + '/rows?' + queryString();
+    fetch(url)
+      .then(function (r) {
+        if (r.status === 403) throw new Error('not-visible');
+        return r.json();
+      })
+      .then(function (j) {
+        rows = j.rows || [];
+        counts = j.counts || counts;
+        renderTabs();
+        renderRows(document.getElementById('textFilter').value);
+      })
+      .catch(function (err) {
+        document.getElementById('rows').innerHTML =
+          '<tr><td colspan="10"><div class="empty" style="color:#842029;">' +
+          (err && err.message === 'not-visible'
+            ? 'That queue is not available to you.'
+            : 'Failed to load rows.') +
+          '</div></td></tr>';
+      });
+  }
+
+  renderFilterPanel();
+  renderActiveTags();
+  renderSaved();
+  renderTabs();
+  // The server rendered rows for the default tab already; re-query so the tab
+  // the state actually starts on is authoritative rather than assumed.
+  reload();
+
+  var tf = document.getElementById('textFilter');
+  tf.addEventListener('input', function () { renderRows(tf.value); });
+})();
+</script>

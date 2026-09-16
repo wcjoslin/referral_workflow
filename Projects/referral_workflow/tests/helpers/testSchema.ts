@@ -377,4 +377,46 @@ export const TEST_SCHEMA_DDL = `
   );
   CREATE INDEX idx_document_access_document
     ON document_access_log (document_id, viewed_at);
+
+  -- ── Shared Queues (PRD-20) ────────────────────────────────────────────────
+  --
+  -- The two unique indexes are reproduced deliberately, like PRD-22's partial
+  -- index above: they are the enforcement, not decoration.
+  -- idx_queue_members_unique is what makes "is this user in this queue" have one
+  -- answer, so getVisibleQueueIds() cannot return a duplicated queue id.
+  -- idx_saved_filters_name is what makes saving over a name replace rather than
+  -- accumulate.
+  CREATE TABLE queues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    description TEXT,
+    department_filter TEXT,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_queues_slug ON queues (slug);
+
+  CREATE TABLE queue_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    queue_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    access_level TEXT NOT NULL DEFAULT 'member',
+    added_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_queue_members_queue ON queue_members (queue_id);
+  CREATE INDEX idx_queue_members_user ON queue_members (user_id);
+  CREATE UNIQUE INDEX idx_queue_members_unique ON queue_members (queue_id, user_id);
+
+  CREATE TABLE saved_filters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    surface TEXT NOT NULL DEFAULT 'queue',
+    filters_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_saved_filters_user ON saved_filters (user_id, surface);
+  CREATE UNIQUE INDEX idx_saved_filters_name ON saved_filters (user_id, surface, name);
 `

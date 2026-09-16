@@ -19,6 +19,7 @@ import Database from 'better-sqlite3';
 import * as path from 'path';
 import { config } from '../src/config';
 import { CLINICIAN_SLUGS, seedUsers } from '../src/modules/workspace/userRoster';
+import { seedQueues } from '../src/modules/workspace/queueService';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -134,6 +135,13 @@ async function main(): Promise<void> {
   // to people and the analytics Clinician filter can label them.
   const users = await seedUsers();
   console.log(`Staff roster: ${users.created} created, ${users.skipped} already present.\n`);
+
+  // PRD-20: queues. This script inserts referrals directly rather than through
+  // the ingest pipeline, so nothing here routes them — `npm run backfill:queues`
+  // does that afterwards. Seeding the queues is still needed so the backfill and
+  // the queue view have somewhere to route TO.
+  const queues = await seedQueues();
+  console.log(`Queues: ${queues.created} created, ${queues.existing} already present.\n`);
 
   const dbPath = config.database.url === ':memory:' ? './referral.db' : config.database.url;
   const sqlite = new Database(dbPath);

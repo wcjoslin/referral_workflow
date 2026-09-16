@@ -99,6 +99,19 @@ export const WorkspaceEvents = {
 
   ASSERTION_MADE: 'workspace.assertion_made',
   ARTIFACT_NOT_TRANSMITTED: 'workspace.artifact_not_transmitted',
+
+  QUEUE_CHANGED: 'workspace.queue_changed',
+} as const;
+
+/**
+ * Queue administration (PRD-20). Separate from WorkspaceEvents because these are
+ * about a QUEUE, not about one workspace — their entityId is a queue id, so a
+ * consumer that assumes `entityType: 'referral'` would misread them.
+ */
+export const QueueEvents = {
+  MEMBER_ADDED: 'queue.member_added',
+  MEMBER_REMOVED: 'queue.member_removed',
+  MISCONFIGURED: 'queue.misconfigured',
 } as const;
 
 export const ALL_EVENT_TYPES: readonly string[] = [
@@ -107,6 +120,7 @@ export const ALL_EVENT_TYPES: readonly string[] = [
   ...Object.values(PriorAuthEvents),
   ...Object.values(SkillEvents),
   ...Object.values(WorkspaceEvents),
+  ...Object.values(QueueEvents),
 ];
 
 // ── Classification ───────────────────────────────────────────────────────────

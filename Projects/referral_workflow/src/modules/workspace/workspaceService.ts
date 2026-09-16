@@ -263,7 +263,26 @@ export async function createWorkspace(referralId: number): Promise<Workspace> {
   // Existing workspaces are served by backfillParties(), which re-derives.
   await seedParties(row.id, referralId);
 
-  return toWorkspace(row);
+  // PRD-20: route to a queue from the referral's department (AC14/AC15).
+  //
+  // Awaited, and for the same reason as parties: an unrouted workspace is
+  // invisible in every queue view, so firing this off would make a freshly
+  // ingested referral briefly absent from the surface a coordinator works from.
+  // Dynamic import to avoid a cycle — queueService imports this module's
+  // identity and event helpers.
+  //
+  // Tolerant of failure, unlike parties. Routing is recoverable by
+  // backfillQueues(), so a queue table that has not been seeded yet must not
+  // stop a referral from being ingested at all.
+  let routed: number | null = null;
+  try {
+    const { routeWorkspace } = await import('./queueService');
+    routed = await routeWorkspace(row.id, 'system');
+  } catch (err) {
+    console.error('[WorkspaceService] queue routing failed', err);
+  }
+
+  return toWorkspace(routed === null ? row : { ...row, queueId: routed });
 }
 
 // ── Work status writes ────────────────────────────────────────────────────────
