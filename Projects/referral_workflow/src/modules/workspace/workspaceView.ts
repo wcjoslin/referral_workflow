@@ -319,10 +319,12 @@ export async function buildWorkspacePayload(
       name: r.name,
       department: r.department,
     })),
+    // Every reserved panel is now filled. PRD-19 built the shell with five
+    // placeholders; PRD-21, 22, 23, 24 and 25 each replaced their own, and the
+    // flags stay rather than being deleted so a future panel has somewhere to
+    // declare itself unbuilt.
     slots: {
-      activity: false,
-      // PRD-21, PRD-24, PRD-22 and PRD-23 filled these. The shell stops
-      // rendering their placeholders. Only PRD-25's activity feed is left.
+      activity: true,
       documents: true,
       conversation: true,
       participants: true,

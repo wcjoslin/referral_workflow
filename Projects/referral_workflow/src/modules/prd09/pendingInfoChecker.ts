@@ -11,6 +11,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../../db';
 import { referrals, outboundMessages, skillExecutions } from '../../db/schema';
 import { transition, ReferralState } from '../../state/referralStateMachine';
+import { emitEvent } from '../analytics/eventService';
 import { proposeForReferral } from '../workspace/workspaceService';
 import { decline } from '../prd02/dispositionService';
 import { config } from '../../config';
@@ -87,6 +88,12 @@ export async function checkPendingInfoTimeouts(): Promise<number> {
         );
       } else {
         // escalate: transition back to Acknowledged + flag priority
+        //
+        // PRD-25 fixed the bypass here. Pending-Information → Acknowledged IS a
+        // legal transition, so this needed no exception — only for the machine
+        // to be asked. transition() throws if the state ever stops being legal,
+        // which is the point: a silent direct write would not.
+        transition(referral.state as ReferralState, ReferralState.ACKNOWLEDGED);
         await db
           .update(referrals)
           .set({
@@ -96,9 +103,17 @@ export async function checkPendingInfoTimeouts(): Promise<number> {
           })
           .where(eq(referrals.id, referral.id));
 
-        // PRD-18: keep the work status in step with the protocol state. Note this
-        // path writes `state` directly, bypassing transition() — that bypass is
-        // PRD-25's to fix; the proposal here is independent of it.
+        void emitEvent({
+          eventType: 'referral.pending_info_escalated',
+          entityType: 'referral',
+          entityId: referral.id,
+          fromState: referral.state,
+          toState: ReferralState.ACKNOWLEDGED,
+          actor: 'SYSTEM-TIMEOUT',
+          metadata: { timeoutHours, skillName: execution?.skillName ?? null },
+        }).catch((err) => console.error('[PendingInfoChecker]', err));
+
+        // PRD-18: keep the work status in step with the protocol state.
         await proposeForReferral(referral.id, ReferralState.ACKNOWLEDGED);
 
         console.log(`[PendingInfoChecker] Escalated referral #${referral.id} back to Acknowledged with priority flag`);

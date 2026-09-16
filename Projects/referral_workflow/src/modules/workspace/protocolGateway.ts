@@ -717,7 +717,11 @@ export async function transmitPending(assertionId: number, actor: string): Promi
   void emitEvent({
     eventType: 'workspace.assertion_made',
     entityType: 'referral',
-    entityId: 0,
+    // Was 0, which orphaned every retransmit event: PRD-25's per-referral feed
+    // reads this table by entity id, so an event at 0 belongs to no referral and
+    // would never appear. The assertion carries a workspaceId, so the referral
+    // was always resolvable — this path just did not bother.
+    entityId: await referralIdForWorkspace(assertion.workspaceId),
     actor,
     metadata: {
       workspaceId: assertion.workspaceId,
@@ -740,6 +744,22 @@ export async function transmitPending(assertionId: number, actor: string): Promi
 // ── Reads ─────────────────────────────────────────────────────────────────────
 
 type AssertionRow = typeof workspaceAssertions.$inferSelect;
+
+/**
+ * The referral a workspace belongs to.
+ *
+ * Added by PRD-25 to fix the retransmit path, which emitted its event at
+ * `entityId: 0` and so orphaned it from the per-referral feed. Returns 0 only
+ * when the workspace itself has gone, which cannot happen for a live assertion.
+ */
+async function referralIdForWorkspace(workspaceId: number): Promise<number> {
+  const [row] = await db
+    .select({ referralId: referralWorkspaces.referralId })
+    .from(referralWorkspaces)
+    .where(eq(referralWorkspaces.id, workspaceId))
+    .limit(1);
+  return row?.referralId ?? 0;
+}
 
 function toResult(row: AssertionRow): AssertionResult {
   return {

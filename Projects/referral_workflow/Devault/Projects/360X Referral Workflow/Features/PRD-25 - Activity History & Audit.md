@@ -5,7 +5,7 @@ prev: "[[PRD-24 - Parties & Participants]]"
 
 # PRD-25: Unified Activity History & Audit
 
-**Status:** Drafting  
+**Status:** Implemented  
 **Team:** Clinical Workflow & Collaboration  
 **Module:** `workspace/`, `analytics/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -18,8 +18,12 @@ prev: "[[PRD-24 - Parties & Participants]]"
 
 The audit substrate is already here and it is good. PRD-14 built `workflow_events` — an append-only
 log with event type, entity, from/to state, actor and a JSON metadata blob, written through a single
-fire-and-forget `emitEvent()` from roughly 28 call sites, indexed on `(entity_type, entity_id)` and on
-`(event_type, created_at)`.
+fire-and-forget `emitEvent()`, indexed on `(entity_type, entity_id)` and on `(event_type, created_at)`.
+
+The draft of this PRD counted 21 event types across roughly 28 call sites. That was true when PRD-14
+wrote it. **It is now 49 event types across 69 call sites in 22 files** — the epic more than doubled
+the vocabulary, which is precisely why a catalog is needed and precisely why the draft's version of
+it had already drifted.
 
 It has never been read for a single referral. The only consumer is
 `src/modules/analytics/analyticsQueries.ts`, which aggregates across the whole log for dashboards.
@@ -57,14 +61,15 @@ The primary goal of this feature is to:
 - `GET /api/workspaces/:id/activity` reading `workflow_events` by entity
 - The merged feed: events, comments, documents, assertions, delivery receipts, access records
 - Filter tabs: All / System / User / Guest / Status
-- The `workspace.*` event vocabulary, added alongside the existing 21 event types
-- Backfilling event emission at the uninstrumented sites, and routing the two state-machine bypasses
-  through `transition()`
-- Recording auto-declined referrals so they are reviewable rather than orphaned at `entityId: 0`
+- One event catalog naming the 49 event types that are actually emitted, plus the three this PRD adds
+- Event emission at the uninstrumented sites; the two LEGAL bypasses routed through `transition()`,
+  and the one illegal reopen confined to an audited exception
+- Fixing the retransmit path's orphaned `entityId: 0`
 - The activity panel in the `#wsActivity` slot
 - A guest-facing activity view containing protocol and shared events only
 
 **Out of Scope:**
+- Making the auto-decline event reachable — PRD-28's `auto_declined_referrals` owns it
 - Changing the `workflow_events` schema — the existing table and indexes are sufficient and are used
   by analytics
 - Retention, archival or export of audit data — inherited from the deployment; noted as a gap
@@ -72,6 +77,71 @@ The primary goal of this feature is to:
 - Tamper-evident logging (hash chaining, append-only storage guarantees) — a production concern worth
   its own PRD, called out here so its absence is not mistaken for completeness
 - Real-time streaming of the feed
+
+---
+
+## Refinement decisions
+
+| # | Decision | Effect |
+|---|---|---|
+| 1 | **An audited exception path, not a widened transition table** | `VALID_TRANSITIONS[DECLINED]` stays `[]`. One named `reopenDeclined()` is the only place a terminal state may be left; it emits an event recording that it bypassed the machine. The bypass does not go away — it stops being scattered and invisible. |
+| 2 | **The auto-decline stranding stays PRD-28's** | PRD-25 fixes the gaps it owns. Pulling `auto_declined_referrals` forward would give one table two owners. |
+
+### The two bypasses are not the same problem
+
+The draft treated `POST /referrals/:id/override` and the `pendingInfoChecker` escalation as one
+issue. Checked against `VALID_TRANSITIONS`, they split three ways:
+
+| Site | Transition | Legal? | Fix |
+|---|---|---|---|
+| `pendingInfoChecker.ts:89` escalation | `Pending-Information → Acknowledged` | **yes** | route through `transition()` |
+| `override`, from `Pending-Information` | `Pending-Information → Acknowledged` | **yes** | route through `transition()` |
+| `override`, from `Declined` | `Declined → Acknowledged` | **no** — terminal | `reopenDeclined()`, decision 1 |
+
+Two of the three need no exception at all. Only reopening a declined referral does, and confining the
+exception to that one case is what keeps the machine meaningful.
+
+### Three `entityId: 0` sites, and only one is a bug
+
+The draft knew about one. There are three, and they are different in kind:
+
+| Site | Why | Disposition |
+|---|---|---|
+| `protocolGateway.ts:720` — retransmit | **A bug.** Every other emit in that file resolves `referral.id`; this path passes 0 although the assertion carries a `workspaceId`. A retransmitted artifact's event is therefore orphaned and would never appear in this PRD's feed. | **Fixed here.** Introduced by PRD-29; mine. |
+| `referralService.ts:226` — auto-decline | No referral row exists to point at. | PRD-28's `auto_declined_referrals`. |
+| `server.ts:2233` — guest denial | No workspace could be resolved, and that IS the denial. `entityId: 0` is the honest value. | Correct as-is; documented, not "fixed". |
+
+So AC12 as drafted — "an auto-declined referral is recorded such that the event is reachable" — is not
+this PRD's to satisfy, and `entityId: 0` is not by itself a defect.
+
+### What the codebase pass changed
+
+1. **The catalog in the draft was already wrong**, in three ways at once: it names
+   `workspace.document_added` where PRD-23 emits `workspace.document_indexed`; it omits four events
+   that are emitted (`party_address_observed`, `comment_downgrade_refused`,
+   `comment_mention_acknowledged`, `work_status_resynced`); and it declares eleven that nothing emits
+   (`queue_changed`, `participant_role_changed`, `guest_action`, `artifact_rendered`,
+   `artifact_transmitted`, `artifact_delivery_failed`, `exception_raised`, `exception_resolved`,
+   `reassociated`, `overdue`, `reassigned`). **The catalog names what is emitted, plus what this PRD
+   adds, and nothing else.** A source of truth listing phantoms is worse than no catalog, and the
+   eleven belong to the PRDs that will emit them.
+2. **`comment_reads` does not exist.** The draft's evidence table cites it as a source of `access`
+   evidence. PRD-22 deliberately did not build it — the share lock reads
+   `workspace_guests.last_seen_at` instead. So **documents have per-read access evidence and comments
+   do not**, and the evidence table says so rather than implying a source that was never built.
+3. **`referral.routing_changed` really is missing.** `POST /api/referrals/:id/routing` contains zero
+   `emitEvent` calls. Confirmed by count.
+4. **Both bypass sites already carry a comment naming PRD-25 as their fix.** `server.ts` and
+   `pendingInfoChecker.ts` each say the bypass "is PRD-25's to fix", so this is a debt the epic
+   recorded against itself rather than a new discovery.
+5. **The actor prefix format is load-bearing, as claimed.** `analyticsQueries.ts:53` matches
+   `actor = 'payer:' + payer` exactly. Adding prefixes is safe; changing one breaks a dashboard.
+6. **`clinician:` already contains non-humans**, per PRD-17: `SYSTEM-SKILL-<name>` and
+   `SYSTEM-TIMEOUT` are written through `dispositionService`. The resolver must not render those as
+   people — that is the exact bug PRD-17 fixed in the analytics filter, and re-introducing it in a
+   feed would be worse, because a feed is read as a narrative of who did what.
+7. **No migration.** This PRD adds no table and no column, which is why its risk is concentrated
+   entirely in the two bypasses rather than in the schema.
 
 ---
 
@@ -106,8 +176,9 @@ and new department and equipment.
 change through `referralStateMachine.transition()` rather than a string literal.  
 **AC11:** The escalation path in `prd09/pendingInfoChecker.ts` performs its state change through
 `transition()` and emits an event.  
-**AC12:** An auto-declined referral is recorded such that the event is reachable from a workspace or an
-exception record, rather than being emitted with `entityId: 0`.  
+**AC12:** The retransmit path's orphaned `entityId: 0` is fixed, so every assertion event resolves to
+its referral. The auto-decline stranding is recorded as PRD-28's, and the guest-denial `entityId: 0`
+is documented as correct rather than changed.  
 **AC13:** A test enumerates every mutating workspace route and asserts each writes at least one event.
 
 ### As an invited specialist, I want to see the referral's progress, so that I know where things stand
@@ -251,7 +322,7 @@ Evidence classification, answering the source document's open question:
 | Evidence | Proves | Sources |
 |---|---|---|
 | `delivery` | An artifact reached the counterparty's address | `outbound_messages.acknowledged_at`, MDN receipt, `workspace_assertions.delivery_status` |
-| `access` | A human opened the content | `document_access_log`, `comment_reads` |
+| `access` | A human opened the content | `document_access_log` only. **Comments have no per-read evidence** — PRD-22 did not build `comment_reads`, using `workspace_guests.last_seen_at` for its share lock instead. A shared comment can be shown as *reachable* by a guest, never as *read* by one, and the feed does not pretend otherwise. |
 | `null` | Neither — an internal action or a state change | everything else |
 
 A transmitted-but-unacknowledged artifact has neither. That absence is information and the feed shows
@@ -361,3 +432,29 @@ it as such.
 **Created:** 2026-09-14  
 **Last Updated:** 2026-09-14  
 **Version:** 1.0
+
+**Version:** 1.2 — Implemented. Built as specified at v1.1, with 880 tests across 47 suites and
+205 smoke checks green. No migration: this PRD adds no table and no column, so its risk was
+concentrated entirely in the bypasses rather than the schema.
+
+- **The catalog is now checkable, not aspirational.** A test greps every `eventType:` literal out of
+  `src/` and asserts the catalog names it. That is the only thing that makes "single source of truth"
+  mean anything, and it is what the draft's version — which had drifted three ways before a line was
+  written — could never have claimed.
+- **`reopenReferral()` is asserted to be the only bypass, structurally.** A test greps `src/` for
+  direct `Acknowledged` writes and asserts exactly two files appear: `dispositionOverride.ts`, which
+  owns the exception, and `pendingInfoChecker.ts`, which writes the same state but now calls
+  `transition()` first. A third file appearing means this PRD's central claim has become false, and
+  the test says so.
+- **The guest feed's allow-list is proved by an event nobody forbade.** A test emits
+  `workspace.exception_raised_in_some_future_prd` and asserts it does not reach a guest. A deny-list
+  would have had to anticipate that name.
+- **Every reserved panel in PRD-19's shell is now filled.** `slots` went from five placeholders to
+  five `true`, and the assertion that came past every one of them — added in PRD-19, updated by 21,
+  22, 23 and 25 — did its job: no panel was ever half-wired behind a flag saying otherwise.
+
+Two smoke assertions I wrote were wrong rather than the code, both for the same reason: they ran
+inside the guest block, before the protocol activity they asserted on existed. The positive checks
+moved to the end of the run and the orphan check became a direct assertion that no
+`workspace.assertion_made` event sits at `entityId: 0` — which tests the retransmit bug better than
+the check it replaced.
