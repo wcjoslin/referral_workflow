@@ -113,6 +113,36 @@
   .status-pair { display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-start; }
   .status-block { min-width: 190px; }
   .status-explain { font-size: 0.72rem; color: var(--color-text-muted); margin-top: 5px; max-width: 260px; line-height: 1.45; }
+
+  /* PRD-28 — the exception panel. */
+  .exc-panel { margin-top: 18px; padding: 14px 16px; border-radius: 8px; background: #fff5f5;
+               border-left: 3px solid #dc3545; }
+  .exc-item { padding: 8px 0; border-bottom: 1px solid #f8d7da; }
+  .exc-item:last-child { border-bottom: none; }
+  .exc-type { display: inline-block; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.04em;
+              text-transform: uppercase; background: #f8d7da; color: #58151c; border-radius: 20px;
+              padding: 2px 9px; margin-right: 8px; }
+  .exc-sum { font-size: 0.9rem; font-weight: 600; margin: 4px 0 2px; line-height: 1.4; }
+  .exc-rem { font-size: 0.8rem; color: #664d03; }
+
+  /* PRD-26 — next action, due date, awaited-by. */
+  .na-block { margin-top: 18px; padding: 14px 16px; border-radius: 8px;
+              background: #f8f9fa; border-left: 3px solid var(--color-brand); }
+  .na-block.na-overdue { background: #fff5f5; border-left-color: #dc3545; }
+  .na-top { display: flex; align-items: center; gap: 10px; }
+  .na-text { font-size: 0.98rem; font-weight: 600; margin: 6px 0 4px; line-height: 1.4; }
+  .na-due { font-size: 0.85rem; margin-bottom: 4px; }
+  .na-due .label { margin-right: 6px; }
+  .due-ok { color: var(--color-text); }
+  .due-over { color: #dc3545; font-weight: 700; }
+  .na-mark { display: inline-block; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.04em;
+             background: #e0e7ff; color: #3730a3; border-radius: 20px; padding: 2px 8px;
+             margin-left: 8px; vertical-align: middle; cursor: help; }
+  .await { display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em;
+           border-radius: 20px; padding: 3px 10px; }
+  .await-us { background: #cfe2ff; color: #084298; }
+  .await-party { background: #fff3cd; color: #664d03; }
+  .await-none { background: #e9ecef; color: #495057; }
   .status-meta { font-size: 0.7rem; color: var(--color-text-muted); margin-top: 4px; }
 
   .hdr-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
@@ -548,6 +578,160 @@
 
   // ── Header (AC1, AC2, AC5, AC6, AC7, AC7a, AC8) ───────────────────────────
 
+  // ── PRD-28: open exceptions ───────────────────────────────────────────────
+
+  /**
+   * AC22. Shown at the TOP of the header, above the next action, because an
+   * unplaced artifact against this referral outranks whatever the rule table
+   * says to do next — and because the work status reads `Exception` and a
+   * coordinator needs to know why without leaving the page.
+   */
+  function exceptionPanel() {
+    var list = (window.__WORKSPACE_DATA__ && window.__WORKSPACE_DATA__.exceptions) || [];
+    if (!list.length) return '';
+
+    return '<div class="exc-panel">' +
+      '<span class="label">' + list.length +
+        (list.length === 1 ? ' open exception' : ' open exceptions') + '</span>' +
+      list.map(function (e) {
+        return '<div class="exc-item">' +
+          '<div><span class="exc-type">' + esc(e.exceptionType) + '</span>' +
+            '<span class="muted" style="font-size:0.76rem;">' +
+              esc(e.ageHours < 1 ? 'just now' : e.ageHours + 'h old') + '</span></div>' +
+          '<div class="exc-sum">' + esc(e.summary) + '</div>' +
+          (e.remediation ? '<div class="exc-rem">' + esc(e.remediation) + '</div>' : '') +
+        '</div>';
+      }).join('') +
+      '<div class="status-explain" style="max-width:none;">Work on these in the ' +
+        '<a href="/exceptions">exception queue</a>, which holds the retained artifact and the ' +
+        'reassociation controls. Resolving them all returns the work status to what it was before ' +
+        'the first one was raised.</div>' +
+    '</div>';
+  }
+
+  // ── PRD-26: next action, due date, and who owes the move ──────────────────
+
+  /**
+   * Relative wording computed HERE, in the browser, from the absolute
+   * timestamp — never rendered server-side. A cached page would otherwise show
+   * a stale "due in 2 hours" that is quietly wrong, and the whole point of the
+   * field is that a coordinator can trust it at a glance.
+   */
+  function relativeDue(iso) {
+    if (!iso) return '';
+    var due = new Date(iso).getTime();
+    if (isNaN(due)) return '';
+    var diffMs = due - Date.now();
+    var past = diffMs < 0;
+    var mins = Math.round(Math.abs(diffMs) / 60000);
+    var text;
+    if (mins < 60) text = mins + (mins === 1 ? ' minute' : ' minutes');
+    else if (mins < 60 * 48) {
+      var hrs = Math.round(mins / 60);
+      text = hrs + (hrs === 1 ? ' hour' : ' hours');
+    } else {
+      var days = Math.round(mins / 1440);
+      text = days + (days === 1 ? ' day' : ' days');
+    }
+    return past ? text + ' overdue' : 'due in ' + text;
+  }
+
+  /** Who owes the move, naming the organization rather than "external". */
+  function awaitedLabel() {
+    if (ws.awaitedBy === 'party') {
+      return '<span class="await await-party">Awaiting ' +
+        esc(ws.awaitedByPartyOrgName || 'the counterparty') + '</span>';
+    }
+    if (ws.awaitedBy === 'nobody') {
+      return '<span class="await await-none">Awaiting nobody</span>';
+    }
+    return '<span class="await await-us">Awaiting us</span>';
+  }
+
+  function nextActionBlock() {
+    var rel = relativeDue(ws.nextActionDueAt);
+    var dueLine = ws.nextActionDueAt
+      ? '<span class="' + (ws.overdue ? 'due-over' : 'due-ok') + '">' +
+          esc(fmtDate(ws.nextActionDueAt) || '') +
+          (rel ? ' &middot; ' + esc(rel) : '') +
+        '</span>'
+      : '<span class="muted">No due date</span>';
+
+    var marks =
+      (ws.nextActionSetBy
+        ? '<span class="na-mark" title="Written by a person; a recompute keeps it until the rule changes">SET BY ' +
+            esc(ws.nextActionSetBy) + '</span>'
+        : '') +
+      (ws.dueDateOverridden
+        ? '<span class="na-mark" title="' +
+            esc(ws.dueDateOverrideReason || 'Overridden') +
+            '">DUE DATE OVERRIDDEN</span>'
+        : '');
+
+    var controls = readOnly ? '' :
+      '<div class="ctl-row" style="margin-top:10px;">' +
+        '<input class="ctl" id="naInput" placeholder="Replace the next action…" ' +
+          'maxlength="500" style="min-width:300px;" />' +
+        '<button class="btn" id="btnSetNextAction">Set action</button>' +
+      '</div>' +
+      '<div class="ctl-row" style="margin-top:6px;">' +
+        '<input class="ctl" id="dueInput" type="datetime-local" />' +
+        '<input class="ctl" id="dueReason" placeholder="Reason (required)" style="min-width:200px;" />' +
+        '<button class="btn" id="btnSetDue">Override due date</button>' +
+        ((ws.nextActionSetBy || ws.dueDateOverridden)
+          ? '<button class="btn" id="btnClearOverrides" title="Restore the computed action and due date">Reset to rule</button>'
+          : '') +
+      '</div>';
+
+    return '<div class="na-block' + (ws.overdue ? ' na-overdue' : '') + '">' +
+      '<div class="na-top">' +
+        '<span class="label">Next action</span>' + awaitedLabel() +
+      '</div>' +
+      '<div class="na-text">' + esc(ws.nextAction || 'None set') + marks + '</div>' +
+      '<div class="na-due"><span class="label">Due</span> ' + dueLine + '</div>' +
+      '<div class="status-explain">Computed from the protocol state and the work status when either ' +
+        'changes. Offsets are elapsed hours &mdash; there is no business-hours or holiday awareness, ' +
+        'so these are working defaults rather than contractual SLAs.</div>' +
+      controls +
+      '<div class="msg" id="naMsg"></div>' +
+    '</div>';
+  }
+
+  function wireNextAction() {
+    if (readOnly) return;
+    var setBtn = document.getElementById('btnSetNextAction');
+    if (setBtn) setBtn.addEventListener('click', async function () {
+      var v = document.getElementById('naInput').value.trim();
+      if (!v) { naMsg('Enter an action first.', false); return; }
+      var r = await post('/api/workspaces/' + ws.id + '/next-action', { nextAction: v });
+      if (r.ok) location.reload(); else naMsg(r.json.error || 'Failed.', false);
+    });
+
+    var dueBtn = document.getElementById('btnSetDue');
+    if (dueBtn) dueBtn.addEventListener('click', async function () {
+      var raw = document.getElementById('dueInput').value;
+      var reason = document.getElementById('dueReason').value.trim();
+      if (!raw) { naMsg('Pick a date and time first.', false); return; }
+      if (!reason) { naMsg('A reason is required to override a due date.', false); return; }
+      var r = await post('/api/workspaces/' + ws.id + '/due-date',
+        { dueAt: new Date(raw).toISOString(), reason: reason });
+      if (r.ok) location.reload(); else naMsg(r.json.error || 'Failed.', false);
+    });
+
+    var clearBtn = document.getElementById('btnClearOverrides');
+    if (clearBtn) clearBtn.addEventListener('click', async function () {
+      var r = await post('/api/workspaces/' + ws.id + '/next-action', { clear: true });
+      if (r.ok) location.reload(); else naMsg(r.json.error || 'Failed.', false);
+    });
+  }
+
+  function naMsg(text, ok) {
+    var el = document.getElementById('naMsg');
+    if (!el) return;
+    el.className = 'msg ' + (ok ? 'ok' : 'err');
+    el.textContent = text;
+  }
+
   function renderHeader() {
     var patientName = (P.patient.firstName + ' ' + P.patient.lastName).trim();
     var readOnly = !!ws.archivedAt;
@@ -610,6 +794,9 @@
         '</div>' +
       '</div>' +
 
+      exceptionPanel() +
+      nextActionBlock() +
+
       '<div class="hdr-reason">' +
         '<span class="label">Reason for referral</span>' +
         orEmpty(ref.reasonForReferral, 'None recorded') +
@@ -620,8 +807,6 @@
         field('Receiving department', ref.routingDepartment) +
         field('Owner', ws.ownerDisplayName, 'Unassigned') +
         field('Queue', ws.queueName, 'Unassigned') +
-        field('Next action', ws.nextAction, 'None set') +
-        field('Due', fmtDay(ws.nextActionDueAt), 'No due date') +
         field('360X referral id', ws.externalReferralId) +
         field('Received', fmtDate(ref.createdAt)) +
         (ref.state === 'Declined' ? field('Decline reason', ref.declineReason) : '') +
@@ -632,6 +817,7 @@
       var rb = document.getElementById('btnResync');
       if (rb) rb.addEventListener('click', resync);
     }
+    wireNextAction();
   }
 
   function showMsg(text, ok) {

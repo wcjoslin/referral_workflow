@@ -5,7 +5,7 @@ prev: "[[PRD-27 - Notifications]]"
 
 # PRD-28: Correlation, Reconciliation & Exception Queue
 
-**Status:** Drafting  
+**Status:** Refined — implemented  
 **Team:** Clinical Workflow & Interoperability  
 **Module:** `workspace/`, `prd01/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -182,6 +182,92 @@ still workable.
 - Candidate ranking is deterministic and explainable; a coordinator must be able to see why a
   workspace was suggested.
 
+### Refinement findings and decisions
+
+Every codebase claim in the draft was verified and all of them held. What follows is what changed, or
+what the implementation found.
+
+**1. Two real bugs, both caught by tests written for the acceptance criteria.**
+
+- **The work-status restore used the wrong exception.** `resolveException()` restored
+  `prior_work_status` from the exception being resolved. With two exceptions open at once only the
+  FIRST captured a real prior status — the second was raised against a workspace already in
+  `Exception`, so its value is null by design. Resolving them in order therefore restored `Triage` and
+  silently discarded the `In-Progress` the workspace was actually in. Fixed to use the EARLIEST
+  recorded non-null prior status, which is the status before the whole exception episode began, and
+  pinned by a test that resolves in both orders.
+- **Recency alone qualified a workspace as a candidate.** The ranking comment claimed "recency can
+  only ever break a tie"; the code added it *before* the "no reasons, not a candidate" gate. So in a
+  fresh database every recently created workspace was a candidate on recency alone — the suggestion
+  list was simply every workspace, which is worse than no suggestions. Recency now applies only once
+  something substantive has already matched.
+
+**2. A gap the smoke check exposed: an unranked orphan was unresolvable.** With the recency fix, a
+genuinely unrelated artifact correctly ranks nothing — and the UI then offered no way to attach it,
+because reassociation was only reachable by clicking a candidate. The empty state now carries a
+manual attach-by-workspace-id path. Without it the only available action was "dismiss", which is
+exactly the data loss this PRD exists to stop.
+
+**3. `raiseException()` must not await its own audit event.** The first version did, so a failure
+writing `workflow_events` threw and LOST THE EXCEPTION — inverting the priority this whole feature
+defends. The exception row is the durable record and frequently the only copy of the artifact; the
+audit event is derived. The emit is now fire-and-forget with logging, and the insert is what is
+awaited.
+
+**4. Tolerance has to wrap the whole block, not just the raise.** In `processAck()` the workspace
+lookup sat outside `raiseExceptionSafely()`, so a failure there threw straight out of ACK processing
+— violating the stated rule that raising an exception must never fail the operation that detected
+it. An ACK is protocol traffic; bookkeeping around it must not be able to reject it.
+
+**5. `awaited_by_party_id` and `exception_id` are plain integers, not foreign keys.** PRD-20's `0019`
+demonstrated that a real FK on an existing table forces a hand-edited recreation. For
+`processed_messages.exception_id` there is a second reason: the exception row is sometimes written
+AFTER the processed row, and a constraint would order the two writes for no benefit.
+
+**6. `NextActionWorkspaceNotFoundError`-style naming applies here too.**
+`ExceptionWorkspaceNotFoundError` is named distinctly from `workspaceService`'s
+`WorkspaceNotFoundError`, because two same-named classes in different modules make `instanceof`
+silently false for whichever the route did not import — turning a 404 into a 500.
+
+**7. `AckResult` gained `exceptionId` rather than changing `matched`.** `matched` is what existing
+callers branch on and its meaning has not changed: an unmatched ACK is still unmatched. It is now
+also *retained*.
+
+**8. The dedupe index is PARTIAL, on open rows only.** One open exception per
+(`exception_type`, `message_control_id`), so a retry storm cannot fill the queue with the same
+complaint — but the same message failing again AFTER a resolution can legitimately raise a fresh one.
+Verified empirically across four cases: the open pair is refused, a different type for the same
+control id is allowed, a resolved pair can be re-raised, and null control ids never collide.
+
+**9. Raw content is capped at 256 KB and the truncation is RECORDED.** A C-CDA can be hundreds of
+kilobytes and this column is the only copy, so the cap is generous — but an exception row that
+silently lost half its artifact is worse than one that says it did, because a coordinator would
+otherwise conclude the message was malformed.
+
+**10. The auto-decline record is written BEFORE the RRI is sent.** A send failure must not lose the
+artifact: that combination is exactly what makes an auto-decline unreviewable, because the
+counterparty may not even have been told. The worst case is now a retained record whose RRI never went
+out, which a human can see.
+
+**11. `entityId` for an auto-decline is NEGATIVE.** AC16 asks for the event to be associated with the
+durable record instead of `entityId: 0`. `auto_declined_referrals` is a different keyspace from
+`referrals`, so a positive id would be misread as a referral id by any consumer that ignores
+`entityType`. The negative sign makes that impossible, and `0` remains the fallback when recording
+itself failed.
+
+**12. PRD-18's reserved slot is now filled.** `hasOpenInternalItems()` ORs in an unresolved
+exception, exactly where PRD-18's comment said PRD-28's source would go, and no caller changed. A
+protocol event that closes the loop while an exception is open therefore derives
+`Follow-up-Required` rather than `Resolved` — which is right: closing the loop with an unplaced
+artifact against the referral should not read as resolved.
+
+**13. Verified on real data — and the honest result is zero.** `seed-analytics-demo.ts` inserts
+referrals DIRECTLY rather than through `ingestReferral()`, so none of the capture points fire on that
+dataset and it produces no exceptions, no processed-message rows and no auto-declines. That is
+correct, not a gap: the paths are on the ingest pipeline, which that script bypasses by design. They
+are exercised end to end in `scripts/smoke.ts` through the real `processAck()`, `recordAutoDeclined()`
+and `recordProcessed()`, against a live server — 44 checks.
+
 ### Data Models
 
 ```typescript
@@ -319,7 +405,7 @@ export async function resolveException(
 ): Promise<void>;
 ```
 
-Migration: `0021_add_correlation_and_exceptions.sql`.
+Migration: `0021_vengeful_rhodey.sql` — three tables, all additive, no table recreation (finding 5).
 Audit events: `workspace.exception_raised`, `workspace.exception_resolved`,
 `workspace.reassociated`, `workspace.auto_declined_recorded`,
 `workspace.auto_declined_converted`, `workspace.message_replayed`,
@@ -416,10 +502,31 @@ Audit events: `workspace.exception_raised`, `workspace.exception_resolved`,
   `ingestReferral()` patient handling
 - Gateway failure exceptions wired from PRD-29
 - `src/views/exceptionQueue.html` + exception panel in the workspace
-- Routes listed above
-- Proposal to add `referral_id` to `attachment_requests`, recorded for the claims PRD
-- `tests/unit/workspace/correlationService.test.ts`,
-  `tests/unit/workspace/exceptionService.test.ts`
+- Routes listed above, plus `GET /exceptions` and `GET /api/processed-messages`
+- `src/views/exceptionQueue.html`, and the exception panel in `workspaceDetail.html`
+- `hasOpenInternalItems()` ORs in an unresolved exception, filling PRD-18's reserved slot
+- `threadHasControlId()` added to `threadService`, so reassociation refuses a message the workspace
+  already carries
+- `tests/unit/workspace/exceptionService.test.ts` — 59 tests covering both services; three new tests
+  in `tests/unit/prd06/ackService.test.ts` asserting the two discard paths end to end through the
+  real `processAck()`
+- 44 new smoke checks driving the real modules against a live server
+
+**Not built, and why:**
+
+- **`referral_id` on `attachment_requests`.** Still only a proposal, as the draft scoped it: the
+  claims PRD owns that column. `unlinked-attachment-request` exists as an exception type so the
+  capture point is ready, and nothing raises it yet.
+- **A correlation path for inbound `InfoReply`.** The draft noted it has none, and it still has none:
+  the only producer is a demo route that supplies the referral id in the URL. Adding a path would
+  mean inventing an inbound format no counterparty sends. `unmatched-message` is the type such a
+  message would land under.
+- **PRD-29 gateway failure capture.** `delivery-failed`, `counterparty-rejected` and
+  `unresolvable-address` are defined and raisable, and `ack-error-code` covers the rejection case
+  that actually occurs today. Wiring the gateway's own failure paths is a change to PRD-29's module
+  and is left to it rather than reached into from here.
+- **Automatic patient merging.** Explicitly out of scope, and the UI says so where a coordinator
+  confirms "same person": the two rows remain separate and their clinical data is not combined.
 
 ---
 
@@ -439,5 +546,14 @@ Audit events: `workspace.exception_raised`, `workspace.exception_resolved`,
 ## History
 
 **Created:** 2026-09-14  
-**Last Updated:** 2026-09-14  
-**Version:** 1.0
+**Last Updated:** 2026-09-16  
+**Version:** 1.1
+
+**v1.1 — refinement and implementation.** Thirteen findings recorded above. Every codebase claim in
+the draft was verified and all held. Two real bugs were found by tests written for the acceptance
+criteria — the work-status restore used the wrong exception's prior status, and recency alone
+qualified a workspace as a correlation candidate — and a third gap surfaced only in the live smoke
+check: with recency correctly demoted, an unranked orphan had no reassociation path at all, so a
+manual attach-by-id was added. Two ordering mistakes were also corrected: `raiseException()` awaited
+its own audit event (so an audit failure lost the exception), and `processAck()`'s tolerance wrapped
+only the raise rather than the workspace lookup it depends on.

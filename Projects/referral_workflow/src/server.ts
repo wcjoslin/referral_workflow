@@ -54,6 +54,61 @@ import {
   WorkspaceNotFoundError,
 } from './modules/workspace/workspaceService';
 import {
+  QueueFilters,
+  QueueNotFoundError,
+  QueueNotVisibleError,
+  SavedFilterNotFoundError,
+  addQueueMember,
+  deleteSavedFilter,
+  getQueueRows,
+  listQueueMembers,
+  listQueues,
+  listSavedFilters,
+  moveWorkspace,
+  parseFilters,
+  removeQueueMember,
+  saveFilter,
+} from './modules/workspace/queueService';
+import {
+  NextActionTooLongError,
+  NextActionWorkspaceNotFoundError,
+  OverrideReasonRequiredError,
+  clearOverrides,
+  listOverdue,
+  overrideDueDate,
+  overrideNextAction,
+} from './modules/workspace/nextActionService';
+import {
+  AlreadyAssociatedError,
+  ExceptionAlreadyResolvedError,
+  ExceptionNotFoundError,
+  ExceptionWorkspaceNotFoundError,
+  WrongExceptionTypeError,
+  candidatesFor,
+  convertAutoDeclined,
+  getException,
+  isExceptionResolution,
+  isExceptionType,
+  listExceptions,
+  reassociate,
+  resolveException,
+} from './modules/workspace/exceptionService';
+import {
+  MessageNotProcessedError,
+  listProcessed,
+  replayMessage,
+} from './modules/workspace/correlationService';
+import {
+  GuestIneligibleTypeError,
+  getUnreadCount,
+  isNotificationType,
+  listNotifications,
+  listPreferences,
+  markAllRead,
+  markRead,
+  setPreference,
+} from './modules/workspace/notificationService';
+import {
   OwnerFilter,
   buildWorkspacePayload,
   listWorkspaceRows,
@@ -233,9 +288,14 @@ app.use(express.json({ type: ['application/json', 'application/fhir+json'] }));
  * different patient's internal workspace. This closes exactly that path: a
  * browser holding a guest session cannot reach an internal surface with it.
  *
- * It does NOT stop an unauthenticated stranger, and it is not meant to. PRD-20
- * owns the real boundary; deploying guest access to a publicly reachable host is
- * gated on it.
+ * It does NOT stop an unauthenticated stranger, and it is not meant to.
+ *
+ * PRD-20 was originally going to own the real boundary. It does not: that work
+ * was deferred out of the epic by an explicit decision and is tracked as PRD-31.
+ * PRD-20 ships queue scoping as a server-side least-privilege DEFAULT — the
+ * predicate is real and a caller cannot widen its own scope — but it scopes
+ * against this same forgeable identity, so it is not an access control either.
+ * Deploying guest access to a publicly reachable host is gated on PRD-31.
  *
  * Deliberately placed before every route so no future internal route can forget
  * it, and deliberately allowing `/guest` and `/api/guest`, which are the only
@@ -290,6 +350,8 @@ const NAV_HTML = `<style>
 <nav style="background:var(--color-nav-bg);padding:12px 24px;display:flex;gap:24px;align-items:center;position:sticky;top:0;z-index:100;box-shadow:0 2px 4px rgba(0,0,0,0.4);">
   <span style="color:#fff;font-weight:700;font-size:0.95rem;letter-spacing:0.02em;">360X Referral</span>
   <a href="/" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;margin-left:8px;">Home</a>
+  <a href="/queues" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Queues</a>
+  <a href="/exceptions" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Exceptions</a>
   <a href="/workspaces" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Workspaces</a>
   <a href="/overview" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Overview</a>
   <a href="/claims" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Claims</a>
@@ -298,7 +360,21 @@ const NAV_HTML = `<style>
   <a href="/rules/admin" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Skills</a>
   <a href="/walkthrough" style="color:#20c997;text-decoration:none;font-size:0.88rem;font-weight:600;">Walkthrough</a>
   <a href="/demo" style="color:#ffc107;text-decoration:none;font-size:0.88rem;font-weight:600;">Demo Launcher</a>
-  <label style="margin-left:auto;display:flex;align-items:center;gap:6px;color:#adb5bd;font-size:0.8rem;">
+  <div id="notifBell" style="margin-left:auto;position:relative;">
+    <button id="notifBtn" title="Notifications"
+      style="background:#12404f;border:1px solid #1d5a6d;border-radius:6px;color:#fff;cursor:pointer;
+             padding:4px 10px;font-size:0.9rem;line-height:1.3;position:relative;">
+      &#128276;<span id="notifCount"
+        style="display:none;position:absolute;top:-6px;right:-6px;background:#dc3545;color:#fff;
+               border-radius:20px;font-size:0.62rem;font-weight:700;padding:1px 5px;min-width:16px;
+               text-align:center;"></span>
+    </button>
+    <div id="notifPanel"
+      style="display:none;position:absolute;right:0;top:34px;width:380px;max-height:460px;overflow:auto;
+             background:#fff;color:#212529;border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,0.3);
+             z-index:200;text-align:left;"></div>
+  </div>
+  <label style="display:flex;align-items:center;gap:6px;color:#adb5bd;font-size:0.8rem;">
     Acting as
     <select id="actingUserSelect" style="background:#12404f;color:#fff;border:1px solid #1d5a6d;border-radius:4px;padding:4px 8px;font-size:0.82rem;max-width:230px;">
       <option value="">Loading…</option>
@@ -383,8 +459,111 @@ const NAV_HTML = `<style>
 })();
 </script>`;
 
+/**
+ * The notification bell, polled rather than pushed.
+ *
+ * Polling on an interval, not a WebSocket — the PRD's constraint, and a missed
+ * poll is explicitly acceptable. 20 seconds is frequent enough that a bell feels
+ * live and infrequent enough to be invisible on a demo box.
+ *
+ * OPENING THE PANEL MARKS NOTHING READ (AC11). Reading is an explicit act:
+ * clicking one, or "mark all read". A bell that empties itself the moment you
+ * glance at it has lost the only thing it was for.
+ */
+const NAV_BELL_SCRIPT = `
+(function () {
+  var btn = document.getElementById('notifBtn');
+  var panel = document.getElementById('notifPanel');
+  var badge = document.getElementById('notifCount');
+  if (!btn || !panel || !badge) return;
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  var latest = [];
+
+  function paintBadge(n) {
+    if (n > 0) { badge.style.display = ''; badge.textContent = n > 99 ? '99+' : String(n); }
+    else { badge.style.display = 'none'; }
+  }
+
+  function paintPanel() {
+    if (!latest.length) {
+      panel.innerHTML = '<div style="padding:18px 16px;color:#6c757d;font-size:0.85rem;">' +
+        'Nothing yet. Assignments, mentions, overdue actions and exceptions arrive here.</div>';
+      return;
+    }
+    panel.innerHTML =
+      '<div style="padding:8px 14px;border-bottom:1px solid #dee2e6;display:flex;align-items:center;">' +
+        '<strong style="font-size:0.8rem;">Notifications</strong>' +
+        '<button id="notifAll" style="margin-left:auto;font-size:0.74rem;border:1px solid #dee2e6;' +
+          'background:#fff;border-radius:6px;padding:3px 8px;cursor:pointer;">Mark all read</button>' +
+      '</div>' +
+      latest.map(function (n) {
+        return '<div style="padding:10px 14px;border-bottom:1px solid #f1f3f5;' +
+            (n.read ? 'opacity:0.6;' : 'background:#f8fbfc;') + '">' +
+          '<div style="display:flex;gap:8px;align-items:baseline;">' +
+            '<span style="font-size:0.6rem;font-weight:700;text-transform:uppercase;' +
+              'letter-spacing:0.04em;background:#e0e7ff;color:#3730a3;border-radius:20px;' +
+              'padding:1px 7px;">' + esc(n.notificationType) + '</span>' +
+            (n.collapsedCount > 1
+              ? '<span style="font-size:0.66rem;color:#6c757d;">&times;' + n.collapsedCount + '</span>'
+              : '') +
+          '</div>' +
+          '<div style="font-size:0.85rem;font-weight:600;margin:3px 0 2px;">' + esc(n.title) + '</div>' +
+          '<div style="font-size:0.78rem;color:#495057;line-height:1.4;">' + esc(n.body) + '</div>' +
+          '<div style="margin-top:5px;display:flex;gap:10px;font-size:0.74rem;">' +
+            '<a href="' + esc(n.linkPath) + '">Open &rarr;</a>' +
+            (n.read ? '' : '<a href="#" data-read="' + n.id + '">Mark read</a>') +
+          '</div>' +
+        '</div>';
+      }).join('');
+
+    var all = document.getElementById('notifAll');
+    if (all) all.addEventListener('click', function () {
+      fetch('/api/notifications/read-all', { method: 'POST' }).then(load);
+    });
+    panel.querySelectorAll('[data-read]').forEach(function (a) {
+      a.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        fetch('/api/notifications/' + a.getAttribute('data-read') + '/read', { method: 'POST' })
+          .then(load);
+      });
+    });
+  }
+
+  function load() {
+    return fetch('/api/notifications')
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        latest = j.notifications || [];
+        paintBadge(j.unreadCount || 0);
+        if (panel.style.display !== 'none') paintPanel();
+      })
+      .catch(function () { /* a missed poll is acceptable */ });
+  }
+
+  btn.addEventListener('click', function () {
+    var hidden = panel.style.display === 'none';
+    panel.style.display = hidden ? '' : 'none';
+    // Opening PAINTS; it does not mark anything read.
+    if (hidden) paintPanel();
+  });
+
+  document.addEventListener('click', function (ev) {
+    if (!document.getElementById('notifBell').contains(ev.target)) panel.style.display = 'none';
+  });
+
+  load();
+  setInterval(load, 20000);
+})();
+`;
+
 function injectNav(html: string): string {
-  return html.replace('<!--__NAV__-->', NAV_HTML);
+  return html.replace('<!--__NAV__-->', `${NAV_HTML}\n<script>${NAV_BELL_SCRIPT}</script>`);
 }
 
 // ── PRD-19 workspace route helpers ───────────────────────────────────────────
@@ -580,11 +759,861 @@ app.post('/api/workspaces/backfill', async (_req: Request, res: Response, next: 
   }
 });
 
+// ── PRD-27 notifications ─────────────────────────────────────────────────────
+
+/**
+ * The bell. Polled on an interval by the nav, rather than a WebSocket.
+ *
+ * `unreadOnly` defaults to FALSE: opening the list shows recent notifications
+ * whether read or not, because AC11 requires that opening it does not mark
+ * anything read — and a list that shows only unread ones would look like it
+ * had, the moment you marked one.
+ */
+app.get('/api/notifications', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      // Not an error: a database with no users seeded has no bell.
+      res.json({ unreadCount: 0, notifications: [] });
+      return;
+    }
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '30'), 10) || 30, 1), 100);
+    res.json({
+      unreadCount: await getUnreadCount(user.id),
+      notifications: await listNotifications(user.id, {
+        unreadOnly: req.query.unread === '1',
+        limit,
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/notifications/:id/read', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'notification id must be a positive integer' });
+      return;
+    }
+    // Scoped to the recipient inside the service, so marking somebody else's
+    // notification read is a 404 rather than a cross-user write.
+    const changed = await markRead(id, user.id);
+    if (!changed) {
+      res.status(404).json({ error: 'no unread notification with that id for this user' });
+      return;
+    }
+    res.json({ ok: true, unreadCount: await getUnreadCount(user.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/notifications/read-all', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    res.json({ ok: true, marked: await markAllRead(user.id), unreadCount: 0 });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Per-type mute and email switches. Muting PREVENTS CREATION (AC12). */
+app.get('/api/notification-preferences', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    res.json({ preferences: await listPreferences(user.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/notification-preferences', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const body = (req.body ?? {}) as {
+      notificationType?: unknown;
+      muted?: unknown;
+      emailEnabled?: unknown;
+    };
+    const type = typeof body.notificationType === 'string' ? body.notificationType : '';
+    if (!isNotificationType(type)) {
+      res.status(400).json({ error: 'notificationType is not one of the recognised values' });
+      return;
+    }
+    const updated = await setPreference(user.id, type, {
+      muted: typeof body.muted === 'boolean' ? body.muted : undefined,
+      emailEnabled: typeof body.emailEnabled === 'boolean' ? body.emailEnabled : undefined,
+    });
+    res.json({ ok: true, notificationType: type, ...updated });
+  } catch (err) {
+    if (err instanceof GuestIneligibleTypeError) {
+      res.status(422).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+// ── PRD-28 correlation and the exception queue ───────────────────────────────
+
+/**
+ * The exception queue.
+ *
+ * Scoped through queueService like everything else, with ONE deliberate
+ * difference: orphans are always included. An exception with no workspace is
+ * exactly the kind that used to vanish into a log line, and scoping it out of
+ * every queue would recreate that — nobody would ever see it.
+ */
+app.get('/api/exceptions', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user', message: 'No users are seeded. Run: npm run seed' });
+      return;
+    }
+    const typeParam = typeof req.query.type === 'string' ? req.query.type : '';
+    const { getVisibleQueueIds } = await import('./modules/workspace/queueService');
+    const exceptions = await listExceptions({
+      exceptionType: isExceptionType(typeParam) ? typeParam : undefined,
+      // `?open=0` shows resolved ones too, for the audit trail.
+      openOnly: req.query.open !== '0',
+      queueIds: await getVisibleQueueIds(user),
+    });
+    res.json({ count: exceptions.length, exceptions });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/exceptions/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'exception id must be a positive integer' });
+      return;
+    }
+    const exception = await getException(id);
+    if (!exception) {
+      res.status(404).json({ error: `No exception #${id}` });
+      return;
+    }
+    res.json({ exception });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Ranked candidates for reassociation, each carrying its reasons (AC11). */
+app.get('/api/exceptions/:id/candidates', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'exception id must be a positive integer' });
+      return;
+    }
+    try {
+      res.json({ candidates: await candidatesFor(id) });
+    } catch (err) {
+      if (err instanceof ExceptionNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** AC12/AC13 — attach an orphan to a workspace, fully audited. A note is required. */
+app.post('/api/exceptions/:id/reassociate', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'exception id must be a positive integer' });
+      return;
+    }
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const body = (req.body ?? {}) as { workspaceId?: unknown; note?: unknown };
+    const workspaceId = typeof body.workspaceId === 'number' ? body.workspaceId : Number(body.workspaceId);
+    if (!Number.isInteger(workspaceId) || workspaceId <= 0) {
+      res.status(400).json({ error: 'workspaceId must be a positive integer' });
+      return;
+    }
+    // AC13 wants the reason recorded, so it is required rather than optional:
+    // attaching a clinical document to a patient's record on a hunch, with no
+    // note, is the thing the audit exists to prevent.
+    const note = typeof body.note === 'string' ? body.note.trim() : '';
+    if (!note) {
+      res.status(422).json({ error: 'a note explaining the reassociation is required' });
+      return;
+    }
+
+    try {
+      res.json({ ok: true, exception: await reassociate(id, workspaceId, user, note) });
+    } catch (err) {
+      if (err instanceof ExceptionNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof ExceptionWorkspaceNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof ExceptionAlreadyResolvedError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      if (err instanceof AlreadyAssociatedError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/exceptions/:id/resolve', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'exception id must be a positive integer' });
+      return;
+    }
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const body = (req.body ?? {}) as { resolution?: unknown; note?: unknown };
+    const resolution = typeof body.resolution === 'string' ? body.resolution : '';
+    if (!isExceptionResolution(resolution)) {
+      res.status(400).json({ error: 'resolution is not one of the recognised values' });
+      return;
+    }
+    const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined;
+
+    try {
+      res.json({ ok: true, exception: await resolveException(id, resolution, user, note) });
+    } catch (err) {
+      if (err instanceof ExceptionNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof ExceptionAlreadyResolvedError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** AC17 — an auto-declined referral becomes a real one when the decline was wrong. */
+app.post('/api/exceptions/:id/convert', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'exception id must be a positive integer' });
+      return;
+    }
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const body = (req.body ?? {}) as { note?: unknown };
+    const note = typeof body.note === 'string' ? body.note.trim() : '';
+    if (!note) {
+      res.status(422).json({ error: 'a note explaining why the decline was wrong is required' });
+      return;
+    }
+
+    try {
+      res.json({ ok: true, ...(await convertAutoDeclined(id, user, note)) });
+    } catch (err) {
+      if (err instanceof ExceptionNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof WrongExceptionTypeError) {
+        res.status(422).json({ error: err.message });
+        return;
+      }
+      if (err instanceof ExceptionAlreadyResolvedError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** The operator's view of inbound processing — what was seen and what happened. */
+app.get('/api/processed-messages', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '200'), 10) || 200, 1), 500);
+    res.json({ messages: await listProcessed(limit) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * AC4 — deliberate operator replay.
+ *
+ * Clears the idempotency record so the next inbox sweep reprocesses. Cannot
+ * create a duplicate referral: `referrals.source_message_id` is still unique, so
+ * a message that succeeded the first time is refused at insert.
+ */
+app.post('/api/messages/:messageId/replay', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const messageId = decodeURIComponent(String(req.params.messageId));
+    try {
+      await replayMessage(messageId, user);
+      res.json({ ok: true, messageId });
+    } catch (err) {
+      if (err instanceof MessageNotProcessedError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** The exception queue page. */
+app.get('/exceptions', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res
+        .status(409)
+        .send(notFoundPage('No users are seeded, so no exception queue can be scoped. Run: npm run seed'));
+      return;
+    }
+    const { getVisibleQueueIds } = await import('./modules/workspace/queueService');
+    const scope = await getVisibleQueueIds(user);
+    const exceptions = await listExceptions({ queueIds: scope });
+
+    const templatePath = path.join(__dirname, 'views', 'exceptionQueue.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__EXCEPTION_QUEUE__*/',
+      `window.__EXCEPTION_QUEUE__ = ${embedJson({
+        exceptions,
+        resolved: await listExceptions({ openOnly: false, queueIds: scope }),
+        processed: await listProcessed(50),
+        actingUser: { id: user.id, displayName: user.displayName },
+      })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── PRD-26 next action and due dates ─────────────────────────────────────────
+
+/** AC7 — a due date a person chose, with a reason. 422 without one. */
+app.post('/api/workspaces/:id/due-date', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(400).json({ error: 'workspace id must be a positive integer' });
+      return;
+    }
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user', message: 'No users are seeded. Run: npm run seed' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as { dueAt?: unknown; reason?: unknown };
+    const dueAt = typeof body.dueAt === 'string' ? new Date(body.dueAt) : null;
+    if (dueAt === null || Number.isNaN(dueAt.getTime())) {
+      res.status(400).json({ error: 'dueAt must be an ISO 8601 timestamp' });
+      return;
+    }
+    const reason = typeof body.reason === 'string' ? body.reason : '';
+
+    try {
+      res.json({ ok: true, nextAction: await overrideDueDate(workspaceId, dueAt, reason, user) });
+    } catch (err) {
+      // 422 rather than 400: the request is well-formed, the reason is the
+      // business requirement it fails (AC7).
+      if (err instanceof OverrideReasonRequiredError) {
+        res.status(422).json({ error: err.message });
+        return;
+      }
+      if (err instanceof NextActionWorkspaceNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** AC4 — a coordinator's own instruction, which survives recomputation. */
+app.post('/api/workspaces/:id/next-action', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(400).json({ error: 'workspace id must be a positive integer' });
+      return;
+    }
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user', message: 'No users are seeded. Run: npm run seed' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as { nextAction?: unknown; clear?: unknown };
+
+    // `clear: true` restores the rule, so a coordinator who overrode by mistake
+    // is not stuck with it until the state happens to move.
+    if (body.clear === true) {
+      try {
+        res.json({ ok: true, nextAction: await clearOverrides(workspaceId, user) });
+      } catch (err) {
+        if (err instanceof NextActionWorkspaceNotFoundError) {
+          res.status(404).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+      return;
+    }
+
+    if (typeof body.nextAction !== 'string') {
+      res.status(400).json({ error: 'nextAction must be a string' });
+      return;
+    }
+
+    try {
+      res.json({
+        ok: true,
+        nextAction: await overrideNextAction(workspaceId, body.nextAction, user),
+      });
+    } catch (err) {
+      if (err instanceof NextActionTooLongError) {
+        res.status(422).json({ error: err.message });
+        return;
+      }
+      if (err instanceof NextActionWorkspaceNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof Error && err.name === 'NextActionEmptyError') {
+        res.status(422).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Everything overdue, SCOPED TO THE ACTING USER'S QUEUES.
+ *
+ * Scope is resolved by queueService — the one module that owns the predicate —
+ * rather than reimplemented here, where it could drift from the queue view and
+ * quietly widen. A user in no queue gets an empty list, not everything.
+ */
+app.get('/api/overdue', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user', message: 'No users are seeded. Run: npm run seed' });
+      return;
+    }
+    const { getVisibleQueueIds } = await import('./modules/workspace/queueService');
+    const scope = await getVisibleQueueIds(user);
+    const items = await listOverdue(scope);
+    res.json({ count: items.length, items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── PRD-20 shared queues ─────────────────────────────────────────────────────
+
+/**
+ * Turns a query string into filters.
+ *
+ * Everything goes through `parseFilters()`, which is an allow-list — an
+ * unrecognised value is dropped rather than passed down. Note what is NOT read
+ * here: any notion of a queue. The queue is the slug in the path, resolved
+ * server-side against the caller's scope, so there is no second and unscoped way
+ * to choose one.
+ */
+function queueFiltersFrom(req: Request): QueueFilters {
+  const q = req.query as Record<string, unknown>;
+  return parseFilters({
+    tab: q.tab,
+    workStatus: q.workStatus,
+    referralState: q.referralState,
+    ownerUserId: q.owner,
+    partyOrgName: q.org,
+    department: q.department,
+    dueBefore: q.dueBefore,
+    dueAfter: q.dueAfter,
+    overdueOnly: q.overdueOnly,
+  } as Record<string, unknown>);
+}
+
+/**
+ * Resolves the acting user for a queue surface, or answers the empty state.
+ *
+ * Queue surfaces cannot fall back to "show everything" when there is no user,
+ * which is what an unresolved identity would otherwise mean. Returns null after
+ * having already answered the request.
+ */
+async function requireQueueUser(
+  req: Request,
+  res: Response,
+  asJson: boolean,
+): Promise<Awaited<ReturnType<typeof tryGetActingUser>> | null> {
+  const user = await tryGetActingUser(req);
+  if (user) return user;
+  if (asJson) {
+    res.status(409).json({
+      error: 'no-acting-user',
+      message: 'No users are seeded. Run: npm run seed',
+    });
+  } else {
+    res
+      .status(409)
+      .send(notFoundPage('No users are seeded, so no queue can be scoped. Run: npm run seed'));
+  }
+  return null;
+}
+
+/** The queue list, each queue with its per-tab counts, scoped to the caller. */
+app.get('/queues', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, false);
+    if (!user) return;
+
+    const queues = await listQueues(user);
+    const templatePath = path.join(__dirname, 'views', 'queueList.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__QUEUE_LIST__*/',
+      `window.__QUEUE_LIST__ = ${embedJson({
+        queues,
+        actingUser: { id: user.id, displayName: user.displayName, allQueuesAccess: user.allQueuesAccess },
+      })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * One queue's view. 403 for a queue outside the caller's scope (AC4).
+ *
+ * `all` is a reserved slug meaning "every queue in MY scope" — for a user
+ * without the grant that is still only their memberships, never everything.
+ */
+app.get('/queues/:slug', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, false);
+    if (!user) return;
+
+    const slug = String(req.params.slug);
+    const filters = queueFiltersFrom(req);
+
+    let data;
+    try {
+      data = await getQueueRows(user, slug, filters);
+    } catch (err) {
+      if (err instanceof QueueNotVisibleError) {
+        res.status(403).send(notFoundPage('That queue is not available to you.'));
+        return;
+      }
+      throw err;
+    }
+
+    const templatePath = path.join(__dirname, 'views', 'queueView.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__QUEUE_VIEW__*/',
+      `window.__QUEUE_VIEW__ = ${embedJson({
+        slug,
+        queue: data.queue,
+        counts: data.counts,
+        rows: data.rows,
+        filters: { ...filters, dueBefore: undefined, dueAfter: undefined },
+        queues: await listQueues(user),
+        departments: getDepartments(),
+        users: (await listUsers()).map((u) => ({ id: u.id, displayName: u.displayName })),
+        savedFilters: await listSavedFilters(user.id),
+        actingUser: { id: user.id, displayName: user.displayName },
+      })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** The rows behind the queue view, for the client-side filter round trip. */
+app.get('/api/queues/:slug/rows', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+
+    const slug = String(req.params.slug);
+    try {
+      const data = await getQueueRows(user, slug, queueFiltersFrom(req));
+      res.json({
+        queue: data.queue ? { slug: data.queue.slug, name: data.queue.name } : null,
+        counts: data.counts,
+        rows: data.rows,
+      });
+    } catch (err) {
+      if (err instanceof QueueNotVisibleError) {
+        // 403 and NO data — deliberately identical for a queue that exists but
+        // is out of scope and one that does not exist, so the response cannot be
+        // used to enumerate queues.
+        res.status(403).json({ error: 'queue-not-visible' });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Queue membership. */
+app.get('/api/queues/:slug/members', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+    const { resolveVisibleQueue } = await import('./modules/workspace/queueService');
+    try {
+      const queue = await resolveVisibleQueue(user, String(req.params.slug));
+      res.json({ queue: { slug: queue.slug, name: queue.name }, members: await listQueueMembers(queue.id) });
+    } catch (err) {
+      if (err instanceof QueueNotVisibleError) {
+        res.status(403).json({ error: 'queue-not-visible' });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/queues/:slug/members', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+
+    const body = (req.body ?? {}) as { userId?: unknown; accessLevel?: unknown };
+    const userId = typeof body.userId === 'number' ? body.userId : Number(body.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      res.status(400).json({ error: 'userId must be a positive integer' });
+      return;
+    }
+    const accessLevel = body.accessLevel === 'manager' ? 'manager' : 'member';
+
+    const { resolveVisibleQueue } = await import('./modules/workspace/queueService');
+    try {
+      const queue = await resolveVisibleQueue(user, String(req.params.slug));
+      await addQueueMember(queue.id, userId, user, accessLevel);
+      res.json({ ok: true, members: await listQueueMembers(queue.id) });
+    } catch (err) {
+      if (err instanceof QueueNotVisibleError) {
+        res.status(403).json({ error: 'queue-not-visible' });
+        return;
+      }
+      if (err instanceof QueueNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/api/queues/:slug/members/:userId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+    const userId = parseInt(String(req.params.userId), 10);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      res.status(400).json({ error: 'userId must be a positive integer' });
+      return;
+    }
+    const { resolveVisibleQueue } = await import('./modules/workspace/queueService');
+    try {
+      const queue = await resolveVisibleQueue(user, String(req.params.slug));
+      await removeQueueMember(queue.id, userId, user);
+      res.json({ ok: true, members: await listQueueMembers(queue.id) });
+    } catch (err) {
+      if (err instanceof QueueNotVisibleError) {
+        res.status(403).json({ error: 'queue-not-visible' });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Manual re-queue of one workspace (AC17). */
+app.post('/api/workspaces/:id/queue', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(400).json({ error: 'workspace id must be a positive integer' });
+      return;
+    }
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+
+    const body = (req.body ?? {}) as { queueId?: unknown; reason?: unknown };
+    const queueId = typeof body.queueId === 'number' ? body.queueId : Number(body.queueId);
+    if (!Number.isInteger(queueId) || queueId <= 0) {
+      res.status(400).json({ error: 'queueId must be a positive integer' });
+      return;
+    }
+    const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : undefined;
+
+    try {
+      await moveWorkspace(workspaceId, queueId, user, reason);
+      res.json({ ok: true, workspaceId, queueId });
+    } catch (err) {
+      if (err instanceof QueueNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Per-user saved filter sets (AC12). */
+app.get('/api/saved-filters', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+    res.json({ savedFilters: await listSavedFilters(user.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/saved-filters', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+    const body = (req.body ?? {}) as { name?: unknown; filters?: unknown };
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    // The stored set goes through the same allow-list as a query string, so a
+    // saved filter is not a privileged path into the filter object.
+    const filters = parseFilters((body.filters ?? {}) as Record<string, unknown>);
+    const saved = await saveFilter(user.id, name, filters);
+    res.json({ ok: true, savedFilter: saved });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/api/saved-filters/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await requireQueueUser(req, res, true);
+    if (!user) return;
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'id must be a positive integer' });
+      return;
+    }
+    try {
+      // Scoped to the owner inside the service, so this is a miss rather than a
+      // cross-user delete.
+      await deleteSavedFilter(user.id, id);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err instanceof SavedFilterNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
 /**
  * PRD-19 — the flat workspace index.
  *
- * Unfiltered and unscoped on purpose. PRD-20 adds queue grouping, the tab
- * vocabulary and allQueuesAccess scoping, and may replace this page outright.
+ * Unfiltered and unscoped on purpose, and kept so. The scoped, grouped, tabbed
+ * surface is PRD-20's `/queues`; this remains the flat "everything" index.
  */
 app.get('/workspaces', async (req: Request, res: Response, next: NextFunction) => {
   try {

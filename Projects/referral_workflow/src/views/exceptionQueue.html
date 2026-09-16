@@ -1,0 +1,440 @@
+<!--
+  PRD-28 — the exception queue.
+
+  Every inbound artifact this system could not place. Before this each of these
+  was a log line and the content was discarded, so this page is the first place
+  any of them has ever been visible.
+
+  ORPHANS ARE FIRST-CLASS HERE. An exception with no workspace — an ACK with a
+  mangled control id, a message matching nothing — is exactly the kind that used
+  to vanish, so it is listed and workable without one.
+
+  THE ONE THING REASSOCIATION DOES NOT DO is replay a protocol transition.
+  Attaching a message is a records operation; advancing the 360X state is a
+  protocol operation. The UI says so where a coordinator is about to act.
+-->
+<meta charset="utf-8" />
+<title>Exceptions</title>
+<style>
+  :root {
+    --color-nav-bg: #0d2d3a;
+    --color-brand: #009aab;
+    --color-bg-page: #f0f2f5;
+    --color-text: #212529;
+    --color-text-muted: #6c757d;
+    --color-border: #dee2e6;
+    --color-card: #fff;
+    --color-table-header: #f0f2f4;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: var(--color-bg-page); color: var(--color-text); }
+  .wrap { max-width: 1300px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 26px 0 10px; }
+  .sub { color: var(--color-text-muted); font-size: 0.88rem; margin-bottom: 14px; }
+  a { color: var(--color-brand); }
+  .note { background: #e7f5ff; border-left: 3px solid var(--color-brand); padding: 10px 14px;
+          border-radius: 4px; font-size: 0.83rem; color: #0b4f5c; margin-bottom: 16px; }
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 14px; }
+  .tab { font-size: 0.8rem; padding: 6px 12px; border: 1px solid var(--color-border);
+         border-radius: 20px; background: #fff; cursor: pointer; color: var(--color-text-muted); }
+  .tab.active { background: var(--color-brand); border-color: var(--color-brand); color: #fff;
+                font-weight: 600; }
+  .exc { background: var(--color-card); border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+         margin-bottom: 12px; padding: 14px 18px; border-left: 3px solid #dc3545; }
+  .exc.resolved { border-left-color: #198754; opacity: 0.72; }
+  .exc-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .type { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+          background: #f8d7da; color: #58151c; border-radius: 20px; padding: 3px 10px; }
+  .exc.resolved .type { background: #d1e7dd; color: #0a3622; }
+  .orphan { font-size: 0.64rem; font-weight: 700; background: #fff3cd; color: #664d03;
+            border-radius: 20px; padding: 2px 8px; }
+  .age { font-size: 0.76rem; color: var(--color-text-muted); margin-left: auto; }
+  .summary { font-size: 0.95rem; font-weight: 600; margin-bottom: 4px; line-height: 1.4; }
+  .remediation { font-size: 0.83rem; color: #0b4f5c; background: #e7f5ff; border-radius: 4px;
+                 padding: 7px 10px; margin: 6px 0; }
+  .meta { font-size: 0.78rem; color: var(--color-text-muted); display: flex; gap: 14px;
+          flex-wrap: wrap; margin-bottom: 8px; }
+  .raw { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.72rem;
+         background: #f8f9fa; border: 1px solid var(--color-border); border-radius: 4px;
+         padding: 8px 10px; max-height: 160px; overflow: auto; white-space: pre-wrap;
+         word-break: break-all; margin-bottom: 8px; }
+  .btn { font-size: 0.8rem; padding: 5px 12px; border: 1px solid var(--color-brand);
+         border-radius: 6px; background: #fff; color: var(--color-brand); cursor: pointer; }
+  .btn:hover { background: var(--color-brand); color: #fff; }
+  .btn-warn { border-color: #dc3545; color: #dc3545; }
+  .btn-warn:hover { background: #dc3545; color: #fff; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .inp { font-size: 0.82rem; padding: 5px 10px; border: 1px solid var(--color-border);
+         border-radius: 6px; min-width: 240px; }
+  .cands { margin-top: 10px; border-top: 1px dashed var(--color-border); padding-top: 10px; }
+  .cand { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0;
+          border-bottom: 1px solid #f1f3f5; }
+  .cand:last-child { border-bottom: none; }
+  .cand-main { flex: 1; }
+  .cand-name { font-size: 0.88rem; font-weight: 600; }
+  .cand-why { font-size: 0.75rem; color: var(--color-text-muted); }
+  .score { font-size: 0.72rem; font-weight: 700; background: #e0e7ff; color: #3730a3;
+           border-radius: 20px; padding: 2px 8px; white-space: nowrap; }
+  .warn-inline { font-size: 0.76rem; color: #664d03; background: #fff3cd; border-radius: 4px;
+                 padding: 6px 9px; margin-top: 6px; }
+  .empty { background: var(--color-card); border-radius: 10px; padding: 28px 24px;
+           box-shadow: 0 1px 3px rgba(0,0,0,0.08); color: var(--color-text-muted);
+           font-size: 0.9rem; line-height: 1.55; }
+  .msg { font-size: 0.8rem; margin-top: 6px; min-height: 1em; }
+  .msg.err { color: #842029; }
+  .msg.ok { color: #0f5132; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; background: var(--color-card);
+          border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  th { background: var(--color-table-header); text-align: left; padding: 8px 12px; font-size: 0.72rem;
+       text-transform: uppercase; letter-spacing: 0.03em; color: var(--color-text-muted); }
+  td { padding: 7px 12px; border-top: 1px solid var(--color-border); }
+  .out { font-size: 0.68rem; font-weight: 700; border-radius: 20px; padding: 2px 8px; }
+  .out-referral-created { background: #d1e7dd; color: #0a3622; }
+  .out-ignored { background: #e9ecef; color: #495057; }
+  .out-duplicate { background: #cfe2ff; color: #084298; }
+  .out-exception { background: #f8d7da; color: #58151c; }
+  .out-replayed { background: #fff3cd; color: #664d03; }
+  code { background: #f1f3f5; padding: 1px 5px; border-radius: 3px; font-size: 0.85em; }
+</style>
+<!--__NAV__-->
+<div class="wrap">
+  <h1>Exceptions</h1>
+  <div class="sub" id="sub"></div>
+  <div class="note" id="note"></div>
+  <div class="tabs" id="tabs"></div>
+  <div id="list"></div>
+
+  <h2>Inbound processing</h2>
+  <div class="sub">
+    What the inbox monitor has seen and what happened to each message. This replaced
+    <code>.processed_messages.json</code>, which did not survive a rebuild and was invisible here.
+  </div>
+  <div id="processed"></div>
+</div>
+
+<script>
+  /*__EXCEPTION_QUEUE__*/
+</script>
+<script>
+(function () {
+  'use strict';
+  var D = window.__EXCEPTION_QUEUE__ || {};
+  var open = D.exceptions || [];
+  var all = D.resolved || [];
+  var processed = D.processed || [];
+  var me = D.actingUser || {};
+  var filter = '';
+  var showResolved = false;
+  var candCache = {};
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? '' : d.toLocaleString();
+  }
+  function ageText(h) {
+    if (h < 1) return 'just now';
+    if (h < 48) return h + (h === 1 ? ' hour old' : ' hours old');
+    return Math.round(h / 24) + ' days old';
+  }
+
+  document.getElementById('sub').textContent =
+    'Acting as ' + (me.displayName || 'nobody') + '. ' + open.length + ' open.';
+
+  document.getElementById('note').innerHTML =
+    'Each of these was previously a log line with the content discarded &mdash; an unmatched ACK, ' +
+    'a rejection from the counterparty, an auto-declined referral. The retained artifact below is ' +
+    'often the <strong>only copy</strong>. Reassociating attaches it to a referral&rsquo;s record; it ' +
+    'deliberately does <strong>not</strong> advance the 360X protocol state, because a ' +
+    'mis-association must not be able to corrupt what the counterparty has been told.';
+
+  function visible() {
+    var src = showResolved ? all : open;
+    return filter ? src.filter(function (e) { return e.exceptionType === filter; }) : src;
+  }
+
+  function renderTabs() {
+    var src = showResolved ? all : open;
+    var counts = {};
+    src.forEach(function (e) { counts[e.exceptionType] = (counts[e.exceptionType] || 0) + 1; });
+    var types = Object.keys(counts).sort();
+
+    var html = '<button class="tab' + (filter === '' ? ' active' : '') + '" data-t="">All (' +
+      src.length + ')</button>';
+    html += types.map(function (t) {
+      return '<button class="tab' + (filter === t ? ' active' : '') + '" data-t="' + esc(t) + '">' +
+        esc(t) + ' (' + counts[t] + ')</button>';
+    }).join('');
+    html += '<button class="tab' + (showResolved ? ' active' : '') + '" data-resolved="1" ' +
+      'style="margin-left:auto;">' + (showResolved ? 'Showing all' : 'Show resolved too') + '</button>';
+
+    var el = document.getElementById('tabs');
+    el.innerHTML = html;
+    el.querySelectorAll('.tab').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (b.getAttribute('data-resolved')) { showResolved = !showResolved; filter = ''; }
+        else filter = b.getAttribute('data-t');
+        renderTabs(); renderList();
+      });
+    });
+  }
+
+  function renderList() {
+    var rows = visible();
+    var el = document.getElementById('list');
+
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty">' +
+        (open.length === 0 && !showResolved
+          ? '<strong>Nothing unplaced.</strong> Every inbound artifact has been correlated to a ' +
+            'referral. That is the healthy state &mdash; before PRD-28 it was also the only state ' +
+            'this page could have shown, because failures were discarded rather than recorded.'
+          : 'No exceptions of that type.') +
+        '</div>';
+      return;
+    }
+
+    el.innerHTML = rows.map(function (e) {
+      var isResolved = !!e.resolvedAt;
+      var canReassociate = !isResolved && e.exceptionType !== 'duplicate-patient' &&
+        e.exceptionType !== 'auto-declined';
+
+      return '<div class="exc' + (isResolved ? ' resolved' : '') + '" id="exc-' + e.id + '">' +
+        '<div class="exc-top">' +
+          '<span class="type">' + esc(e.exceptionType) + '</span>' +
+          (e.workspaceId === null ? '<span class="orphan">ORPHAN &mdash; no workspace</span>' : '') +
+          '<span class="age">' + esc(ageText(e.ageHours)) + ' &middot; ' + esc(fmtDate(e.createdAt)) + '</span>' +
+        '</div>' +
+        '<div class="summary">' + esc(e.summary) + '</div>' +
+        (e.remediation ? '<div class="remediation">' + esc(e.remediation) + '</div>' : '') +
+        '<div class="meta">' +
+          (e.patientName ? '<span>Patient: ' + esc(e.patientName) + '</span>' : '') +
+          (e.relatedPatientName && !e.patientName
+            ? '<span>Named: ' + esc(e.relatedPatientName) + '</span>' : '') +
+          (e.senderAddress ? '<span>From: ' + esc(e.senderAddress) + '</span>' : '') +
+          (e.messageControlId ? '<span>Control id: ' + esc(e.messageControlId) + '</span>' : '') +
+          (e.workspaceId ? '<span><a href="/workspaces/' + e.workspaceId + '">Open workspace &rarr;</a></span>' : '') +
+        '</div>' +
+        (e.rawContent
+          ? '<div class="raw">' + esc(e.rawContent.slice(0, 4000)) +
+            (e.rawContent.length > 4000 ? '\n\n[... display truncated ...]' : '') + '</div>'
+          : '<div class="warn-inline">No artifact was retained for this one.</div>') +
+        (e.metadata && e.metadata.rawContentTruncated
+          ? '<div class="warn-inline">The stored artifact was truncated at 256 KB.</div>' : '') +
+        (isResolved
+          ? '<div class="meta"><span>Resolved ' + esc(fmtDate(e.resolvedAt)) + ' by ' +
+              esc(e.resolvedByActor || 'someone') + ' as <strong>' + esc(e.resolution) + '</strong>' +
+              (e.resolutionNote ? ': ' + esc(e.resolutionNote) : '') + '</span></div>'
+          : actions(e, canReassociate)) +
+        '<div class="msg" id="msg-' + e.id + '"></div>' +
+        '<div class="cands" id="cands-' + e.id + '" style="display:none;"></div>' +
+      '</div>';
+    }).join('');
+
+    rows.forEach(function (e) { if (!e.resolvedAt) wire(e); });
+  }
+
+  function actions(e, canReassociate) {
+    var html = '<div class="row">';
+    if (canReassociate) {
+      html += '<button class="btn" data-act="candidates" data-id="' + e.id + '">Find candidates</button>';
+    }
+    if (e.exceptionType === 'auto-declined') {
+      html += '<input class="inp" id="conv-' + e.id + '" placeholder="Why was the decline wrong? (required)" />' +
+        '<button class="btn" data-act="convert" data-id="' + e.id + '">Convert to a real referral</button>';
+    }
+    if (e.exceptionType === 'duplicate-patient') {
+      html += '<button class="btn" data-act="resolve" data-res="confirmed-same" data-id="' + e.id + '">Same person</button>' +
+        '<button class="btn" data-act="resolve" data-res="confirmed-distinct" data-id="' + e.id + '">Different people</button>';
+    }
+    html += '<input class="inp" id="note-' + e.id + '" placeholder="Note (optional for dismiss)" />' +
+      '<button class="btn btn-warn" data-act="resolve" data-res="dismissed" data-id="' + e.id + '">Dismiss</button>' +
+      '</div>';
+    if (e.exceptionType === 'duplicate-patient') {
+      html += '<div class="warn-inline">Neither choice merges any records. Confirming ' +
+        '&ldquo;same person&rdquo; records the decision only &mdash; the two patient rows remain ' +
+        'separate, and their clinical data is not combined.</div>';
+    }
+    return html;
+  }
+
+  function msg(id, text, ok) {
+    var el = document.getElementById('msg-' + id);
+    if (!el) return;
+    el.className = 'msg ' + (ok ? 'ok' : 'err');
+    el.textContent = text;
+  }
+
+  async function post(url, body) {
+    var res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+    var json = await res.json().catch(function () { return {}; });
+    return { ok: res.ok, status: res.status, json: json };
+  }
+
+  function wire(e) {
+    var node = document.getElementById('exc-' + e.id);
+    if (!node) return;
+    node.querySelectorAll('[data-act]').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var act = b.getAttribute('data-act');
+        var id = b.getAttribute('data-id');
+
+        if (act === 'candidates') return showCandidates(id);
+
+        if (act === 'convert') {
+          var cnote = (document.getElementById('conv-' + id) || {}).value || '';
+          if (!cnote.trim()) { msg(id, 'A note explaining why the decline was wrong is required.', false); return; }
+          var cr = await post('/api/exceptions/' + id + '/convert', { note: cnote.trim() });
+          if (cr.ok) location.reload(); else msg(id, cr.json.error || 'Failed.', false);
+          return;
+        }
+
+        if (act === 'resolve') {
+          var note = (document.getElementById('note-' + id) || {}).value || '';
+          var rr = await post('/api/exceptions/' + id + '/resolve', {
+            resolution: b.getAttribute('data-res'),
+            note: note.trim() || undefined
+          });
+          if (rr.ok) location.reload(); else msg(id, rr.json.error || 'Failed.', false);
+        }
+      });
+    });
+  }
+
+  async function showCandidates(id) {
+    var box = document.getElementById('cands-' + id);
+    if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+    box.style.display = '';
+    box.innerHTML = '<div class="cand-why">Ranking&hellip;</div>';
+
+    if (!candCache[id]) {
+      try {
+        var res = await fetch('/api/exceptions/' + id + '/candidates');
+        candCache[id] = (await res.json()).candidates || [];
+      } catch (err) {
+        box.innerHTML = '<div class="cand-why">Could not load candidates.</div>';
+        return;
+      }
+    }
+    var cands = candCache[id];
+
+    // No candidates is a REAL state, not an error: a genuinely unrelated artifact
+    // matches nothing, and ranking every recent workspace to avoid an empty list
+    // would be worse than useless. So the manual path is offered here rather
+    // than leaving the exception unworkable — which it was until this was added.
+    if (!cands.length) {
+      box.innerHTML =
+        '<div class="cand-why">Nothing matched on sender address, patient or recency, so there is ' +
+        'no suggestion to make. If you know where this belongs, enter the workspace id.</div>' +
+        manualAttach(id);
+      wireManual(id, box);
+      return;
+    }
+
+    box.innerHTML =
+      '<div class="cand-why" style="margin-bottom:6px;">Ranked by sender address, patient and ' +
+      'recency. Every suggestion states its reasons &mdash; attaching a clinical artifact to the ' +
+      'wrong record is not recoverable by undo.</div>' +
+      cands.map(function (c) {
+        return '<div class="cand">' +
+          '<span class="score">' + c.score.toFixed(2) + '</span>' +
+          '<div class="cand-main">' +
+            '<div class="cand-name">' + esc(c.patientName) +
+              (c.initiatingOrgName ? ' &middot; ' + esc(c.initiatingOrgName) : '') + '</div>' +
+            '<div class="cand-why">' + c.reasons.map(esc).join(' &middot; ') + '</div>' +
+          '</div>' +
+          '<button class="btn" data-pick="' + c.workspaceId + '">Attach here</button>' +
+        '</div>';
+      }).join('') +
+      '<div class="row"><input class="inp" id="rnote-' + id +
+        '" placeholder="Why this referral? (required)" /></div>' +
+      '<div class="warn-inline">Attaching records the artifact against the referral. It does ' +
+        '<strong>not</strong> advance the 360X protocol state &mdash; do that explicitly from the ' +
+        'workspace once you are sure.</div>' +
+      manualAttach(id);
+
+    wireManual(id, box);
+
+    box.querySelectorAll('[data-pick]').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var note = (document.getElementById('rnote-' + id) || {}).value || '';
+        if (!note.trim()) { msg(id, 'A note explaining the reassociation is required.', false); return; }
+        var r = await post('/api/exceptions/' + id + '/reassociate', {
+          workspaceId: Number(b.getAttribute('data-pick')),
+          note: note.trim()
+        });
+        if (r.ok) location.reload(); else msg(id, r.json.error || 'Failed.', false);
+      });
+    });
+  }
+
+  /** The escape hatch for an orphan nothing ranked, and for a coordinator who knows better. */
+  function manualAttach(id) {
+    return '<div class="row" style="margin-top:8px;padding-top:8px;border-top:1px dashed #dee2e6;">' +
+      '<input class="inp" id="mws-' + id + '" style="min-width:120px;" placeholder="Workspace id" />' +
+      '<input class="inp" id="mnote-' + id + '" placeholder="Why this referral? (required)" />' +
+      '<button class="btn" id="mbtn-' + id + '">Attach by id</button>' +
+    '</div>';
+  }
+
+  function wireManual(id, scope) {
+    var btn = (scope || document).querySelector('#mbtn-' + id);
+    if (!btn) return;
+    btn.addEventListener('click', async function () {
+      var wsId = Number((document.getElementById('mws-' + id) || {}).value);
+      var note = ((document.getElementById('mnote-' + id) || {}).value || '').trim();
+      if (!Number.isInteger(wsId) || wsId <= 0) { msg(id, 'Enter a workspace id.', false); return; }
+      if (!note) { msg(id, 'A note explaining the reassociation is required.', false); return; }
+      var r = await post('/api/exceptions/' + id + '/reassociate', { workspaceId: wsId, note: note });
+      if (r.ok) location.reload(); else msg(id, r.json.error || 'Failed.', false);
+    });
+  }
+
+  function renderProcessed() {
+    var el = document.getElementById('processed');
+    if (!processed.length) {
+      el.innerHTML = '<div class="empty">Nothing recorded yet. The inbox monitor writes a row per ' +
+        'message as it is processed.</div>';
+      return;
+    }
+    el.innerHTML = '<table><thead><tr><th>Message id</th><th>From</th><th>Subject</th>' +
+      '<th>Outcome</th><th>When</th><th></th></tr></thead><tbody>' +
+      processed.map(function (m) {
+        return '<tr>' +
+          '<td style="font-family:ui-monospace,monospace;font-size:0.74rem;">' + esc(m.messageId) + '</td>' +
+          '<td>' + esc(m.senderAddress || '—') + '</td>' +
+          '<td>' + esc(m.subject || '—') + '</td>' +
+          '<td><span class="out out-' + esc(m.outcome) + '">' + esc(m.outcome) + '</span></td>' +
+          '<td style="white-space:nowrap;">' + esc(fmtDate(m.processedAt)) + '</td>' +
+          '<td><button class="btn" data-replay="' + esc(encodeURIComponent(m.messageId)) + '">Replay</button></td>' +
+        '</tr>';
+      }).join('') + '</tbody></table>' +
+      '<div class="sub" style="margin-top:8px;">Replaying clears the idempotency record so the next ' +
+      'sweep reprocesses the message. It cannot create a duplicate referral &mdash; the unique ' +
+      'constraint on <code>referrals.source_message_id</code> still refuses one.</div>';
+
+    el.querySelectorAll('[data-replay]').forEach(function (b) {
+      b.addEventListener('click', async function () {
+        var r = await post('/api/messages/' + b.getAttribute('data-replay') + '/replay', {});
+        if (r.ok) location.reload();
+        else window.alert((r.json && r.json.error) || 'Replay failed.');
+      });
+    });
+  }
+
+  renderTabs();
+  renderList();
+  renderProcessed();
+})();
+</script>

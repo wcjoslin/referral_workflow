@@ -5,7 +5,7 @@ prev: "[[PRD-19 - Workspace Shell]]"
 
 # PRD-20: Shared Queues & Referral Queue View
 
-**Status:** Drafting  
+**Status:** Refined — ready for implementation  
 **Team:** Clinical Workflow & Collaboration  
 **Module:** `workspace/`, `views/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -116,23 +116,36 @@ owned workspace; it offers the move rather than performing it.
 
 ---
 
-## Known issue inherited from PRD-30
+## Authentication — explicitly deferred out of this epic (decision)
 
-**This PRD owns the fix for the application having no authentication.**
-`identityService.tryGetActingUser()` reads the `actingUserId` cookie and falls back to
-`getDefaultActingUser()` — the first active user — when it is absent. Every internal page and API is
-therefore served to an unauthenticated caller as a real staff member.
+The draft of this PRD claimed to own the fix for the application having no authentication. **It does
+not.** That was reassigned by an explicit decision during refinement: authentication is deferred out
+of the epic to **[[PRD-31 - Caller Authentication]]**, and this PRD ships queue scoping without it.
 
-PRD-17 recorded that cookie as a simulation rather than a credential, which held while every user
-was internal staff on localhost. PRD-30 v1.1 changes the threat model by handing an invitation URL
-to an external organization, and ships only a mitigation: internal routes refuse a guest session
-cookie, and the guest cookie is `HttpOnly`. That closes the one path PRD-30 opens; it does not make
+The finding itself stands and is unchanged. `identityService.tryGetActingUser()` reads the
+`actingUserId` cookie and falls back to `getDefaultActingUser()` — the first active user — when it is
+absent. Every internal page and API is therefore served to an unauthenticated caller as a real staff
+member. PRD-17 recorded that cookie as a simulation rather than a credential; PRD-30 hardened the one
+path it opened (internal routes refuse a guest cookie, the guest cookie is `HttpOnly`) without making
 internal routes authenticated.
 
-Since this PRD is where queue membership becomes the least-privilege PHI boundary, the boundary needs
-something to authenticate *against*. Whatever this PRD builds for `getVisibleQueueIds()` has to rest
-on a real caller identity, not on a cookie anyone can set. Resolve it here, and treat deploying guest
-access to a publicly reachable host as gated on it.
+**What this PRD therefore builds, stated precisely so no later reader overstates it.** Queue scoping
+here is a *server-side least-privilege default*, not an access control:
+
+- It IS real in the sense that matters for correctness: every query is constrained by the acting
+  user's membership **before** any user-supplied filter is applied, so a client cannot widen its own
+  scope by editing a query parameter, and an out-of-scope slug is refused rather than filtered. That
+  is worth having on its own — it is what stops the queue view from being a browser-side illusion
+  like the dashboard's department filter.
+- It is NOT a PHI boundary, because the identity it scopes against is a cookie anybody can set.
+  Somebody who wants another queue's rows can claim to be a user who belongs to it. No comment, test
+  name or PRD sentence in this feature may imply otherwise.
+
+The consequence is recorded rather than hidden: **deploying this application to a publicly reachable
+host is gated on PRD-31**, and the schema comment above `queues` in `src/db/schema.ts` says the same
+thing at the place an engineer will actually read it. The security tests in this PRD assert the
+predicate (an out-of-scope slug returns 403 and no rows, no queue route accepts a guest session) and
+deliberately do not assert an authentication property that does not exist.
 
 ---
 
@@ -150,7 +163,8 @@ access to a publicly reachable host as gated on it.
 ### Engineering Constraints
 
 - `referral_workspaces.queue_id` was created by PRD-18 as a plain integer. This PRD adds the real
-  foreign key in its own migration rather than changing PRD-18's.
+  foreign key in its own migration rather than changing PRD-18's. **This is not a one-liner and the
+  draft was wrong to imply it was** — see *Migrations* below for what it actually takes.
 - Department values must be validated against `getDepartments()`, matching the existing behaviour of
   `POST /api/referrals/:id/routing`, which falls back to `Unassigned`. A queue's department filter
   referencing a department not in the catalogue is a configuration error and should be reported.
@@ -200,6 +214,11 @@ export const queueMembers = sqliteTable(
   (table) => ({
     queueIdx: index('idx_queue_members_queue').on(table.queueId),
     userIdx: index('idx_queue_members_user').on(table.userId),
+    // Added in refinement, not in the draft. One membership row per person per
+    // queue, so re-adding revives rather than duplicating — the same shape
+    // PRD-24 used for participants. Without it, "is this user in this queue"
+    // has no single answer and getVisibleQueueIds() returns duplicate ids.
+    uniqueIdx: uniqueIndex('idx_queue_members_unique').on(table.queueId, table.userId),
   }),
 );
 
@@ -213,7 +232,13 @@ export const savedFilters = sqliteTable(
     filtersJson: text('filters_json').notNull(),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   },
-  (table) => ({ userIdx: index('idx_saved_filters_user').on(table.userId, table.surface) }),
+  (table) => ({
+    userIdx: index('idx_saved_filters_user').on(table.userId, table.surface),
+    // Added in refinement. Saving over an existing name must replace it, and
+    // AC12 ("saved with a name and reapplied") has no meaning if one user can
+    // hold two different filter sets under the same name on the same surface.
+    uniqueIdx: uniqueIndex('idx_saved_filters_name').on(table.userId, table.surface, table.name),
+  }),
 );
 ```
 
@@ -221,14 +246,65 @@ Exactly one queue has `isDefault: true`; enforce it in the service and assert it
 The see-all-queues scope is granted by `users.allQueuesAccess` (PRD-17) — an explicit boolean, not a
 `jobRole` comparison. `jobRole` is descriptive only; branching on it for data access is a defect.
 
-**Known issue for refinement — department vocabulary is inconsistent.** Queue seeding derives
-departments from `getDepartments()` in `src/modules/prd03/resourceCalendar.ts`, which yields eight
-(Cardiology, Endocrinology, Gastroenterology, General, Imaging, Neurology, Orthopedics, Physical
-Therapy). But `scripts/seed-analytics-demo.ts` uses six, of which `Oncology` and `General Surgery`
-are **not** in the catalogue, while `Imaging`, `Physical Therapy`, `Endocrinology` and `General` never
-appear in seeds. Seeding one queue per catalogue department therefore leaves seeded referrals whose
-department matches no queue. Resolve when this PRD is refined: reconcile the vocabularies, or rely on
-the default triage queue and accept it.
+**Department vocabulary — RESOLVED by reconciling the catalogue.** The draft recorded this as an
+open question and was right on both counts. Measured rather than guessed at — and measured across
+**both** seed scripts, which is the part the first refinement pass got wrong.
+
+`scripts/seed-analytics-demo.ts` declares its own six-department vocabulary and assigns one at
+random per referral (`pickOne(DEPARTMENTS)`), so exact counts move between runs — what is stable is
+which departments appear at all:
+
+| Department | In `getDepartments()` before this PRD? |
+|---|---|
+| Cardiology | yes |
+| Neurology | yes |
+| Orthopedics | yes |
+| Gastroenterology | yes |
+| **Oncology** | **no** |
+| **General Surgery** | **no** |
+
+Two of the six had no queue to route to. Across observed 80-referral runs that was **~25 referrals,
+roughly a quarter of the dataset**, landing in default triage — and because assignment is random, the
+exact figure is not reproducible, which is itself a reason to assert the invariant rather than a
+count.
+
+**Correction, recorded rather than quietly fixed.** The first refinement pass measured only the
+full-demo database, found `Oncology` (17 referrals) and no `General Surgery`, and wrote that
+`General Surgery` "is not actually used by any seed". That was wrong: it is used by the analytics
+seed, which is the dataset the queue view is most likely to be demonstrated against. The draft PRD
+had flagged both departments and was correct about both.
+
+**Decision: add both `Oncology` and `General Surgery` to `resourceCalendar.getCatalogue()`**, each as
+two resources in that department, so the two vocabularies agree. `General Surgery` is deliberately
+its own department rather than folded into the existing `General`, which is generic exam rooms
+rather than a surgical specialty.
+
+Relying on the default queue instead was the alternative and is rejected: it would put roughly a
+quarter of the primary demo dataset into a "needs triage" state that is an artefact of a catalogue
+omission rather than a real routing failure, which makes the `needsTriage` flag useless as a signal.
+
+**Verified on real seeded data** after the change — 80 referrals, `backfill:workspaces` then
+`backfill:queues`. The per-department numbers vary per run; these two do not, and they are the
+claim:
+
+```
+unrouted: 0        (a null queue_id is invisible in EVERY queue view, not merely unsorted)
+in default/triage: 0
+```
+
+One observed run, for shape only: `cardiology 20, oncology 14, general-surgery 14, orthopedics 13,
+gastroenterology 10, neurology 9`. `backfill:queues` reported `routed 0, already routed 80` on both
+runs, because `backfill:workspaces` goes through `createWorkspace()` which already routes — which is
+the idempotence claim demonstrated rather than asserted.
+
+Four catalogue departments (Endocrinology, General, Imaging, Physical Therapy) get no referrals from
+either seed. That is harmless: their queues exist and are empty. The default `general-intake` queue
+still exists and is still exercised — by referrals whose `routing_department` is `Unassigned`, which
+is the genuine no-match case `needsTriage` is for.
+
+`tests/unit/workspace/queueService.test.ts` pins this: every department the seeds use resolves to a
+queue of its own rather than falling back, so a future catalogue edit that drops one fails a test
+instead of silently sending 11 referrals to triage.
 
 ```typescript
 // src/modules/workspace/queueService.ts — new
@@ -272,15 +348,64 @@ export async function getQueueRows(
   user: ActingUser, queueSlug: string | 'all', filters: QueueFilters,
 ): Promise<{ rows: QueueRow[]; counts: Record<QueueTab, number> }>;
 
-export async function resolveQueueForDepartment(department: string): Promise<number>;
+/**
+ * Corrected in refinement. The draft returned a bare queue id, but the CALLER
+ * needs to know whether the department matched or fell back — AC15's
+ * `needsTriage` flag and AC16's routing `reason` are both that fact, and
+ * re-deriving it by comparing the resolved queue against the default queue is
+ * the kind of duplicated inference that drifts.
+ */
+export async function resolveQueueForDepartment(
+  department: string,
+): Promise<{ queueId: number; matched: boolean; reason: QueueRoutingReason }>;
 export async function routeWorkspace(workspaceId: number, actor: string): Promise<number>;
 export async function moveWorkspace(
   workspaceId: number, toQueueId: number, actor: ActingUser, reason?: string,
 ): Promise<void>;
 ```
 
-Migration: `0016_add_queues.sql` — creates the three tables, adds the `queue_id` foreign key, and
-seeds one queue per department from `getDepartments()` plus a default `general-intake` queue.
+### Migrations
+
+The draft said `0016_add_queues.sql` doing everything at once. Numbers in the unrefined children were
+always indicative, and 0016/0017 went to PRD-22/23. What actually ships is **two** migrations,
+because the two halves have very different risk:
+
+- **`0018_closed_peter_parker.sql`** — creates `queues`, `queue_members` and `saved_filters`.
+  Ordinary additive DDL. Note that `queue_members` is emitted *before* `queues` and carries an FK to
+  it; that is fine, and verified — SQLite resolves foreign-key targets at DML time, not DDL time, and
+  the constraint enforces correctly afterwards.
+- **`0019_serious_loners.sql`** — adds the real `queue_id` foreign key. SQLite cannot add a
+  constraint in place, so drizzle-kit recreates `referral_workspaces`: create `__new_`, copy all 16
+  columns, drop, rename, recreate all 5 indexes.
+
+**The second one is hand-edited, and this is the important finding of this PRD's implementation.**
+drizzle-kit generated `PRAGMA foreign_keys=OFF` around the recreation. That pragma is a **no-op
+inside a transaction**, and drizzle's migrator runs every migration in one — so foreign keys stayed
+enforced through the `DROP TABLE`, against the **nine** tables that reference `referral_workspaces`
+(`party_addresses`, `workspace_participants`, `workspace_parties`, `workspace_guests`,
+`workspace_invitations`, `workspace_assertions`, `comment_mentions`, `referral_comments`,
+`workspace_documents`).
+
+Verified empirically, and the failure mode is the nasty one: **it applies to an empty database and
+fails on a populated one.** It would have passed CI and broken the demo database, which is the worst
+possible place for a migration bug to hide.
+
+The fix is `PRAGMA defer_foreign_keys` instead, which *does* take effect inside a transaction —
+enforcement moves to `COMMIT`, by which point the table has been recreated and every child row
+resolves again. Verified on a populated database: row values byte-identical, child rows preserved,
+all nine child foreign keys still pointing at `referral_workspaces`, `foreign_key_check` empty,
+`integrity_check` ok, all five indexes recreated, no `__new_` table left behind, and the new
+constraint genuinely rejecting a dangling `queue_id` while accepting a valid one.
+
+Because a future drizzle-kit table recreation would silently reintroduce this,
+`tests/unit/workspace/dbMigrations.test.ts` fails if any migration contains a non-commented
+`PRAGMA foreign_keys=OFF`, and separately migrates a **populated** database through the whole folder.
+0019 is the only table recreation in the repository today, so there is no pre-existing instance of
+the bug.
+
+Queue seeding is **not** in the migration. It lives in `seedQueues()` alongside the other seeds, for
+the reason PRD-17's `seedUsers()` does: seeding is idempotent application logic that has to re-run
+against an existing database, and a migration runs exactly once.
 
 Audit events: `workspace.queue_changed`, `queue.member_added`, `queue.member_removed`.
 
@@ -353,6 +478,17 @@ Audit events: `workspace.queue_changed`, `queue.member_added`, `queue.member_rem
 **Security Tests:**
 - No queue route accepts a guest session
 - Requesting `/api/queues/:slug/rows` for an out-of-scope queue returns 403 and no data
+- Scope is applied before the user filter: a user who passes `?queue=` or any other parameter naming
+  a queue they do not belong to gets nothing, not that queue's rows
+
+**Migration Tests** (`dbMigrations.test.ts`, added in refinement):
+- No migration contains a non-commented `PRAGMA foreign_keys=OFF`
+- The whole folder applies to an empty database with `integrity_check` ok
+- The whole folder applies to a **populated** database — a workspace with child rows — preserving
+  row values and child counts, and is replayable
+- `queue_id` genuinely enforces: a dangling id is rejected, a valid one accepted
+- All five `referral_workspaces` indexes survive the recreation
+- All nine child foreign keys still point at `referral_workspaces`
 
 **Regression:**
 - `GET /`, `GET /scheduler/queue`, `GET /claims`, `GET /prior-auth` are unchanged
@@ -361,14 +497,24 @@ Audit events: `workspace.queue_changed`, `queue.member_added`, `queue.member_rem
 
 ## Deliverables
 
-- `queues`, `queue_members`, `saved_filters` in `src/db/schema.ts` + migration `0016_add_queues.sql`
-  including the `queue_id` foreign key and queue seeding
+- `queues`, `queue_members`, `saved_filters` in `src/db/schema.ts`
+- Migration `0018_closed_peter_parker.sql` (the three tables) and `0019_serious_loners.sql` (the
+  `queue_id` foreign key, hand-edited to `defer_foreign_keys` — see *Migrations*)
 - `src/modules/workspace/queueService.ts`
 - `src/views/queueView.html` and `src/views/queueList.html`
 - Routes listed above
-- `route-to-queue` action in `src/modules/prd09/skillActions.ts`
+- `Oncology` and `General Surgery` added to `src/modules/prd03/resourceCalendar.ts` to reconcile the
+  department vocabulary
+- `seedQueues()` wired into the seed scripts; `scripts/backfill-queues.ts` for existing workspaces
 - Routing wired into `createWorkspace()`
 - `tests/unit/workspace/queueService.test.ts`
+- `tests/unit/workspace/dbMigrations.test.ts` — the migration guard described under *Migrations*
+
+**Dropped from the draft:** the `route-to-queue` skill action. PRD-09 rules act on referrals, and
+routing already happens unconditionally at workspace creation from the same `routing_department` a
+skill would set — so the action would be a second way to do what `createWorkspace()` already does,
+with no caller asking for it. Re-queueing by hand is `POST /api/workspaces/:id/queue`. Recorded here
+rather than silently omitted.
 
 ---
 
@@ -380,6 +526,7 @@ Audit events: `workspace.queue_changed`, `queue.member_added`, `queue.member_rem
 - [[PRD-21 - Ownership & Assignment]] — claiming from a queue
 - [[PRD-26 - Next Action & Due Dates]] — the due dates this view sorts by
 - [[PRD-28 - Correlation & Exception Queue]] — populates the Exception tab
+- [[PRD-31 - Caller Authentication]] — the deferred authentication work this PRD's scoping rests on
 - [[📋 PRD Index|PRD Index]]
 
 ---
@@ -387,5 +534,14 @@ Audit events: `workspace.queue_changed`, `queue.member_added`, `queue.member_rem
 ## History
 
 **Created:** 2026-09-14  
-**Last Updated:** 2026-09-14  
-**Version:** 1.0
+**Last Updated:** 2026-09-16  
+**Version:** 1.1
+
+**v1.1 — refinement.** Authentication reassigned out of this PRD to PRD-31 by explicit decision, with
+what queue scoping does and does not guarantee stated precisely. Department vocabulary resolved by
+measuring both seed datasets and adding `Oncology` and `General Surgery` to the catalogue — the first
+pass measured only the full-demo database and wrongly dismissed `General Surgery`, which the
+verification step against real seeded data caught. Migration plan corrected to two
+migrations with the `PRAGMA foreign_keys=OFF` no-op-in-transaction finding recorded and guarded by a
+test. `resolveQueueForDepartment()` now returns the match reason rather than a bare id. Two unique
+indexes added to the schema. `route-to-queue` skill action dropped with the reason recorded.

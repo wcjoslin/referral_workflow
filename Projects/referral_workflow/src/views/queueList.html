@@ -1,0 +1,163 @@
+<!--
+  PRD-20 — the queue list.
+
+  Every queue the acting user may read, each with its four tab counts. The
+  counts come from the server already scoped; this page does no filtering of its
+  own, which is the point — a queue the user cannot read is ABSENT from the
+  payload rather than hidden by CSS.
+
+  WHAT THIS PAGE DOES NOT CLAIM. Queue scoping is a server-side least-privilege
+  default, not authentication: the identity it scopes against is a cookie anyone
+  can set (deferred to PRD-31). The empty state below says so plainly rather
+  than implying a boundary that is not there.
+-->
+<meta charset="utf-8" />
+<title>Queues</title>
+<style>
+  :root {
+    --color-nav-bg: #0d2d3a;
+    --color-brand: #009aab;
+    --color-brand-hover: #007d8a;
+    --color-bg-page: #f0f2f5;
+    --color-text: #212529;
+    --color-text-muted: #6c757d;
+    --color-border: #dee2e6;
+    --color-card: #fff;
+    --color-table-header: #f0f2f4;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: var(--color-bg-page); color: var(--color-text); }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: var(--color-text-muted); font-size: 0.88rem; margin-bottom: 16px; }
+  .note { background: #e7f5ff; border-left: 3px solid var(--color-brand); padding: 10px 14px;
+          border-radius: 4px; font-size: 0.83rem; color: #0b4f5c; margin-bottom: 18px; }
+  .card { background: var(--color-card); border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+          margin-bottom: 14px; }
+  .qgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+  .q { background: var(--color-card); border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+       padding: 16px 18px; text-decoration: none; color: inherit; display: block;
+       border: 1px solid transparent; transition: border-color .15s, box-shadow .15s; }
+  .q:hover { border-color: var(--color-brand); box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+  .qname { font-weight: 700; font-size: 1rem; margin-bottom: 2px; }
+  .qdesc { color: var(--color-text-muted); font-size: 0.8rem; margin-bottom: 12px; min-height: 1.1em; }
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+  .tabcount { display: inline-flex; flex-direction: column; align-items: center; min-width: 58px;
+              padding: 6px 8px; border-radius: 6px; background: var(--color-table-header); }
+  .tabcount .n { font-weight: 700; font-size: 1.05rem; line-height: 1; }
+  .tabcount .l { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em;
+                 color: var(--color-text-muted); margin-top: 3px; }
+  .tabcount.exception .n { color: #dc3545; }
+  .tabcount.exception.zero .n { color: var(--color-text-muted); }
+  .badge-default { font-size: 0.66rem; background: #e0e7ff; color: #3730a3; border-radius: 20px;
+                   padding: 2px 8px; font-weight: 700; margin-left: 6px; vertical-align: middle; }
+  .badge-misconfig { font-size: 0.66rem; background: #f8d7da; color: #58151c; border-radius: 20px;
+                     padding: 2px 8px; font-weight: 700; margin-left: 6px; vertical-align: middle; }
+  .badge-inactive { font-size: 0.66rem; background: #e9ecef; color: #495057; border-radius: 20px;
+                    padding: 2px 8px; font-weight: 700; margin-left: 6px; vertical-align: middle; }
+  .empty { background: var(--color-card); border-radius: 10px; padding: 28px 24px;
+           box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .empty h2 { font-size: 1.05rem; margin: 0 0 8px; }
+  .empty p { color: var(--color-text-muted); font-size: 0.88rem; margin: 0 0 8px; line-height: 1.5; }
+  code { background: #f1f3f5; padding: 1px 5px; border-radius: 3px; font-size: 0.85em; }
+  .warn { background: #fff3cd; border-left: 3px solid #ffc107; padding: 10px 14px; border-radius: 4px;
+          font-size: 0.83rem; color: #664d03; margin-bottom: 14px; }
+</style>
+<!--__NAV__-->
+<div class="wrap">
+  <h1>Queues</h1>
+  <div class="sub" id="sub"></div>
+  <div class="note" id="scopeNote"></div>
+  <div id="warn"></div>
+  <div id="body"></div>
+</div>
+
+<script>
+  /*__QUEUE_LIST__*/
+</script>
+<script>
+(function () {
+  'use strict';
+  var data = window.__QUEUE_LIST__ || { queues: [], actingUser: null };
+  var queues = data.queues || [];
+  var me = data.actingUser || {};
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  document.getElementById('sub').textContent =
+    'Acting as ' + (me.displayName || 'nobody') +
+    (me.allQueuesAccess ? ' — all queues (explicit grant)' : ' — your queue memberships');
+
+  // Says what the scoping is, and is not. The wording here is deliberate: this
+  // page must not imply an access boundary that does not exist yet.
+  document.getElementById('scopeNote').innerHTML =
+    'Queue scope is applied on the server before any filter, so a queue you do not belong to is ' +
+    'absent from this page rather than hidden. It is a least-privilege <strong>default</strong>, ' +
+    'not authentication &mdash; the acting-user cookie is not a credential, and real caller ' +
+    'authentication is tracked separately as PRD-31.';
+
+  var misconfigured = queues.filter(function (q) { return q.misconfigured; });
+  if (misconfigured.length) {
+    document.getElementById('warn').innerHTML =
+      '<div class="warn"><strong>' + misconfigured.length + ' queue(s) misconfigured.</strong> ' +
+      'Their department filter names a department the resource catalogue no longer has, so nothing ' +
+      'routes to them: ' +
+      misconfigured.map(function (q) { return esc(q.name) + ' (' + esc(q.departmentFilter) + ')'; }).join(', ') +
+      '. Referrals still route to the default queue.</div>';
+  }
+
+  var body = document.getElementById('body');
+
+  if (!queues.length) {
+    // AC2: an explanatory empty state, never every workspace.
+    body.innerHTML =
+      '<div class="empty">' +
+      '<h2>You do not belong to any queue</h2>' +
+      '<p>This is the empty state, not an error. A user with no queue membership sees no ' +
+      'workspaces &mdash; the alternative, falling back to showing everything, is the bug this ' +
+      'page exists to avoid.</p>' +
+      '<p>Add yourself to a queue with <code>POST /api/queues/&lt;slug&gt;/members</code>, or act as ' +
+      'a user holding the <code>allQueuesAccess</code> grant using the selector above.</p>' +
+      '<p>If no queues exist at all, run <code>npm run seed</code> and then ' +
+      '<code>npm run backfill:queues</code>.</p>' +
+      '</div>';
+    return;
+  }
+
+  var total = queues.reduce(function (acc, q) {
+    return acc + q.counts.open + q.counts.waiting + q.counts.exception + q.counts.completed;
+  }, 0);
+
+  function tab(label, n, cls) {
+    return '<span class="tabcount ' + (cls || '') + (n === 0 ? ' zero' : '') + '">' +
+      '<span class="n">' + n + '</span><span class="l">' + label + '</span></span>';
+  }
+
+  body.innerHTML =
+    '<div class="qdesc" style="margin-bottom:12px;">' + queues.length + ' queue(s) in scope, ' +
+      total + ' active workspace(s). <a href="/queues/all">View all in one list &rarr;</a></div>' +
+    '<div class="qgrid">' +
+    queues.map(function (q) {
+      return '<a class="q" href="/queues/' + encodeURIComponent(q.slug) + '">' +
+        '<div class="qname">' + esc(q.name) +
+          (q.isDefault ? '<span class="badge-default">DEFAULT</span>' : '') +
+          (q.misconfigured ? '<span class="badge-misconfig">MISCONFIGURED</span>' : '') +
+          (q.active ? '' : '<span class="badge-inactive">INACTIVE</span>') +
+        '</div>' +
+        '<div class="qdesc">' + esc(q.description || '') + '</div>' +
+        '<div class="tabs">' +
+          tab('Open', q.counts.open) +
+          tab('Waiting', q.counts.waiting) +
+          tab('Exception', q.counts.exception, 'exception') +
+          tab('Completed', q.counts.completed) +
+        '</div>' +
+      '</a>';
+    }).join('') +
+    '</div>';
+})();
+</script>

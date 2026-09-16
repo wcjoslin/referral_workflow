@@ -93,9 +93,9 @@ export interface MyWorkItem {
   workStatus: WorkStatus;
   referralState: ReferralState;
   nextAction: string | null;
-  /** Always null until PRD-26 populates it. */
+  /** Populated by PRD-26, from the rule table for the current state pair. */
   nextActionDueAt: Date | null;
-  /** Therefore always false until PRD-26. Kept so the shape does not change then. */
+  /** Strictly past the due instant. Null due date is never overdue. */
   overdue: boolean;
 }
 
@@ -143,8 +143,8 @@ export async function assignOwner(
     .where(eq(referralWorkspaces.id, workspaceId));
 
   // First owner is an assignment; replacing one is a reassignment. Two event
-  // types rather than one with a nullable field, because PRD-27 will want to
-  // notify differently and PRD-25 renders them differently.
+  // types rather than one with a nullable field, because PRD-27 notifies
+  // differently for each and PRD-25 renders them differently.
   void emitEvent({
     eventType: previousOwnerUserId === null ? 'workspace.assigned' : 'workspace.reassigned',
     entityType: 'referral',
@@ -158,6 +158,20 @@ export async function assignOwner(
       ...(reason ? { reason } : {}),
     },
   }).catch((err) => console.error('[AssignmentService]', err));
+
+  // PRD-27 AC1/AC3. Fire-and-forget, so a mail failure cannot roll back an
+  // assignment, and `excludeUserId` inside notify() is what makes AC2 true —
+  // assigning yourself notifies nobody.
+  void (async (): Promise<void> => {
+    const { notifyAssignment, notifyUnassignment } = await import('./notificationService');
+    await notifyAssignment(workspaceId, toUserId, actor.id, actor.displayName);
+    // A REASSIGNMENT also takes the referral off whoever held it. AC3 wants
+    // them told, and only reassignment reaches this — a first assignment has
+    // no previous owner to notify.
+    if (previousOwnerUserId !== null && previousOwnerUserId !== toUserId) {
+      await notifyUnassignment(workspaceId, previousOwnerUserId, actor.id, actor.displayName);
+    }
+  })().catch((err) => console.error('[AssignmentService] assignment notification failed', err));
 
   // PRD-24 AC10: the owner is a Manager participant. Recorded here rather than
   // computed when the roster is read, so the roster is a real list instead of a
@@ -271,6 +285,16 @@ export async function releaseOwnership(
       ...(trimmed ? { reason: trimmed } : {}),
     },
   }).catch((err) => console.error('[AssignmentService]', err));
+
+  // AC3: the previous owner is told when somebody ELSE took it off them.
+  // Releasing your own work needs no telling, which notify()'s excludeUserId
+  // handles.
+  if (previousOwnerUserId !== null) {
+    void (async (): Promise<void> => {
+      const { notifyUnassignment } = await import('./notificationService');
+      await notifyUnassignment(workspaceId, previousOwnerUserId, actor.id, actor.displayName);
+    })().catch((err) => console.error('[AssignmentService] release notification failed', err));
+  }
 
   return { workspaceId, ownerUserId: null, ownerDisplayName: null, changed: true };
 }

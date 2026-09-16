@@ -160,11 +160,42 @@ export const referralWorkspaces = sqliteTable(
 
     // Ownership (PRD-21) and routing (PRD-20).
     ownerUserId: integer('owner_user_id').references(() => users.id),
-    queueId: integer('queue_id'), // real FK added by PRD-20
+    queueId: integer('queue_id').references(() => queues.id),
 
-    // Next action. Columns here; the values are computed by PRD-26.
+    // ── Next action and due dates (PRD-18 reserved, PRD-26 populates) ───────
     nextAction: text('next_action'),
     nextActionDueAt: integer('next_action_due_at', { mode: 'timestamp' }),
+
+    // Actor when a person wrote the next action by hand; null when the rule
+    // table computed it. This is what makes "a manual next action survives a
+    // status change" (AC4) decidable — without it, a recompute cannot tell its
+    // own previous output from a coordinator's judgement.
+    nextActionSetBy: text('next_action_set_by'),
+
+    // A due date a person chose. Never recomputed away, which is the whole
+    // point: the next transition would otherwise silently discard it.
+    dueDateOverridden: integer('due_date_overridden', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    dueDateOverrideReason: text('due_date_override_reason'),
+
+    // When `workspace.overdue` was emitted for the CURRENT due date. Makes the
+    // sweep idempotent (AC14) — it fires once per due date, not once per sweep
+    // — and is cleared whenever the due date moves so a fresh breach notifies
+    // again.
+    overdueNotifiedAt: integer('overdue_notified_at', { mode: 'timestamp' }),
+
+    // Who owes the next move: 'us' | 'party' | 'nobody'. Stored rather than
+    // derived on read because the queue view sorts and filters on it, and
+    // because the derivation reads outbound ack state that changes
+    // independently of this row.
+    awaitedBy: text('awaited_by'),
+    // The party that owes it, when awaitedBy is 'party'. Named, not "external"
+    // (AC10). Plain integer, NOT a real FK — see the migration note: SQLite
+    // cannot add a constraint in place, and PRD-20's 0019 already demonstrated
+    // that recreating this table is a hand-edited migration. Not worth a second
+    // one for a nullable advisory pointer that partyService can revalidate.
+    awaitedByPartyId: integer('awaited_by_party_id'),
 
     // Exception condition. Status and column here; raised by PRD-28.
     exceptionReason: text('exception_reason'),
@@ -521,6 +552,81 @@ export const workspaceAssertions = sqliteTable(
   }),
 );
 
+// ── Shared Queues (PRD-20) ───────────────────────────────────────
+//
+// There was no queue entity before this. What looked like queues were view-level
+// filters: /scheduler/queue selects referrals in Accepted or No-Show, the
+// dashboard selects everything and filters by department in the BROWSER. No
+// membership, no per-queue ordering, no access boundary.
+//
+// WHAT QUEUE SCOPING IS AND IS NOT. Every query is constrained by the acting
+// user's membership before any user-supplied filter, server-side, so a client
+// cannot widen its own scope by changing a query parameter. That is real and
+// worth having.
+//
+// It is NOT authentication. `tryGetActingUser()` reads a cookie anybody can
+// set, so somebody who wants to read another queue can claim to be a user who
+// belongs to it. Making queue scoping an actual PHI boundary needs a real
+// caller identity, which is deferred to PRD-31 by an explicit decision. Until
+// then this is a least-privilege DEFAULT, not a control, and no comment in this
+// file should imply otherwise.
+export const queues = sqliteTable(
+  'queues',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    slug: text('slug').notNull().unique(),
+    description: text('description'),
+    // Matches referrals.routing_department. Null on the default queue, which
+    // takes everything that matches nothing.
+    departmentFilter: text('department_filter'),
+    isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({ slugIdx: index('idx_queues_slug').on(table.slug) }),
+);
+
+export const queueMembers = sqliteTable(
+  'queue_members',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    queueId: integer('queue_id')
+      .references(() => queues.id)
+      .notNull(),
+    userId: integer('user_id')
+      .references(() => users.id)
+      .notNull(),
+    accessLevel: text('access_level').notNull().default('member'), // 'member' | 'manager'
+    addedAt: integer('added_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    queueIdx: index('idx_queue_members_queue').on(table.queueId),
+    userIdx: index('idx_queue_members_user').on(table.userId),
+    // One membership row per person per queue. Re-adding revives rather than
+    // duplicating, the same shape PRD-24 used for participants.
+    uniqueIdx: uniqueIndex('idx_queue_members_unique').on(table.queueId, table.userId),
+  }),
+);
+
+export const savedFilters = sqliteTable(
+  'saved_filters',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: integer('user_id')
+      .references(() => users.id)
+      .notNull(),
+    name: text('name').notNull(),
+    surface: text('surface').notNull().default('queue'),
+    filtersJson: text('filters_json').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    userIdx: index('idx_saved_filters_user').on(table.userId, table.surface),
+    uniqueIdx: uniqueIndex('idx_saved_filters_name').on(table.userId, table.surface, table.name),
+  }),
+);
+
 // ── Referral Conversation (PRD-22) ─────────────────────────────────
 //
 // One conversation per workspace, carrying two kinds of speech: internal notes
@@ -858,3 +964,195 @@ export const priorAuthResponses = sqliteTable('prior_auth_responses', {
   receivedVia: text('received_via').notNull(), // 'sync' | 'subscription' | 'inquire'
   receivedAt: integer('received_at', { mode: 'timestamp' }).notNull(),
 });
+
+// ── Correlation & Exceptions (PRD-28) ─────────────────────────────────────────
+//
+// Three mechanisms currently lose data SILENTLY, and these tables are what stop
+// each of them:
+//
+//   - intake idempotency is `.processed_messages.json`, a file on disk that does
+//     not survive a rebuild, cannot be shared across instances, and is invisible
+//     to an operator
+//   - `processAck()` returns `{ matched: false }` for an unrecognised control id
+//     and the ACK is logged and dropped; a non-'AA' code is logged and ignored
+//   - an auto-declined referral writes NO referral row at all and emits
+//     `referral.auto_declined` with `entityId: 0`, so the decision most worth
+//     reviewing is the least visible
+//
+// RETAINING THE RAW ARTIFACT IS THE POINT. An exception without the original
+// message is not workable, and on these paths the exception row is the ONLY
+// copy — today the content is discarded.
+
+export const processedMessages = sqliteTable(
+  'processed_messages',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    messageId: text('message_id').notNull().unique(), // RFC-822 Message-ID
+    senderAddress: text('sender_address'),
+    subject: text('subject'),
+    // 'referral-created' | 'ack-matched' | 'duplicate' | 'ignored' | 'exception' | 'replayed'
+    outcome: text('outcome').notNull(),
+    referralId: integer('referral_id').references(() => referrals.id),
+    // Plain integer, not an FK: an exception row may be written after this one,
+    // and a real constraint here would order the two writes for no benefit.
+    exceptionId: integer('exception_id'),
+    processedAt: integer('processed_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    messageIdx: index('idx_processed_messages_message').on(table.messageId),
+    outcomeIdx: index('idx_processed_messages_outcome').on(table.outcome, table.processedAt),
+  }),
+);
+
+export const workspaceExceptions = sqliteTable(
+  'workspace_exceptions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    // NULL means an orphan — an inbound artifact that matched no workspace.
+    // Those are exactly the ones that used to vanish, so they must be listable
+    // and workable without one (AC24).
+    workspaceId: integer('workspace_id').references(() => referralWorkspaces.id),
+    exceptionType: text('exception_type').notNull(),
+    /** What arrived and why it could not be placed. */
+    summary: text('summary').notNull(),
+    /** What a human can do about it (AC10). Without this the queue is a list of complaints. */
+    remediation: text('remediation'),
+    /** The retained artifact — often the only copy in existence. */
+    rawContent: text('raw_content'),
+    rawContentType: text('raw_content_type'),
+    senderAddress: text('sender_address'),
+    messageControlId: text('message_control_id'),
+    relatedPatientName: text('related_patient_name'),
+    metadata: text('metadata'), // JSON, type-specific
+    /**
+     * The work status to restore on resolution (AC23).
+     *
+     * Captured at raise time because raising an exception OVERWRITES it, and
+     * without this the resolution has to guess — which for a workspace that was
+     * mid-flight means guessing wrong.
+     */
+    priorWorkStatus: text('prior_work_status'),
+    resolvedAt: integer('resolved_at', { mode: 'timestamp' }),
+    resolvedByActor: text('resolved_by_actor'),
+    resolution: text('resolution'),
+    resolutionNote: text('resolution_note'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    workspaceIdx: index('idx_workspace_exceptions_workspace').on(
+      table.workspaceId,
+      table.resolvedAt,
+    ),
+    openIdx: index('idx_workspace_exceptions_open').on(table.resolvedAt, table.exceptionType),
+    // Deduplication for the edge case in the test plan: two exceptions for the
+    // same inbound message. PARTIAL, on open rows only, so the same message
+    // failing again AFTER a resolution can legitimately raise a fresh one.
+    dedupeIdx: uniqueIndex('idx_workspace_exceptions_dedupe')
+      .on(table.exceptionType, table.messageControlId)
+      .where(sql`${table.resolvedAt} IS NULL AND ${table.messageControlId} IS NOT NULL`),
+  }),
+);
+
+export const autoDeclinedReferrals = sqliteTable(
+  'auto_declined_referrals',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    sourceMessageId: text('source_message_id').notNull().unique(),
+    referrerAddress: text('referrer_address').notNull(),
+    patientName: text('patient_name'),
+    patientDob: text('patient_dob'),
+    declineReasons: text('decline_reasons').notNull(), // JSON array
+    // The inbound C-CDA. Retained because the current code sends an RRI and then
+    // discards it, which is what makes an auto-decline unreviewable today.
+    rawCcdaXml: text('raw_ccda_xml'),
+    convertedReferralId: integer('converted_referral_id').references(() => referrals.id),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    createdIdx: index('idx_auto_declined_created').on(table.createdAt),
+  }),
+);
+
+// ── Notifications (PRD-27) ────────────────────────────────────────────────────
+//
+// The application could not tell anyone anything before this — no table, no
+// badge, no bell, no digest. The nearest things were a `console.warn` in the
+// overdue checker and the demo's SSE stream that polls `referrals.state` to
+// drive a progress animation. Outbound email existed only as protocol
+// transport: nodemailer sent Direct messages and MDNs, never a message to a
+// colleague.
+//
+// That was workable while every action was initiated by whoever was looking at
+// the screen. Assignment, mentions, overdue detection, guest actions and
+// exceptions all break that assumption.
+
+export const notifications = sqliteTable(
+  'notifications',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+
+    // EXACTLY ONE recipient, internal or guest — enforced by the check below.
+    // A notification addressed to both, or to neither, is not a notification.
+    recipientUserId: integer('recipient_user_id').references(() => users.id),
+    recipientGuestId: integer('recipient_guest_id').references(() => workspaceGuests.id),
+
+    workspaceId: integer('workspace_id')
+      .references(() => referralWorkspaces.id)
+      .notNull(),
+    notificationType: text('notification_type').notNull(),
+    title: text('title').notNull(),
+    /**
+     * NO CLINICAL CONTENT for anything that may be emailed. Patient name,
+     * organization and a link — the content lives behind the link, the same
+     * discipline PRD-30 applies to the invitation email.
+     */
+    body: text('body').notNull(),
+    linkPath: text('link_path').notNull(),
+    triggeredByActor: text('triggered_by_actor'),
+    /** recipient + workspace + type. AC13 collapses a burst into one row. */
+    collapseKey: text('collapse_key'),
+    collapsedCount: integer('collapsed_count').notNull().default(1),
+    emailSentAt: integer('email_sent_at', { mode: 'timestamp' }),
+    readAt: integer('read_at', { mode: 'timestamp' }),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    userIdx: index('idx_notifications_user').on(
+      table.recipientUserId,
+      table.readAt,
+      table.createdAt,
+    ),
+    guestIdx: index('idx_notifications_guest').on(table.recipientGuestId, table.readAt),
+    collapseIdx: index('idx_notifications_collapse').on(table.collapseKey, table.createdAt),
+    // Same XOR shape as referral_comments' author union: a notification has one
+    // recipient or it is malformed.
+    recipientUnion: check(
+      'notifications_recipient_union',
+      sql`(${table.recipientUserId} IS NULL) <> (${table.recipientGuestId} IS NULL)`,
+    ),
+  }),
+);
+
+export const notificationPreferences = sqliteTable(
+  'notification_preferences',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: integer('user_id')
+      .references(() => users.id)
+      .notNull(),
+    notificationType: text('notification_type').notNull(),
+    /**
+     * Muting PREVENTS CREATION rather than hiding a row. A muted notification
+     * that exists but is hidden still shows in counts and still costs a row —
+     * and the count is the thing a bell is for.
+     */
+    muted: integer('muted', { mode: 'boolean' }).notNull().default(false),
+    emailEnabled: integer('email_enabled', { mode: 'boolean' }).notNull().default(false),
+  },
+  (table) => ({
+    userIdx: index('idx_notification_prefs_user').on(table.userId),
+    // One preference row per (user, type), so setPreference is an upsert rather
+    // than a check-then-insert that can race.
+    uniqueIdx: uniqueIndex('idx_notification_prefs_unique').on(table.userId, table.notificationType),
+  }),
+);

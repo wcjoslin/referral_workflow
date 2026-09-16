@@ -86,12 +86,86 @@ jest.mock('../../../src/db', () => {
       related_state_transition TEXT,
       created_at INTEGER NOT NULL
     );
+
+    -- PRD-28. Added so this suite exercises the exception path for real rather
+    -- than relying on processAck()'s tolerance: without these tables the raise
+    -- fails silently and the tests below would assert nothing about it.
+    --
+    -- referral_workspaces is here because the non-AA path looks up the
+    -- workspace to attach the exception to.
+    CREATE TABLE referral_workspaces (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      referral_id INTEGER NOT NULL UNIQUE,
+      external_referral_id TEXT,
+      correlation_key TEXT,
+      work_status TEXT NOT NULL DEFAULT 'Triage',
+      work_status_is_manual INTEGER NOT NULL DEFAULT 0,
+      work_status_set_by TEXT,
+      work_status_set_at INTEGER,
+      owner_user_id INTEGER,
+      queue_id INTEGER,
+      next_action TEXT,
+      next_action_due_at INTEGER,
+      next_action_set_by TEXT,
+      due_date_overridden INTEGER NOT NULL DEFAULT 0,
+      due_date_override_reason TEXT,
+      overdue_notified_at INTEGER,
+      awaited_by TEXT,
+      awaited_by_party_id INTEGER,
+      exception_reason TEXT,
+      archived_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE workspace_exceptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id INTEGER,
+      exception_type TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      remediation TEXT,
+      raw_content TEXT,
+      raw_content_type TEXT,
+      sender_address TEXT,
+      message_control_id TEXT,
+      related_patient_name TEXT,
+      metadata TEXT,
+      prior_work_status TEXT,
+      resolved_at INTEGER,
+      resolved_by_actor TEXT,
+      resolution TEXT,
+      resolution_note TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX idx_workspace_exceptions_dedupe
+      ON workspace_exceptions (exception_type, message_control_id)
+      WHERE resolved_at IS NULL AND message_control_id IS NOT NULL;
+
+    -- So the audit path is exercised rather than merely tolerated.
+    CREATE TABLE workflow_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER NOT NULL,
+      from_state TEXT,
+      to_state TEXT,
+      actor TEXT NOT NULL,
+      metadata TEXT,
+      created_at INTEGER NOT NULL
+    );
   `);
+
+  (global as Record<string, unknown>).__ACK_SQLITE__ = sqlite;
 
   return { db: drizzle(sqlite, { schema }) };
 });
 
 import { db } from '../../../src/db';
+
+/** Raw handle, for asserting on the PRD-28 tables this suite added. */
+function sqliteHandle(): import('better-sqlite3').Database {
+  return (global as Record<string, unknown>).__ACK_SQLITE__ as import('better-sqlite3').Database;
+}
 import { patients, referrals, outboundMessages } from '../../../src/db/schema';
 import { processAck } from '../../../src/modules/prd06/ackService';
 import { eq } from 'drizzle-orm';
@@ -231,6 +305,78 @@ describe('ackService', () => {
         .from(outboundMessages)
         .where(eq(outboundMessages.id, messageId));
       expect(msg.status).toBe('Pending');
+
+      /**
+       * PRD-28 AC7. The status is STILL not updated — an AR genuinely is not an
+       * acknowledgement — but it is no longer silent. A rejection from the
+       * counterparty is one of the most important things that can happen to a
+       * referral, and before this it was a console.warn.
+       */
+      expect(result.exceptionId).toEqual(expect.any(Number));
+      const [exc] = sqliteHandle()
+        .prepare(`SELECT * FROM workspace_exceptions WHERE id = ?`)
+        .all(result.exceptionId) as Array<Record<string, unknown>>;
+      expect(exc.exception_type).toBe('ack-error-code');
+      expect(String(exc.summary)).toContain('AR');
+      expect(String(exc.summary)).toContain('ConsultNote');
+      expect(exc.message_control_id).toBe(controlId);
+      // The remediation has to tell a human what to DO (AC10).
+      expect(String(exc.remediation)).toMatch(/REJECTED/);
+    });
+
+    /**
+     * PRD-28 AC6, the path that used to lose data outright: the ACK was logged
+     * and DROPPED, so an acknowledgement arriving with a mangled control id
+     * simply never happened.
+     */
+    it('raises an exception retaining the raw message for an unmatched ACK', async () => {
+      const raw = 'MSH|^~\\&|SENDER|FAC|RECV|FAC|20260916||ACK^A01|ack-7|P|2.5.1\rMSA|AA|nope-9999\r';
+      const result = await processAck(
+        { ackCode: 'AA', acknowledgedControlId: 'nope-9999', messageControlId: 'ack-7' },
+        { raw, senderAddress: 'referrals@northside.direct.example.org' },
+      );
+
+      // `matched` keeps its old meaning — the ACK is still unmatched.
+      expect(result.matched).toBe(false);
+      expect(result.exceptionId).toEqual(expect.any(Number));
+
+      const [exc] = sqliteHandle()
+        .prepare(`SELECT * FROM workspace_exceptions WHERE id = ?`)
+        .all(result.exceptionId) as Array<Record<string, unknown>>;
+      expect(exc.exception_type).toBe('unmatched-ack');
+      expect(exc.workspace_id).toBeNull(); // an orphan — there is no workspace
+      expect(exc.message_control_id).toBe('nope-9999');
+      expect(exc.sender_address).toBe('referrals@northside.direct.example.org');
+      // The retained artifact is the whole point: this row is the only copy.
+      expect(exc.raw_content).toBe(raw);
+      expect(exc.raw_content_type).toBe('application/hl7-v2');
+    });
+
+    /** The partial dedupe index: one OPEN exception per (type, control id). */
+    it('does not raise a second open exception for the same unmatched control id', async () => {
+      const first = await processAck({
+        ackCode: 'AA',
+        acknowledgedControlId: 'dupe-1',
+        messageControlId: 'ack-8',
+      });
+      expect(first.exceptionId).toEqual(expect.any(Number));
+
+      // The retry inside raiseExceptionSafely() also hits the unique index, so
+      // this returns null rather than a second row.
+      const second = await processAck({
+        ackCode: 'AA',
+        acknowledgedControlId: 'dupe-1',
+        messageControlId: 'ack-9',
+      });
+      expect(second.matched).toBe(false);
+
+      const rows = sqliteHandle()
+        .prepare(
+          `SELECT COUNT(*) n FROM workspace_exceptions
+           WHERE exception_type = 'unmatched-ack' AND message_control_id = 'dupe-1'`,
+        )
+        .get() as { n: number };
+      expect(rows.n).toBe(1);
     });
   });
 });

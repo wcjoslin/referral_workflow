@@ -25,6 +25,7 @@ import { referrals, priorAuthRequests, priorAuthResponses } from '../src/db/sche
 import { ReferralState } from '../src/state/referralStateMachine';
 import { PriorAuthState } from '../src/state/priorAuthStateMachine';
 import { PROVIDER_NAMES, seedUsers } from '../src/modules/workspace/userRoster';
+import { seedQueues } from '../src/modules/workspace/queueService';
 
 const FIXTURES_DIR = path.resolve(__dirname, '../tests/fixtures');
 
@@ -659,6 +660,11 @@ async function main(): Promise<void> {
   // scenario data, and the seeding is idempotent on email.
   const users = await seedUsers();
   console.log(`Staff roster: ${users.created} created, ${users.skipped} already present.\n`);
+
+  // PRD-20: queues before the scenarios run, so each ingested referral routes
+  // to its department queue on creation rather than needing a backfill after.
+  const queues = await seedQueues();
+  console.log(`Queues: ${queues.created} created, ${queues.existing} already present.\n`);
 
   console.log(`Running ${SCENARIOS.length} scenarios:\n`);
 

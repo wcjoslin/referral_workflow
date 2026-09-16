@@ -1114,12 +1114,46 @@ export async function uploadDocument(input: UploadDocumentInput): Promise<Worksp
       },
     }).catch((err) => console.error('[DocumentService]', err));
 
+    // PRD-27 AC6/AC19. A guest upload is BOTH a new document and a
+    // guest-activity event, and the second is the one an internal reader
+    // actually needs — it names the organization that acted (AC20).
+    void (async (): Promise<void> => {
+      const notifications = await import('./notificationService');
+      if (input.uploader.kind === 'guest') {
+        await notifications.notifyGuestActivity(
+          input.workspaceId,
+          input.uploader.guest.displayName ?? 'A guest',
+          await initiatingOrgNameFor(input.workspaceId),
+          `uploaded ${original}`,
+        );
+      } else {
+        await notifications.notifyNewDocument(
+          input.workspaceId,
+          original,
+          input.uploader.user.displayName,
+          input.uploader.user.id,
+        );
+      }
+    })().catch((err) => console.error('[DocumentService] upload notification failed', err));
+
     return document;
   } catch (err) {
     // Do not leave an orphan file behind a failed index write.
     await fs.unlink(fullPath).catch(() => undefined);
     throw err;
   }
+}
+
+/** The initiating party's organization name, for PRD-27 AC20. */
+async function initiatingOrgNameFor(workspaceId: number): Promise<string | null> {
+  const rows = await db
+    .select({ orgName: workspaceParties.orgName })
+    .from(workspaceParties)
+    .where(
+      and(eq(workspaceParties.workspaceId, workspaceId), eq(workspaceParties.partyRole, 'initiating')),
+    )
+    .limit(1);
+  return rows[0]?.orgName ?? null;
 }
 
 // ── Backfill ─────────────────────────────────────────────────────────────────

@@ -99,6 +99,31 @@ export const WorkspaceEvents = {
 
   ASSERTION_MADE: 'workspace.assertion_made',
   ARTIFACT_NOT_TRANSMITTED: 'workspace.artifact_not_transmitted',
+
+  QUEUE_CHANGED: 'workspace.queue_changed',
+
+  NEXT_ACTION_CHANGED: 'workspace.next_action_changed',
+  DUE_DATE_OVERRIDDEN: 'workspace.due_date_overridden',
+  OVERDUE: 'workspace.overdue',
+
+  EXCEPTION_RAISED: 'workspace.exception_raised',
+  EXCEPTION_RESOLVED: 'workspace.exception_resolved',
+  REASSOCIATED: 'workspace.reassociated',
+  AUTO_DECLINED_RECORDED: 'workspace.auto_declined_recorded',
+  AUTO_DECLINED_CONVERTED: 'workspace.auto_declined_converted',
+  MESSAGE_REPLAYED: 'workspace.message_replayed',
+  DUPLICATE_PATIENT_FLAGGED: 'workspace.duplicate_patient_flagged',
+} as const;
+
+/**
+ * Queue administration (PRD-20). Separate from WorkspaceEvents because these are
+ * about a QUEUE, not about one workspace — their entityId is a queue id, so a
+ * consumer that assumes `entityType: 'referral'` would misread them.
+ */
+export const QueueEvents = {
+  MEMBER_ADDED: 'queue.member_added',
+  MEMBER_REMOVED: 'queue.member_removed',
+  MISCONFIGURED: 'queue.misconfigured',
 } as const;
 
 export const ALL_EVENT_TYPES: readonly string[] = [
@@ -107,6 +132,7 @@ export const ALL_EVENT_TYPES: readonly string[] = [
   ...Object.values(PriorAuthEvents),
   ...Object.values(SkillEvents),
   ...Object.values(WorkspaceEvents),
+  ...Object.values(QueueEvents),
 ];
 
 // ── Classification ───────────────────────────────────────────────────────────
@@ -168,6 +194,10 @@ const STATUS_EVENTS: readonly string[] = [
   WorkspaceEvents.WORK_STATUS_PROPOSAL_DECLINED,
   WorkspaceEvents.WORK_STATUS_RESYNCED,
   WorkspaceEvents.ASSERTION_MADE,
+  // PRD-28: both move `work_status` — into Exception and back out — so they
+  // belong with the other status movers rather than reading as system noise.
+  WorkspaceEvents.EXCEPTION_RAISED,
+  WorkspaceEvents.EXCEPTION_RESOLVED,
 ];
 
 /** Events a guest performed, whatever their actor string turns out to be. */

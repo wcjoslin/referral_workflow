@@ -13,6 +13,9 @@
 
 jest.mock('../../../src/config', () => ({
   config: {
+      // PRD-27. Without these the notification path silently no-ops and every
+      // assignment or mention in this suite logs a failure.
+      workspace: { notificationRetentionDays: 90, notificationCollapseWindowMinutes: 15 },
     smtp: { host: 'smtp.test', port: 587, user: 'user', password: 'pass' },
     receiving: { directAddress: 'receiving@specialist.direct', orgName: 'Specialist Care Group' },
     database: { url: ':memory:' },
@@ -165,8 +168,17 @@ describe('buildWorkspacePayload()', () => {
     expect(payload!.workspace.ownerDisplayName).toBeNull();
     expect(payload!.workspace.queueId).toBeNull();
     expect(payload!.workspace.queueName).toBeNull();
-    expect(payload!.workspace.nextAction).toBeNull();
+    // NOT null any more: PRD-26 requires that a coordinator never sees a blank
+    // Next Action (AC1/AC3). A workspace that has not been recomputed yet
+    // reports the RULE's action for its current state — what a recompute would
+    // write — rather than a blank or a generic placeholder. The due date is
+    // still null here, because nothing has been persisted to derive it from.
+    expect(payload!.workspace.nextAction).toBe('Acknowledge receipt of the referral');
     expect(payload!.workspace.nextActionDueAt).toBeNull();
+    expect(payload!.workspace.awaitedBy).toBe('us');
+    expect(payload!.workspace.awaitedByPartyOrgName).toBeNull();
+    expect(payload!.workspace.overdue).toBe(false);
+    expect(payload!.workspace.dueDateOverridden).toBe(false);
     expect(payload!.workspace.exceptionReason).toBeNull();
     expect(payload!.workspace.archivedAt).toBeNull();
     // NOT empty any more: PRD-24 seeds both parties inside createWorkspace, so

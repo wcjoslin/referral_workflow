@@ -102,6 +102,31 @@ async function observeSenderAddress(
 /**
  * Updates the ACK status on an outbound thread entry when an ACK is received.
  */
+/**
+ * Whether this referral's thread already carries a message with that control id.
+ *
+ * Added for PRD-28's reassociation, which must refuse to attach a message the
+ * workspace already has rather than writing a duplicate thread row. Scoped to
+ * the referral rather than global, because the SAME control id legitimately
+ * appears against different referrals in a demo dataset.
+ */
+export async function threadHasControlId(
+  referralId: number,
+  messageControlId: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: referralMessages.id })
+    .from(referralMessages)
+    .where(
+      and(
+        eq(referralMessages.referralId, referralId),
+        eq(referralMessages.messageControlId, messageControlId),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
 export async function updateThreadAckStatus(messageControlId: string): Promise<void> {
   await db
     .update(referralMessages)

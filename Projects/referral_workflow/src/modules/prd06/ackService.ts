@@ -20,6 +20,27 @@ export interface AckResult {
   messageType?: string;
   referralId?: number;
   stateTransitioned?: boolean;
+  /**
+   * PRD-28: the exception raised when this ACK could not be applied.
+   *
+   * Added rather than changing `matched`, because `matched` is what existing
+   * callers branch on and its meaning has not changed. An unmatched ACK is
+   * still unmatched; it is now also RETAINED.
+   */
+  exceptionId?: number | null;
+}
+
+/**
+ * PRD-28: what the parser cannot tell us.
+ *
+ * `AckData` is the parsed MSH/MSA and carries no raw text and no sender, but an
+ * exception without the original message is not workable — and on this path the
+ * exception row is the ONLY copy, because today the ACK is logged and dropped.
+ * Optional, so every existing caller keeps working.
+ */
+export interface AckContext {
+  raw?: string;
+  senderAddress?: string;
 }
 
 /**
@@ -29,7 +50,10 @@ export interface AckResult {
  * - If the acknowledged message is a ConsultNote and the referral is in Closed
  *   state, transitions to Closed-Confirmed
  */
-export async function processAck(ackData: AckData): Promise<AckResult> {
+export async function processAck(
+  ackData: AckData,
+  context: AckContext = {},
+): Promise<AckResult> {
   const { acknowledgedControlId, ackCode } = ackData;
 
   // Find the outbound message matching this ACK
@@ -39,18 +63,90 @@ export async function processAck(ackData: AckData): Promise<AckResult> {
     .where(eq(outboundMessages.messageControlId, acknowledgedControlId));
 
   if (!message) {
+    // PRD-28 AC6. Before this the ACK was logged and DROPPED: an
+    // acknowledgement arriving with a mangled control id simply never happened,
+    // and the counterparty had no way to know we had not seen it.
+    //
+    // The exception retains the raw message, because this row is now the only
+    // copy. Reassociation can then attach it to the right referral.
     console.warn(
-      `[AckService] No outbound message found for control ID ${acknowledgedControlId} — ignoring`,
+      `[AckService] No outbound message found for control ID ${acknowledgedControlId} — raising an exception`,
     );
-    return { matched: false };
+    const exceptionId = await (async (): Promise<number | null> => {
+      try {
+        const { raiseExceptionSafely } = await import('../workspace/exceptionService');
+        return await raiseExceptionSafely({
+          exceptionType: 'unmatched-ack',
+          summary: `ACK received for control id ${acknowledgedControlId}, which matches no outbound message`,
+          remediation:
+            'Attach this to the correct referral if the control id was mangled in transit, or ' +
+            'dismiss it if the counterparty sent it in error.',
+          rawContent: context.raw ?? null,
+          rawContentType: 'application/hl7-v2',
+          senderAddress: context.senderAddress ?? null,
+          messageControlId: acknowledgedControlId,
+          metadata: { ackCode, ackOwnControlId: ackData.messageControlId },
+        });
+      } catch (err) {
+        console.error('[AckService] could not record the unmatched-ACK exception:', err);
+        return null;
+      }
+    })();
+    return { matched: false, exceptionId };
   }
 
   // Only process positive ACKs (AA)
   if (ackCode !== 'AA') {
+    // PRD-28 AC7. Still not updating the status — an AE or AR genuinely is not
+    // an acknowledgement — but no longer silently. A rejection from the
+    // counterparty is one of the most important things that can happen to a
+    // referral and it used to be a console.warn.
     console.warn(
-      `[AckService] Non-positive ACK (${ackCode}) for control ID ${acknowledgedControlId} — logged but not updating status`,
+      `[AckService] Non-positive ACK (${ackCode}) for control ID ${acknowledgedControlId} — raising an exception`,
     );
-    return { matched: true, messageType: message.messageType, referralId: message.referralId };
+    // The WHOLE block is tolerant, not just the raise.
+    //
+    // The first version wrapped only raiseExceptionSafely(), leaving the
+    // workspace lookup outside it — so a failure there threw straight out of
+    // processAck() and broke ACK handling, which is exactly what "raising an
+    // exception must never fail the operation that detected it" forbids. An ACK
+    // is protocol traffic; bookkeeping around it must not be able to reject it.
+    const exceptionId = await (async (): Promise<number | null> => {
+      try {
+        const { raiseExceptionSafely } = await import('../workspace/exceptionService');
+        const { getWorkspaceByReferralId } = await import('../workspace/workspaceService');
+        const workspace = await getWorkspaceByReferralId(message.referralId).catch(() => null);
+        return await raiseExceptionSafely({
+          workspaceId: workspace?.id ?? null,
+          exceptionType: 'ack-error-code',
+          summary:
+            `The counterparty returned ${ackCode} for our ${message.messageType} ` +
+            `(control id ${acknowledgedControlId}) instead of AA`,
+          remediation:
+            `${ackCode === 'AR' ? 'The counterparty REJECTED the message' : 'The counterparty reported an ERROR'}. ` +
+            'Review the artifact, correct it and retransmit, or dismiss if the rejection was expected.',
+          rawContent: context.raw ?? null,
+          rawContentType: 'application/hl7-v2',
+          senderAddress: context.senderAddress ?? null,
+          messageControlId: acknowledgedControlId,
+          metadata: {
+            ackCode,
+            messageType: message.messageType,
+            referralId: message.referralId,
+            outboundMessageId: message.id,
+          },
+        });
+      } catch (err) {
+        console.error('[AckService] could not record the non-AA ACK exception:', err);
+        return null;
+      }
+    })();
+    return {
+      matched: true,
+      messageType: message.messageType,
+      referralId: message.referralId,
+      exceptionId,
+    };
   }
 
   // Update outbound message status

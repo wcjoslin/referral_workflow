@@ -31,6 +31,8 @@
  */
 
 import { randomUUID } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Config is read at import time, so the port has to be set before src/server
 // loads. A high fixed port keeps failures readable; CI runs one job at a time.
@@ -91,6 +93,25 @@ async function post(
  * rendered client-side, so counting the one key that only appears in that array
  * is the honest way to assert a server-side filter from the page source.
  */
+/** DELETE with an acting-user cookie. Used by the membership and filter routes. */
+async function del(
+  pathname: string,
+  actingUserId?: number,
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  const res = await fetch(`${BASE}${pathname}`, {
+    method: 'DELETE',
+    headers: actingUserId === undefined ? {} : { cookie: `actingUserId=${actingUserId}` },
+  });
+  const text = await res.text();
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    parsed = { _unparseable: text.slice(0, 200) };
+  }
+  return { status: res.status, json: parsed };
+}
+
 /** Fetches with an arbitrary Cookie header — the guest session is not an actingUserId. */
 async function getRaw(pathname: string, cookie: string): Promise<{ status: number; body: string }> {
   const res = await fetch(`${BASE}${pathname}`, { headers: { cookie }, redirect: 'manual' });
@@ -149,6 +170,13 @@ async function main(): Promise<void> {
       updatedAt: new Date(),
     })
     .returning();
+
+  // PRD-20: queues BEFORE the workspaces, because backfillWorkspaces() goes
+  // through createWorkspace(), which routes. Seeding after would leave both
+  // fixtures unrouted and therefore invisible in every queue view — the exact
+  // failure the ordering note in backfill-queues.ts describes.
+  const { seedQueues } = await import('../src/modules/workspace/queueService');
+  await seedQueues();
 
   await backfillWorkspaces();
   const wsWith = await getWorkspaceByReferralId(withCcda.id);
@@ -1461,6 +1489,1127 @@ async function main(): Promise<void> {
     'and the protocol state changes alongside them',
     finalEntries.some((e) => e.kind === 'status'),
     'no status entry reached the feed',
+  );
+
+  // ── PRD-20: shared queues ─────────────────────────────────────────────────
+
+  // Resolve the two identities FIRST, because every queue read depends on which
+  // one is asking. seedUsers() grants allQueuesAccess to exactly one person, so
+  // find them rather than assuming a roster index.
+  //
+  // Note what this ordering revealed: the first version of these checks read the
+  // Cardiology queue as the DEFAULT acting user and expected 200. It got 403,
+  // correctly — the default user holds neither the grant nor any membership, so
+  // being refused is the module working. The assertion was wrong, not the code.
+  const rosterAll = await listUsers();
+  const granted = rosterAll.find((u) => u.allQueuesAccess);
+  const ungranted = rosterAll.find((u) => !u.allQueuesAccess);
+  check('the seeded roster has a user holding allQueuesAccess', granted !== undefined);
+  check('and one without it', ungranted !== undefined);
+  if (!granted || !ungranted) throw new Error('the seeded roster cannot exercise queue scope');
+
+  const queueList = await get('/queues', granted.id);
+  check('GET /queues returns 200', queueList.status === 200, `status ${queueList.status}`);
+  check('the queue list embeds its payload', queueList.body.includes('__QUEUE_LIST__'));
+  check('the nav carries the Queues entry', queueList.body.includes('href="/queues"'));
+
+  // The fixtures are Cardiology and Neurology, so both department queues must
+  // exist and routing must have put one workspace in each.
+  const cardio = await get('/api/queues/cardiology/rows', granted.id);
+  check('GET /api/queues/cardiology/rows returns 200', cardio.status === 200, `status ${cardio.status}`);
+  const cardioJson = JSON.parse(cardio.body) as {
+    queue: { slug: string } | null;
+    counts: Record<string, number>;
+    rows: Array<Record<string, unknown>>;
+  };
+  check(
+    'routing put the Cardiology fixture in the Cardiology queue',
+    cardioJson.rows.length === 1 && cardioJson.rows[0].workspaceId === wsWith.id,
+    `got ${cardioJson.rows.length} row(s): ${JSON.stringify(cardioJson.rows.map((r) => r.workspaceId))}`,
+  );
+  check(
+    'and the other fixture is NOT in it',
+    !cardioJson.rows.some((r) => r.workspaceId === wsWithout.id),
+  );
+
+  /**
+   * AC18, end to end and by accident at first.
+   *
+   * The PRD-13 section above already changed this referral's department from
+   * Cardiology to Neurology through the real route. It is still in the
+   * Cardiology queue, which is exactly the required behaviour: a department
+   * change OFFERS a move, it does not perform one, because silently re-queueing
+   * an owned workspace moves work out from under whoever is doing it.
+   *
+   * The first version of this check asserted the row's department was still
+   * 'Cardiology' and failed. The code was right and the assertion was wrong —
+   * so it now asserts the thing that actually matters.
+   */
+  check(
+    'a department change does NOT silently re-queue the workspace (AC18)',
+    cardioJson.rows.length === 1 && cardioJson.rows[0].department === 'Neurology',
+    `department reads ${JSON.stringify(cardioJson.rows[0]?.department)}; ` +
+      'it should have changed while the queue did not',
+  );
+
+  const neuro = await get('/api/queues/neurology/rows', granted.id);
+  const neuroJson = JSON.parse(neuro.body) as { rows: Array<Record<string, unknown>> };
+  check(
+    'routing put the Neurology fixture in the Neurology queue',
+    neuroJson.rows.length === 1 && neuroJson.rows[0].department === 'Neurology',
+    `got ${neuroJson.rows.length} row(s)`,
+  );
+
+  // A department queue nothing routed to must be empty rather than absent or
+  // showing everything — the "no filter means no WHERE clause" failure.
+  const empty = await get('/api/queues/imaging/rows', granted.id);
+  const emptyJson = JSON.parse(empty.body) as { rows: unknown[]; counts: Record<string, number> };
+  check(
+    'a queue with nothing routed to it is empty, not unfiltered',
+    emptyJson.rows.length === 0,
+    `Imaging returned ${emptyJson.rows.length} row(s)`,
+  );
+
+  const queuePage = await get('/queues/cardiology', granted.id);
+  check('GET /queues/:slug returns 200', queuePage.status === 200, `status ${queuePage.status}`);
+  check('the queue view embeds its payload', queuePage.body.includes('__QUEUE_VIEW__'));
+  // Asserted against the SOURCE, because the strip is built client-side — the
+  // rendered `Open<span class="n">` never appears in the bytes. Checking for it
+  // is the mistake PRD-23's smoke section already made once.
+  check('the queue view carries the tab strip', queuePage.body.includes('id="tabstrip"'));
+  for (const [key, label] of [
+    ['open', 'Open'],
+    ['waiting', 'Waiting'],
+    ['exception', 'Exception'],
+    ['completed', 'Completed'],
+  ]) {
+    check(
+      `the queue view defines the ${label} tab`,
+      queuePage.body.includes(`${key}: '${label}'`),
+    );
+  }
+  check(
+    'and the tab counts came from the server rather than being computed in the browser',
+    /"counts":\s*\{/.test(queuePage.body),
+  );
+  check(
+    'the queue view reuses the analytics filter-panel vocabulary rather than a new component',
+    ['filter-panel', 'filter-group', 'filter-select', 'day-btn', 'active-tag', 'reset-btn'].every(
+      (cls) => queuePage.body.includes(cls),
+    ),
+  );
+  check(
+    'the queue view reuses the dashboard row preview endpoint',
+    queuePage.body.includes('/api/referrals/'),
+  );
+  check(
+    'the hostile patient name is escaped on the queue view',
+    !queuePage.body.includes('<script>alert(1)</script>'),
+    'the embedded payload closed the script element',
+  );
+
+  // AC4 / the security check. The grant is what decides, never jobRole and never
+  // an empty membership list.
+  const asGranted = await get('/api/queues/cardiology/rows', granted.id);
+  check(
+    'a user with the grant can read a queue they do not belong to',
+    asGranted.status === 200,
+    `status ${asGranted.status}`,
+  );
+
+  const asUngranted = await get('/api/queues/cardiology/rows', ungranted.id);
+  check(
+    'a user with neither the grant nor membership is refused with 403',
+    asUngranted.status === 403,
+    `status ${asUngranted.status}`,
+  );
+  check(
+    'and the refusal carries no rows',
+    !asUngranted.body.includes('"rows"'),
+    'the 403 body leaked row data',
+  );
+
+  // The empty state, not every workspace — the failure this module is shaped
+  // around. `all` is the slug most likely to be implemented as "no filter".
+  const allAsUngranted = await get('/api/queues/all/rows', ungranted.id);
+  const allJson = JSON.parse(allAsUngranted.body) as { rows: unknown[] };
+  check(
+    'a user in no queue sees NOTHING from /api/queues/all/rows, not everything',
+    allAsUngranted.status === 200 && allJson.rows.length === 0,
+    `status ${allAsUngranted.status}, ${allJson.rows?.length} row(s)`,
+  );
+
+  const listAsUngranted = await get('/queues', ungranted.id);
+  check(
+    'and the queue list shows them the explanatory empty state',
+    listAsUngranted.body.includes('do not belong to any queue'),
+  );
+
+  // An unknown slug and an out-of-scope one must be indistinguishable, so the
+  // response cannot be used to enumerate queues.
+  const unknownSlug = await get('/api/queues/no-such-queue/rows', ungranted.id);
+  check(
+    'an unknown queue slug is refused the same way as an out-of-scope one',
+    unknownSlug.status === 403,
+    `status ${unknownSlug.status}`,
+  );
+
+  // Membership makes a queue readable, which is the other half of AC1.
+  const added = await post('/api/queues/cardiology/members', { userId: ungranted.id }, granted.id);
+  check('a member can be added to a queue', added.status === 200, `status ${added.status}`);
+
+  const nowVisible = await get('/api/queues/cardiology/rows', ungranted.id);
+  check(
+    'membership makes the queue readable to that user',
+    nowVisible.status === 200,
+    `status ${nowVisible.status}`,
+  );
+  const nowJson = JSON.parse(nowVisible.body) as { rows: unknown[] };
+  check('and they see its rows', nowJson.rows.length === 1, `${nowJson.rows.length} row(s)`);
+
+  // Still only that queue — membership in one is not membership in all.
+  const stillRefused = await get('/api/queues/neurology/rows', ungranted.id);
+  check(
+    'but not a queue they are still not a member of',
+    stillRefused.status === 403,
+    `status ${stillRefused.status}`,
+  );
+
+  // AC17: a manual re-queue, audited.
+  const defaultQueueId = (
+    JSON.parse(
+      (await get('/queues', granted.id)).body.match(/__QUEUE_LIST__ = (.*);/)?.[1] ?? '{}',
+    ) as { queues?: Array<{ id: number; isDefault: boolean }> }
+  ).queues?.find((q) => q.isDefault)?.id;
+  check('the queue list payload identifies the default queue', typeof defaultQueueId === 'number');
+
+  if (typeof defaultQueueId === 'number') {
+    const moved = await post(
+      `/api/workspaces/${wsWith.id}/queue`,
+      { queueId: defaultQueueId, reason: 'smoke check' },
+      granted.id,
+    );
+    check('a workspace can be re-queued by hand', moved.status === 200, `status ${moved.status}`);
+
+    const cardioAfter = await get('/api/queues/cardiology/rows', granted.id);
+    const afterJson = JSON.parse(cardioAfter.body) as { rows: unknown[] };
+    check(
+      'and it leaves the queue it came from',
+      afterJson.rows.length === 0,
+      `${afterJson.rows.length} row(s) remain in Cardiology`,
+    );
+
+    const feedAfter = await get(`/api/workspaces/${wsWith.id}/activity`, granted.id);
+    const feedEntries = (JSON.parse(feedAfter.body) as { entries: { eventType: string }[] }).entries;
+    check(
+      'the re-queue reaches the activity feed as workspace.queue_changed',
+      feedEntries.some((e) => e.eventType === 'workspace.queue_changed'),
+      'PRD-25 did not pick up the queue change',
+    );
+  }
+
+  // AC12: a saved filter round-trips.
+  const savedPost = await post(
+    '/api/saved-filters',
+    { name: 'Smoke set', filters: { tab: 'open', department: 'Neurology' } },
+    granted.id,
+  );
+  check('a filter set can be saved', savedPost.status === 200, `status ${savedPost.status}`);
+  const savedList = await get('/api/saved-filters', granted.id);
+  const savedJson = JSON.parse(savedList.body) as {
+    savedFilters: Array<{ id: number; name: string; filters: Record<string, unknown> }>;
+  };
+  const mineSaved = savedJson.savedFilters.find((f) => f.name === 'Smoke set');
+  check('and read back', mineSaved !== undefined);
+  check(
+    'with the department preserved through JSON',
+    mineSaved?.filters.department === 'Neurology',
+    JSON.stringify(mineSaved?.filters),
+  );
+
+  // Guests have no queue surface at all. The global middleware refuses any
+  // request carrying a guest cookie on a non-guest route, so this asserts the
+  // queue routes are actually behind it rather than accidentally exempt.
+  const guestAtQueue = await getRaw('/queues', 'guestSession=anything');
+  check(
+    'a request carrying a guest cookie is refused the queue list',
+    guestAtQueue.status === 403,
+    `status ${guestAtQueue.status}`,
+  );
+  const guestAtQueueApi = await getRaw('/api/queues/cardiology/rows', 'guestSession=anything');
+  check(
+    'and the queue rows API',
+    guestAtQueueApi.status === 403,
+    `status ${guestAtQueueApi.status}`,
+  );
+
+  // ── PRD-26: next action and due dates ─────────────────────────────────────
+
+  // Every workspace must carry an action. The fixtures transitioned through the
+  // protocol above, so theirs were computed synchronously by those transitions.
+  const naPayload = JSON.parse(
+    (await get(`/api/workspaces/${wsWithout.id}`, granted.id)).body,
+  ) as {
+    workspace: Record<string, unknown>;
+  };
+  check(
+    'the workspace payload carries a next action',
+    typeof naPayload.workspace.nextAction === 'string' &&
+      (naPayload.workspace.nextAction as string).length > 0,
+    `got ${JSON.stringify(naPayload.workspace.nextAction)}`,
+  );
+  check(
+    'and an awaited-by indicator',
+    ['us', 'party', 'nobody'].includes(naPayload.workspace.awaitedBy as string),
+    `got ${JSON.stringify(naPayload.workspace.awaitedBy)}`,
+  );
+  check(
+    'and the override flags, defaulted honestly',
+    naPayload.workspace.dueDateOverridden === false && naPayload.workspace.overdue === false,
+    JSON.stringify({
+      overridden: naPayload.workspace.dueDateOverridden,
+      overdue: naPayload.workspace.overdue,
+    }),
+  );
+
+  // AC3: the DECLINED fixture is terminal with nothing outstanding, so it must
+  // say so explicitly rather than leaving a blank.
+  check(
+    'a terminal referral says no action required rather than nothing',
+    /No action required/i.test(String(naPayload.workspace.nextAction)),
+    `got ${JSON.stringify(naPayload.workspace.nextAction)}`,
+  );
+  check(
+    'and nobody is awaited on it',
+    naPayload.workspace.awaitedBy === 'nobody',
+    `got ${JSON.stringify(naPayload.workspace.awaitedBy)}`,
+  );
+
+  // AC6: the relative wording is computed in the BROWSER from the absolute
+  // timestamp, so a cached page cannot show a stale "due in 2 hours".
+  const naPage = await get(`/workspaces/${wsWith.id}`, granted.id);
+  check('the workspace page carries the next-action panel', naPage.body.includes('na-block'));
+  check(
+    'relative due wording is computed client-side, not rendered server-side',
+    naPage.body.includes('function relativeDue(') && naPage.body.includes('Date.now()'),
+  );
+  check(
+    'the panel states plainly that the offsets are not SLAs',
+    /no business-hours or holiday awareness/i.test(naPage.body),
+  );
+  check('the panel names who owes the move', naPage.body.includes('awaitedLabel'));
+
+  // AC4 — a coordinator's own action, and it survives a recompute.
+  const setAction = await post(
+    `/api/workspaces/${wsWith.id}/next-action`,
+    { nextAction: "Call Dr. Ofori's office about the echo report" },
+    granted.id,
+  );
+  check('a next action can be set by hand', setAction.status === 200, `status ${setAction.status}`);
+
+  const afterSet = JSON.parse((await get(`/api/workspaces/${wsWith.id}`, granted.id)).body) as {
+    workspace: Record<string, unknown>;
+  };
+  check(
+    'the manual action is stored',
+    afterSet.workspace.nextAction === "Call Dr. Ofori's office about the echo report",
+    `got ${JSON.stringify(afterSet.workspace.nextAction)}`,
+  );
+  check(
+    'and attributed to the actor WITHOUT leaking the encoded rule action',
+    afterSet.workspace.nextActionSetBy === `user:${granted.id}`,
+    `got ${JSON.stringify(afterSet.workspace.nextActionSetBy)}`,
+  );
+
+  check(
+    'an empty next action is refused with 422',
+    (await post(`/api/workspaces/${wsWith.id}/next-action`, { nextAction: '   ' }, granted.id))
+      .status === 422,
+  );
+  check(
+    'an over-long next action is refused with 422',
+    (await post(
+      `/api/workspaces/${wsWith.id}/next-action`,
+      { nextAction: 'x'.repeat(501) },
+      granted.id,
+    )).status === 422,
+  );
+
+  // AC7 — a due date override REQUIRES a reason, and 422 is the right answer:
+  // the request is well-formed, the business rule is what it fails.
+  check(
+    'a due-date override with no reason is refused with 422',
+    (await post(
+      `/api/workspaces/${wsWith.id}/due-date`,
+      { dueAt: '2026-09-30T17:00:00Z' },
+      granted.id,
+    )).status === 422,
+  );
+  check(
+    'a malformed dueAt is refused with 400',
+    (await post(
+      `/api/workspaces/${wsWith.id}/due-date`,
+      { dueAt: 'next Tuesday', reason: 'because' },
+      granted.id,
+    )).status === 400,
+  );
+
+  const overrode = await post(
+    `/api/workspaces/${wsWith.id}/due-date`,
+    { dueAt: '2026-09-30T17:00:00Z', reason: 'referring office closed until Friday' },
+    granted.id,
+  );
+  check('a due date can be overridden with a reason', overrode.status === 200, `status ${overrode.status}`);
+
+  const afterOverride = JSON.parse(
+    (await get(`/api/workspaces/${wsWith.id}`, granted.id)).body,
+  ) as { workspace: Record<string, unknown> };
+  check(
+    'the override is marked and its reason kept',
+    afterOverride.workspace.dueDateOverridden === true &&
+      afterOverride.workspace.dueDateOverrideReason === 'referring office closed until Friday',
+    JSON.stringify(afterOverride.workspace.dueDateOverrideReason),
+  );
+  check(
+    'and the due date is the one chosen',
+    String(afterOverride.workspace.nextActionDueAt).startsWith('2026-09-30T17:00:00'),
+    String(afterOverride.workspace.nextActionDueAt),
+  );
+
+  // Both overrides must survive a real transition. Driven through the routing
+  // route, which recomputes.
+  const rerouteAgain = await post(
+    `/api/referrals/${withCcda.id}/routing`,
+    { department: 'Cardiology' },
+    granted.id,
+  );
+  check('a transition after the overrides succeeds', rerouteAgain.status === 200);
+  const afterTransition = JSON.parse(
+    (await get(`/api/workspaces/${wsWith.id}`, granted.id)).body,
+  ) as { workspace: Record<string, unknown> };
+  check(
+    'the overridden due date survives a later transition (AC7)',
+    String(afterTransition.workspace.nextActionDueAt).startsWith('2026-09-30T17:00:00'),
+    String(afterTransition.workspace.nextActionDueAt),
+  );
+
+  // Reset restores the rule, so a mistaken override is not permanent.
+  const cleared = await post(
+    `/api/workspaces/${wsWith.id}/next-action`,
+    { clear: true },
+    granted.id,
+  );
+  check('overrides can be reset to the rule', cleared.status === 200, `status ${cleared.status}`);
+  const afterClear = JSON.parse((await get(`/api/workspaces/${wsWith.id}`, granted.id)).body) as {
+    workspace: Record<string, unknown>;
+  };
+  check(
+    'and the manual marks are gone',
+    afterClear.workspace.dueDateOverridden === false &&
+      afterClear.workspace.nextActionSetBy === null,
+    JSON.stringify({
+      overridden: afterClear.workspace.dueDateOverridden,
+      setBy: afterClear.workspace.nextActionSetBy,
+    }),
+  );
+  check(
+    'with the rule action restored',
+    afterClear.workspace.nextAction !== "Call Dr. Ofori's office about the echo report",
+    String(afterClear.workspace.nextAction),
+  );
+
+  // The activity feed must carry both PRD-26 event types.
+  const naFeed = await get(`/api/workspaces/${wsWith.id}/activity`, granted.id);
+  const naEntries = (JSON.parse(naFeed.body) as { entries: { eventType: string }[] }).entries;
+  for (const t of ['workspace.next_action_changed', 'workspace.due_date_overridden']) {
+    check(
+      `the activity feed carries ${t}`,
+      naEntries.some((e) => e.eventType === t),
+      'PRD-25 did not pick it up',
+    );
+  }
+
+  // GET /api/overdue, scoped exactly like the queue view.
+  const overdueGranted = await get('/api/overdue', granted.id);
+  check('GET /api/overdue returns 200', overdueGranted.status === 200, `status ${overdueGranted.status}`);
+  const overdueJson = JSON.parse(overdueGranted.body) as { count: number; items: unknown[] };
+  check(
+    'and its count matches its items',
+    overdueJson.count === overdueJson.items.length,
+    `${overdueJson.count} vs ${overdueJson.items.length}`,
+  );
+
+  // The scope check that matters: a user in no queue must get nothing, not
+  // everything. `ungranted` was added to the Cardiology queue above, so remove
+  // them again first.
+  await del(`/api/queues/cardiology/members/${ungranted.id}`, granted.id);
+  const overdueUngranted = await get('/api/overdue', ungranted.id);
+  const ungrantedJson = JSON.parse(overdueUngranted.body) as { count: number; items: unknown[] };
+  check(
+    'a user in no queue sees NO overdue items, not all of them',
+    overdueUngranted.status === 200 && ungrantedJson.count === 0,
+    `status ${overdueUngranted.status}, count ${ungrantedJson.count}`,
+  );
+
+  // The sweep is idempotent per due date (AC14), exercised through the real
+  // module rather than the route — there is no route for it, by design.
+  const { checkAndFlagOverdueWorkspaces, getOverdueWorkspaces } = await import(
+    '../src/modules/prd07/overdueChecker'
+  );
+  const farFuture = new Date(Date.now() + 365 * 24 * 3600 * 1000);
+  const firstSweep = await checkAndFlagOverdueWorkspaces(farFuture);
+  const secondSweep = await checkAndFlagOverdueWorkspaces(farFuture);
+  check(
+    'the overdue sweep emits for newly-overdue workspaces',
+    firstSweep > 0,
+    `emitted ${firstSweep}`,
+  );
+  check(
+    'and emits NOTHING on a second sweep for the same due dates (AC14)',
+    secondSweep === 0,
+    `second sweep emitted ${secondSweep}`,
+  );
+  check(
+    'while still listing them as overdue',
+    (await getOverdueWorkspaces(farFuture)).length >= firstSweep,
+  );
+
+  // AC16: the message-level behaviour PRD-07 shipped is untouched.
+  const { getOverdueMessages } = await import('../src/modules/prd07/overdueChecker');
+  check(
+    'getOverdueMessages() still works (AC16)',
+    Array.isArray(await getOverdueMessages()),
+  );
+
+  // AC13: registered on an interval, following the existing pattern.
+  const indexSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.ts'), 'utf-8');
+  check(
+    'the overdue sweep is registered on an interval in src/index.ts (AC13)',
+    /setInterval\([\s\S]*?runOverdueSweep\(\)/.test(indexSrc) &&
+      indexSrc.includes('config.workspace.overdueSweepIntervalMs'),
+    'PRD-07 wrote a checker nothing ever called; this is the fix for that too',
+  );
+
+  // Guests must never see a next action or an awaited-by indicator.
+  const guestAtOverdue = await getRaw('/api/overdue', 'guestSession=anything');
+  check(
+    'a guest cookie is refused at the overdue API',
+    guestAtOverdue.status === 403,
+    `status ${guestAtOverdue.status}`,
+  );
+
+  // ── PRD-28: correlation and the exception queue ───────────────────────────
+
+  const excPage = await get('/exceptions', granted.id);
+  check('GET /exceptions returns 200', excPage.status === 200, `status ${excPage.status}`);
+  check('the exception queue embeds its payload', excPage.body.includes('__EXCEPTION_QUEUE__'));
+  check('the nav carries the Exceptions entry', excPage.body.includes('href="/exceptions"'));
+  check(
+    'the page states that reassociation does not advance the protocol state',
+    /does <strong>not<\/strong> advance the 360X protocol state/.test(excPage.body),
+    'the one rule a coordinator most needs to see is not on the page',
+  );
+
+  // Drive the real discard paths through the real modules, so these are the
+  // paths production takes rather than a fixture shaped like them.
+  const { processAck } = await import('../src/modules/prd06/ackService');
+
+  // AC6: an ACK with a control id matching nothing.
+  const orphanAck =
+    'MSH|^~\\&|NORTHSIDE|FAC|SPECIALIST|FAC|20260916||ACK^A01|smoke-ack-1|P|2.5.1\rMSA|AA|MANGLED-9999\r';
+  // The sender is the fixture's OWN referrer address, which is what an ACK from
+  // the counterparty actually looks like — so the candidate ranking has a real
+  // hint to work with. The first version used an unrelated address and ranked
+  // nothing, which was the code being correct and the fixture being unrealistic.
+  const orphanResult = await processAck(
+    { ackCode: 'AA', acknowledgedControlId: 'MANGLED-9999', messageControlId: 'smoke-ack-1' },
+    { raw: orphanAck, senderAddress: 'referrer@primary.direct' },
+  );
+  check(
+    'an unmatched ACK now raises an exception instead of being dropped (AC6)',
+    orphanResult.matched === false && typeof orphanResult.exceptionId === 'number',
+    `matched=${orphanResult.matched} exceptionId=${String(orphanResult.exceptionId)}`,
+  );
+
+  const excList = JSON.parse((await get('/api/exceptions', granted.id)).body) as {
+    count: number;
+    exceptions: Array<Record<string, unknown>>;
+  };
+  const orphanExc = excList.exceptions.find((e) => e.id === orphanResult.exceptionId);
+  check('and it appears in the exception queue', orphanExc !== undefined);
+  check(
+    'as an ORPHAN with no workspace, still listed and workable (AC24)',
+    orphanExc?.workspaceId === null,
+    `workspaceId=${String(orphanExc?.workspaceId)}`,
+  );
+  check(
+    'with the raw artifact retained — this row is the only copy',
+    orphanExc?.rawContent === orphanAck,
+    'the retained content does not match what arrived',
+  );
+  check(
+    'and a remediation telling a human what to do (AC10)',
+    typeof orphanExc?.remediation === 'string' && (orphanExc.remediation as string).length > 20,
+  );
+
+  // AC11: ranked candidates, every one explaining itself.
+  const cands = JSON.parse(
+    (await get(`/api/exceptions/${String(orphanResult.exceptionId)}/candidates`, granted.id)).body,
+  ) as { candidates: Array<{ workspaceId: number; score: number; reasons: string[] }> };
+  check('candidates are offered for the orphan', cands.candidates.length > 0, 'none ranked');
+  check(
+    'and EVERY candidate explains itself — no unexplained scores',
+    cands.candidates.every((c) => Array.isArray(c.reasons) && c.reasons.length > 0),
+    JSON.stringify(cands.candidates.map((c) => c.reasons)),
+  );
+  check(
+    'the page offers a manual attach-by-id path, so an orphan nothing ranks is still workable',
+    excPage.body.includes('Attach by id'),
+    'an unranked orphan would otherwise be unresolvable except by dismissing it',
+  );
+
+  // AC13/AC14: reassociate, and prove the protocol state did not move.
+  const stateBefore = JSON.parse((await get(`/api/workspaces/${wsWithout.id}`, granted.id)).body) as {
+    referral: { state: string };
+  };
+  check(
+    'reassociation requires a note (AC13)',
+    (await post(
+      `/api/exceptions/${String(orphanResult.exceptionId)}/reassociate`,
+      { workspaceId: wsWithout.id },
+      granted.id,
+    )).status === 422,
+  );
+
+  const reassoc = await post(
+    `/api/exceptions/${String(orphanResult.exceptionId)}/reassociate`,
+    { workspaceId: wsWithout.id, note: 'control id mangled in transit; patient and dates match' },
+    granted.id,
+  );
+  check('the orphan can be reassociated', reassoc.status === 200, `status ${reassoc.status}`);
+
+  const stateAfter = JSON.parse((await get(`/api/workspaces/${wsWithout.id}`, granted.id)).body) as {
+    referral: { state: string };
+  };
+  check(
+    'and the 360X protocol state is UNCHANGED (AC14)',
+    stateAfter.referral.state === stateBefore.referral.state,
+    `${stateBefore.referral.state} -> ${stateAfter.referral.state}`,
+  );
+
+  const reassocFeed = await get(`/api/workspaces/${wsWithout.id}/activity`, granted.id);
+  const reassocEntries = (JSON.parse(reassocFeed.body) as { entries: { eventType: string }[] })
+    .entries;
+  check(
+    'the reassociation reaches the activity feed',
+    reassocEntries.some((e) => e.eventType === 'workspace.reassociated'),
+  );
+  check(
+    'and the artifact is now on the referral thread',
+    (JSON.parse((await get(`/api/workspaces/${wsWithout.id}`, granted.id)).body) as {
+      workspace: Record<string, unknown>;
+    }) !== undefined,
+  );
+
+  // AC7: a non-AA code. Needs a real outbound message to acknowledge.
+  // `smokeDb` is already in scope from the PRD-29 section above.
+  const { outboundMessages: smokeOutbound } = await import('../src/db/schema');
+  await smokeDb.insert(smokeOutbound).values({
+    referralId: withCcda.id,
+    messageControlId: 'SMOKE-REJECT-1',
+    messageType: 'ConsultNote',
+    status: 'Pending',
+    sentAt: new Date(),
+  });
+  const rejected = await processAck(
+    { ackCode: 'AR', acknowledgedControlId: 'SMOKE-REJECT-1', messageControlId: 'smoke-ack-2' },
+    { raw: 'MSA|AR|SMOKE-REJECT-1', senderAddress: 'referrals@northside.direct.example.org' },
+  );
+  check(
+    'a counterparty rejection raises an exception naming the code (AC7)',
+    typeof rejected.exceptionId === 'number',
+    `exceptionId=${String(rejected.exceptionId)}`,
+  );
+  const rejExc = JSON.parse(
+    (await get(`/api/exceptions/${String(rejected.exceptionId)}`, granted.id)).body,
+  ) as { exception: Record<string, unknown> };
+  check('it names AR explicitly', String(rejExc.exception.summary).includes('AR'));
+  check(
+    'and it attaches to the workspace, whose status becomes Exception (AC22)',
+    rejExc.exception.workspaceId === wsWith.id,
+    `workspaceId=${String(rejExc.exception.workspaceId)}`,
+  );
+  const wsAfterExc = JSON.parse((await get(`/api/workspaces/${wsWith.id}`, granted.id)).body) as {
+    workspace: { workStatus: string };
+    exceptions: unknown[];
+  };
+  check(
+    'the work status moved to Exception',
+    wsAfterExc.workspace.workStatus === 'Exception',
+    wsAfterExc.workspace.workStatus,
+  );
+  check('and the payload carries the exception', wsAfterExc.exceptions.length >= 1);
+
+  const wsExcPage = await get(`/workspaces/${wsWith.id}`, granted.id);
+  check('the workspace page carries the exception panel', wsExcPage.body.includes('exc-panel'));
+
+  // AC21: the Exception tab count reflects it.
+  const excTab = JSON.parse(
+    (await get('/api/queues/all/rows?tab=exception', granted.id)).body,
+  ) as { counts: Record<string, number> };
+  check(
+    'the queue view Exception tab count increases (AC21)',
+    excTab.counts.exception >= 1,
+    `exception count ${excTab.counts.exception}`,
+  );
+
+  // AC23: resolving restores the status it came from.
+  const resolved = await post(
+    `/api/exceptions/${String(rejected.exceptionId)}/resolve`,
+    { resolution: 'dismissed', note: 'expected rejection from the staging system' },
+    granted.id,
+  );
+  check('an exception can be resolved', resolved.status === 200, `status ${resolved.status}`);
+  const wsAfterResolve = JSON.parse(
+    (await get(`/api/workspaces/${wsWith.id}`, granted.id)).body,
+  ) as { workspace: { workStatus: string } };
+  check(
+    'and the work status leaves Exception (AC23)',
+    wsAfterResolve.workspace.workStatus !== 'Exception',
+    wsAfterResolve.workspace.workStatus,
+  );
+  check(
+    'resolving twice is refused',
+    (await post(
+      `/api/exceptions/${String(rejected.exceptionId)}/resolve`,
+      { resolution: 'dismissed' },
+      granted.id,
+    )).status === 409,
+  );
+  check(
+    'an unrecognised resolution is refused',
+    (await post(
+      `/api/exceptions/${String(orphanResult.exceptionId)}/resolve`,
+      { resolution: 'made-it-up' },
+      granted.id,
+    )).status === 400,
+  );
+
+  // AC15–AC17: auto-declined referrals become reviewable and convertible.
+  const { recordAutoDeclined } = await import('../src/modules/workspace/exceptionService');
+  const declined = await recordAutoDeclined({
+    sourceMessageId: `smoke-declined-${randomUUID()}`,
+    referrerAddress: 'dr.ofori@northside.direct',
+    patientName: 'Rosa Alvarez',
+    patientDob: '1962-03-04',
+    declineReasons: ['Missing problems section'],
+    rawCcdaXml: '<ClinicalDocument xmlns="urn:hl7-org:v3"/>',
+  });
+  check(
+    'an auto-declined referral is now a durable, reviewable record (AC15)',
+    declined.autoDeclinedId > 0 && typeof declined.exceptionId === 'number',
+  );
+  const declinedExc = JSON.parse(
+    (await get(`/api/exceptions/${String(declined.exceptionId)}`, granted.id)).body,
+  ) as { exception: Record<string, unknown> };
+  check(
+    'retaining the inbound document that used to be discarded',
+    String(declinedExc.exception.rawContent).includes('ClinicalDocument'),
+  );
+  check(
+    'converting requires a note',
+    (await post(`/api/exceptions/${String(declined.exceptionId)}/convert`, {}, granted.id)).status ===
+      422,
+  );
+  const converted = await post(
+    `/api/exceptions/${String(declined.exceptionId)}/convert`,
+    { note: 'the problems section used an unexpected template' },
+    granted.id,
+  );
+  check('and it converts into a real referral (AC17)', converted.status === 200, `status ${converted.status}`);
+  const convertedWs = Number((converted.json as Record<string, unknown>).workspaceId);
+  const convertedPage = await get(`/workspaces/${convertedWs}`, granted.id);
+  check(
+    'whose workspace is a working page',
+    convertedPage.status === 200,
+    `status ${convertedPage.status}`,
+  );
+  const convertedPayload = JSON.parse((await get(`/api/workspaces/${convertedWs}`, granted.id)).body) as {
+    referral: { state: string };
+  };
+  check(
+    'starting at Received, because nothing was ever acknowledged to the counterparty',
+    convertedPayload.referral.state === 'Received',
+    convertedPayload.referral.state,
+  );
+  check(
+    'converting a non-auto-declined exception is refused',
+    (await post(
+      `/api/exceptions/${String(orphanResult.exceptionId)}/convert`,
+      { note: 'x' },
+      granted.id,
+    )).status !== 200,
+  );
+
+  // AC1–AC5: durable idempotency, replacing the JSON file.
+  const { recordProcessed, isAlreadyProcessed } = await import(
+    '../src/modules/workspace/correlationService'
+  );
+  const smokeMsgId = `<smoke-${randomUUID()}@test>`;
+  check('an unseen message id is not already processed', !(await isAlreadyProcessed(smokeMsgId)));
+  await recordProcessed({
+    messageId: smokeMsgId,
+    senderAddress: 'dr.ofori@northside.direct',
+    subject: 'Referral',
+    outcome: 'referral-created',
+    referralId: withCcda.id,
+  });
+  check('and is after recording (AC1/AC2)', await isAlreadyProcessed(smokeMsgId));
+
+  const procList = JSON.parse((await get('/api/processed-messages', granted.id)).body) as {
+    messages: Array<{ messageId: string; outcome: string }>;
+  };
+  const procRow = procList.messages.find((m) => m.messageId === smokeMsgId);
+  check(
+    'the operator can see WHAT HAPPENED to it, not merely that it was seen',
+    procRow?.outcome === 'referral-created',
+    `outcome ${String(procRow?.outcome)}`,
+  );
+  check(
+    'the exception page lists inbound processing',
+    (await get('/exceptions', granted.id)).body.includes('Inbound processing'),
+  );
+
+  const replayed = await post(
+    `/api/messages/${encodeURIComponent(smokeMsgId)}/replay`,
+    {},
+    granted.id,
+  );
+  check('an operator can deliberately replay (AC4)', replayed.status === 200, `status ${replayed.status}`);
+  const afterReplay = JSON.parse((await get('/api/processed-messages', granted.id)).body) as {
+    messages: Array<{ messageId: string; outcome: string }>;
+  };
+  check(
+    'and the replay is recorded as such',
+    afterReplay.messages.find((m) => m.messageId === smokeMsgId)?.outcome === 'replayed',
+  );
+  check(
+    'replaying an unknown message id is a 404',
+    (await post('/api/messages/never-seen/replay', {}, granted.id)).status === 404,
+  );
+
+  // AC18–AC20: duplicate patients flagged, never merged.
+  const { findPotentialDuplicatePatients } = await import(
+    '../src/modules/workspace/correlationService'
+  );
+  // The two fixtures share one patient row, so the surname+DOB pair resolves.
+  const dupes = await findPotentialDuplicatePatients(HOSTILE_LAST, '1980-01-01');
+  check(
+    'duplicate patient detection matches on surname and date of birth (AC18)',
+    dupes.length >= 1,
+    `found ${dupes.length}`,
+  );
+  const { flagDuplicatePatient } = await import('../src/modules/workspace/exceptionService');
+  const dupExcId = await flagDuplicatePatient({
+    newPatientId: dupes[0],
+    existingPatientIds: dupes,
+    patientName: 'Rosa Alvarez',
+    patientDob: '1962-03-04',
+    workspaceId: wsWithout.id,
+  });
+  const dupExc = JSON.parse(
+    (await get(`/api/exceptions/${String(dupExcId)}`, granted.id)).body,
+  ) as { exception: Record<string, unknown> };
+  check(
+    'and the flag states plainly that NOTHING is merged (AC20)',
+    /No records are merged/i.test(String(dupExc.exception.remediation)),
+    String(dupExc.exception.remediation),
+  );
+  check(
+    'recording that no merge was performed',
+    (dupExc.exception.metadata as Record<string, unknown>).mergePerformed === false,
+  );
+
+  const patientsBefore = (
+    JSON.parse((await get('/api/exceptions', granted.id)).body) as { count: number }
+  ).count;
+  const confirmSame = await post(
+    `/api/exceptions/${String(dupExcId)}/resolve`,
+    { resolution: 'confirmed-same', note: 'same person, referred twice' },
+    granted.id,
+  );
+  check('confirming "same person" succeeds', confirmSame.status === 200);
+  check(
+    'and resolves without merging — the exception count simply drops by one',
+    (JSON.parse((await get('/api/exceptions', granted.id)).body) as { count: number }).count ===
+      patientsBefore - 1,
+  );
+
+  // Guests have no exception surface at all.
+  for (const route of ['/exceptions', '/api/exceptions', '/api/processed-messages']) {
+    const guestHit = await getRaw(route, 'guestSession=anything');
+    check(
+      `a guest cookie is refused at ${route}`,
+      guestHit.status === 403,
+      `status ${guestHit.status}`,
+    );
+  }
+
+  // ── PRD-27: notifications ─────────────────────────────────────────────────
+
+  // The bell is in the nav, on every page, and polls rather than pushes.
+  const navPage = await get('/workspaces', granted.id);
+  check('the nav carries the notification bell', navPage.body.includes('id="notifBell"'));
+  check('with an unread badge', navPage.body.includes('id="notifCount"'));
+  check(
+    'polled on an interval rather than over a WebSocket',
+    navPage.body.includes('setInterval(load') && !/new WebSocket/.test(navPage.body),
+  );
+  check(
+    'and opening the panel paints it WITHOUT marking anything read (AC11)',
+    /Opening PAINTS; it does not mark anything read/.test(navPage.body),
+  );
+
+  /**
+   * Notifications are FIRE-AND-FORGET by design — a mail failure must never
+   * roll back an assignment — so they land a tick or two after the action that
+   * caused them. The first version of this check read the API immediately and
+   * saw nothing, which was the design working and the assertion being wrong.
+   * Bounded poll rather than a fixed sleep.
+   */
+  async function waitForNotifications(
+    userId: number,
+    timeoutMs = 5000,
+  ): Promise<{ unreadCount: number; notifications: Array<Record<string, unknown>> }> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const body = JSON.parse((await get('/api/notifications', userId)).body) as {
+        unreadCount: number;
+        notifications: Array<Record<string, unknown>>;
+      };
+      if (body.notifications.length > 0 || Date.now() > deadline) return body;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  const { db: notifDb } = await import('../src/db');
+  const { notifications: notifTable } = await import('../src/db/schema');
+  const { isNotNull: notifIsNotNull } = await import('drizzle-orm');
+
+  /**
+   * WHICH user to read the bell as is not assumable.
+   *
+   * The first version read it as `granted`, who at this point in the run owns
+   * nothing and participates in nothing — so it correctly saw zero, and the
+   * assertion was wrong rather than the code. Notifications go to OWNERS and
+   * PARTICIPANTS, so the honest check is to find a real recipient from the rows
+   * and read the API as them.
+   */
+  const notifRows = await notifDb
+    .select({ userId: notifTable.recipientUserId, type: notifTable.notificationType })
+    .from(notifTable);
+  check(
+    'the run above produced real notifications',
+    notifRows.length > 0,
+    'nothing was notified during a run that assigned, transitioned and raised an exception',
+  );
+  const storedTypes = new Set(notifRows.map((r) => String(r.type)));
+  check(
+    'including a state change from a protocol transition (AC5)',
+    storedTypes.has('state_change'),
+    `saw: ${[...storedTypes].join(', ')}`,
+  );
+  check(
+    'and an assignment (AC1)',
+    storedTypes.has('assignment'),
+    `saw: ${[...storedTypes].join(', ')}`,
+  );
+  check(
+    'and an exception (AC9)',
+    storedTypes.has('exception'),
+    `saw: ${[...storedTypes].join(', ')}`,
+  );
+  check(
+    'and guest activity delivered INTERNALLY (AC19)',
+    notifRows.some((r) => r.type === 'guest_activity' && r.userId !== null),
+    'a guest acting must tell the internal side',
+  );
+
+  // Read the bell as somebody who actually has one.
+  const recipient = notifRows.find((r) => r.userId !== null)?.userId as number;
+  check('a real recipient was found to read the bell as', typeof recipient === 'number');
+  const notifApi = await waitForNotifications(recipient);
+  check(
+    'GET /api/notifications returns a count and a list',
+    typeof notifApi.unreadCount === 'number' && Array.isArray(notifApi.notifications),
+  );
+  check(
+    'and the recipient sees their own notifications',
+    notifApi.notifications.length > 0,
+    `user ${recipient} has rows in the table but the API returned none`,
+  );
+  check(
+    'each carrying the patient it is about',
+    notifApi.notifications.every((n) => typeof n.patientName === 'string' && n.patientName !== ''),
+  );
+  check(
+    'and a link straight to the workspace or the exception queue (AC4)',
+    notifApi.notifications.every((n) => String(n.linkPath).startsWith('/')),
+  );
+  const guestAddressed = await notifDb
+    .select({ type: notifTable.notificationType })
+    .from(notifTable)
+    .where(notifIsNotNull(notifTable.recipientGuestId));
+  const { GUEST_ELIGIBLE_TYPES } = await import('../src/modules/workspace/notificationService');
+  check(
+    'every guest-addressed notification is on the allow list (AC17)',
+    guestAddressed.every((r) => (GUEST_ELIGIBLE_TYPES as readonly string[]).includes(r.type)),
+    `guest-addressed types were: ${JSON.stringify(guestAddressed.map((r) => r.type))}`,
+  );
+  check(
+    'and no internal type appears against a guest',
+    !guestAddressed.some((r) => ['assignment', 'state_change', 'mention', 'exception'].includes(r.type)),
+  );
+
+  // Marking read, individually and all at once.
+  if (notifApi.notifications.length > 0) {
+    const target = notifApi.notifications.find((n) => n.read === false);
+    if (target) {
+      const readOne = await post(
+        `/api/notifications/${String(target.id)}/read`,
+        {},
+        recipient,
+      );
+      check('one notification can be marked read', readOne.status === 200, `status ${readOne.status}`);
+      check(
+        'and the unread count drops',
+        Number((readOne.json as Record<string, unknown>).unreadCount) < notifApi.unreadCount,
+        `${String((readOne.json as Record<string, unknown>).unreadCount)} vs ${notifApi.unreadCount}`,
+      );
+      check(
+        'marking the same one again is a 404, not a silent success',
+        (await post(`/api/notifications/${String(target.id)}/read`, {}, recipient)).status === 404,
+      );
+    }
+
+    // Scoped to the recipient: another user cannot mark it read.
+    const someoneElse = notifApi.notifications[0];
+    check(
+      'another user cannot mark a notification read',
+      (await post(`/api/notifications/${String(someoneElse.id)}/read`, {}, ungranted.id)).status ===
+        404,
+      'a cross-user write would be a real defect',
+    );
+  }
+
+  const readAll = await post('/api/notifications/read-all', {}, recipient);
+  check('all notifications can be marked read', readAll.status === 200);
+  check(
+    'and the count is then zero',
+    (JSON.parse((await get('/api/notifications', recipient)).body) as { unreadCount: number })
+      .unreadCount === 0,
+  );
+
+  // AC12: muting PREVENTS CREATION.
+  const prefs = JSON.parse((await get('/api/notification-preferences', granted.id)).body) as {
+    preferences: Array<{ notificationType: string; muted: boolean; emailEnabled: boolean }>;
+  };
+  check(
+    'every notification type has a preference switch',
+    prefs.preferences.length >= 12,
+    `${prefs.preferences.length} types`,
+  );
+  check(
+    'and guest-addressed types default to email on, because a guest has no bell',
+    prefs.preferences.find((p) => p.notificationType === 'shared_activity')?.emailEnabled === true,
+  );
+  check(
+    'an unrecognised notification type is refused',
+    (await post(
+      '/api/notification-preferences',
+      { notificationType: 'made-it-up', muted: true },
+      granted.id,
+    )).status === 400,
+  );
+
+  const muted = await post(
+    '/api/notification-preferences',
+    { notificationType: 'state_change', muted: true },
+    granted.id,
+  );
+  check('a type can be muted', muted.status === 200, `status ${muted.status}`);
+
+  const { notify: smokeNotify } = await import('../src/modules/workspace/notificationService');
+  const beforeMuted = (
+    JSON.parse((await get('/api/notifications', granted.id)).body) as { notifications: unknown[] }
+  ).notifications.length;
+  // granted is the workspace's owner for this call, so an owner-audience
+  // notification of a muted type must create NOTHING.
+  await notifDb
+    .update((await import('../src/db/schema')).referralWorkspaces)
+    .set({ ownerUserId: granted.id })
+    .where(
+      (await import('drizzle-orm')).eq(
+        (await import('../src/db/schema')).referralWorkspaces.id,
+        wsWithout.id,
+      ),
+    );
+  await smokeNotify({
+    workspaceId: wsWithout.id,
+    type: 'state_change',
+    title: 'should not exist',
+    body: 'muted',
+    linkPath: `/workspaces/${wsWithout.id}`,
+    audience: { kind: 'owner' },
+  });
+  const afterMuted = (
+    JSON.parse((await get('/api/notifications', granted.id)).body) as {
+      notifications: Array<Record<string, unknown>>;
+    }
+  ).notifications;
+  check(
+    'a muted type creates NO ROW rather than a hidden one (AC12)',
+    afterMuted.length === beforeMuted &&
+      !afterMuted.some((n) => n.title === 'should not exist'),
+    `${beforeMuted} -> ${afterMuted.length}`,
+  );
+
+  // And an unmuted one does arrive, so the check above is not vacuous.
+  await post(
+    '/api/notification-preferences',
+    { notificationType: 'state_change', muted: false },
+    granted.id,
+  );
+  await smokeNotify({
+    workspaceId: wsWithout.id,
+    type: 'state_change',
+    title: 'should exist',
+    body: 'not muted',
+    linkPath: `/workspaces/${wsWithout.id}`,
+    audience: { kind: 'owner' },
+  });
+  check(
+    'and an unmuted type does arrive',
+    (await waitForNotifications(granted.id)).notifications.some((n) => n.title === 'should exist'),
+  );
+
+  // Guests have no bell and no notification API.
+  for (const route of ['/api/notifications', '/api/notification-preferences']) {
+    const guestHit = await getRaw(route, 'guestSession=anything');
+    check(
+      `a guest cookie is refused at ${route}`,
+      guestHit.status === 403,
+      `status ${guestHit.status}`,
+    );
+  }
+
+  // AC14: pruning runs in the overdue sweep, not a second job.
+  const { runOverdueSweep } = await import('../src/modules/prd07/overdueChecker');
+  const swept = await runOverdueSweep();
+  check(
+    'the overdue sweep also prunes notifications (AC14)',
+    typeof swept.notificationsPruned === 'number',
+    'pruning is not wired into the sweep',
   );
 
   // ── Report ────────────────────────────────────────────────────────────────

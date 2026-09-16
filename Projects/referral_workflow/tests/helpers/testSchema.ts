@@ -88,6 +88,13 @@ export const TEST_SCHEMA_DDL = `
     queue_id INTEGER,
     next_action TEXT,
     next_action_due_at INTEGER,
+    -- PRD-26
+    next_action_set_by TEXT,
+    due_date_overridden INTEGER NOT NULL DEFAULT 0,
+    due_date_override_reason TEXT,
+    overdue_notified_at INTEGER,
+    awaited_by TEXT,
+    awaited_by_party_id INTEGER,
     exception_reason TEXT,
     archived_at INTEGER,
     created_at INTEGER NOT NULL,
@@ -377,4 +384,146 @@ export const TEST_SCHEMA_DDL = `
   );
   CREATE INDEX idx_document_access_document
     ON document_access_log (document_id, viewed_at);
+
+  -- ── Shared Queues (PRD-20) ────────────────────────────────────────────────
+  --
+  -- The two unique indexes are reproduced deliberately, like PRD-22's partial
+  -- index above: they are the enforcement, not decoration.
+  -- idx_queue_members_unique is what makes "is this user in this queue" have one
+  -- answer, so getVisibleQueueIds() cannot return a duplicated queue id.
+  -- idx_saved_filters_name is what makes saving over a name replace rather than
+  -- accumulate.
+  CREATE TABLE queues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    description TEXT,
+    department_filter TEXT,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_queues_slug ON queues (slug);
+
+  CREATE TABLE queue_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    queue_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    access_level TEXT NOT NULL DEFAULT 'member',
+    added_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_queue_members_queue ON queue_members (queue_id);
+  CREATE INDEX idx_queue_members_user ON queue_members (user_id);
+  CREATE UNIQUE INDEX idx_queue_members_unique ON queue_members (queue_id, user_id);
+
+  CREATE TABLE saved_filters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    surface TEXT NOT NULL DEFAULT 'queue',
+    filters_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_saved_filters_user ON saved_filters (user_id, surface);
+  CREATE UNIQUE INDEX idx_saved_filters_name ON saved_filters (user_id, surface, name);
+
+  -- ── Correlation & Exceptions (PRD-28) ─────────────────────────────────────
+  --
+  -- idx_workspace_exceptions_dedupe is reproduced deliberately, like the other
+  -- partial indexes above: it is what makes "one open exception per (type,
+  -- control id)" a database invariant rather than a check-then-insert, and a
+  -- suite running without it would pass while the real schema rejected the
+  -- same write.
+  CREATE TABLE processed_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL UNIQUE,
+    sender_address TEXT,
+    subject TEXT,
+    outcome TEXT NOT NULL,
+    referral_id INTEGER,
+    exception_id INTEGER,
+    processed_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_processed_messages_message ON processed_messages (message_id);
+  CREATE INDEX idx_processed_messages_outcome ON processed_messages (outcome, processed_at);
+
+  CREATE TABLE workspace_exceptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id INTEGER,
+    exception_type TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    remediation TEXT,
+    raw_content TEXT,
+    raw_content_type TEXT,
+    sender_address TEXT,
+    message_control_id TEXT,
+    related_patient_name TEXT,
+    metadata TEXT,
+    prior_work_status TEXT,
+    resolved_at INTEGER,
+    resolved_by_actor TEXT,
+    resolution TEXT,
+    resolution_note TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_workspace_exceptions_workspace
+    ON workspace_exceptions (workspace_id, resolved_at);
+  CREATE INDEX idx_workspace_exceptions_open
+    ON workspace_exceptions (resolved_at, exception_type);
+  CREATE UNIQUE INDEX idx_workspace_exceptions_dedupe
+    ON workspace_exceptions (exception_type, message_control_id)
+    WHERE resolved_at IS NULL AND message_control_id IS NOT NULL;
+
+  CREATE TABLE auto_declined_referrals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_message_id TEXT NOT NULL UNIQUE,
+    referrer_address TEXT NOT NULL,
+    patient_name TEXT,
+    patient_dob TEXT,
+    decline_reasons TEXT NOT NULL,
+    raw_ccda_xml TEXT,
+    converted_referral_id INTEGER,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_auto_declined_created ON auto_declined_referrals (created_at);
+
+  -- ── Notifications (PRD-27) ────────────────────────────────────────────────
+  --
+  -- The recipient CHECK is reproduced deliberately: a notification addressed to
+  -- both an internal user and a guest, or to neither, is malformed, and a suite
+  -- running without the constraint would pass while the real schema refused the
+  -- same write.
+  CREATE TABLE notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_user_id INTEGER,
+    recipient_guest_id INTEGER,
+    workspace_id INTEGER NOT NULL,
+    notification_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    link_path TEXT NOT NULL,
+    triggered_by_actor TEXT,
+    collapse_key TEXT,
+    collapsed_count INTEGER NOT NULL DEFAULT 1,
+    email_sent_at INTEGER,
+    read_at INTEGER,
+    created_at INTEGER NOT NULL,
+    CONSTRAINT notifications_recipient_union
+      CHECK ((recipient_user_id IS NULL) <> (recipient_guest_id IS NULL))
+  );
+  CREATE INDEX idx_notifications_user
+    ON notifications (recipient_user_id, read_at, created_at);
+  CREATE INDEX idx_notifications_guest ON notifications (recipient_guest_id, read_at);
+  CREATE INDEX idx_notifications_collapse ON notifications (collapse_key, created_at);
+
+  CREATE TABLE notification_preferences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    notification_type TEXT NOT NULL,
+    muted INTEGER NOT NULL DEFAULT 0,
+    email_enabled INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX idx_notification_prefs_user ON notification_preferences (user_id);
+  CREATE UNIQUE INDEX idx_notification_prefs_unique
+    ON notification_preferences (user_id, notification_type);
 `

@@ -22,6 +22,8 @@
     "backfill:workspaces": "ts-node -r ./scripts/node-polyfill.js scripts/backfill-workspaces.ts",
     "backfill:parties": "ts-node -r ./scripts/node-polyfill.js scripts/backfill-parties.ts",
     "backfill:documents": "ts-node -r ./scripts/node-polyfill.js scripts/backfill-documents.ts",
+    "backfill:queues": "ts-node -r ./scripts/node-polyfill.js scripts/backfill-queues.ts",
+    "backfill:next-actions": "ts-node -r ./scripts/node-polyfill.js scripts/backfill-next-actions.ts",
     "smoke": "ts-node -r ./scripts/node-polyfill.js scripts/smoke.ts",
     "lint:budget": "node scripts/lint-budget.mjs"
   },

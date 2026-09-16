@@ -21,6 +21,7 @@ import { db } from '../../db';
 import { referrals, referralWorkspaces } from '../../db/schema';
 import { emitEvent } from '../analytics/eventService';
 import { seedParties } from './partyService';
+import { recomputeNextAction } from './nextActionService';
 import { ReferralState } from '../../state/referralStateMachine';
 import {
   WorkStatus,
@@ -179,8 +180,9 @@ export async function getWorkspaceByReferralId(referralId: number): Promise<Work
  * from a protocol event alone, which is correct: closing the loop is not by
  * itself evidence that internal work is outstanding.
  *
- * PRD-28's source, when it arrives, ORs into workspaceHasOpenItemsAsync() below
- * or into the synchronous row-only rule; it does not fork this function.
+ * PRD-28 HAS NOW SUPPLIED ITS SOURCE TOO: an unresolved exception. So this now
+ * ORs two real sources, exactly where the earlier comment said they would go,
+ * and no caller changed.
  */
 export async function hasOpenInternalItems(workspaceId: number): Promise<boolean> {
   const workspace = await getWorkspace(workspaceId);
@@ -191,9 +193,11 @@ export async function hasOpenInternalItems(workspaceId: number): Promise<boolean
 /**
  * The sources answerable from the workspace ROW ALONE, with no query.
  *
- * Still none of them. The parameter is kept because PRD-28 is expected to add a
- * clause that reads the row, and because every caller is written against this
- * signature.
+ * Still none of them, and PRD-28 did not add one after all: its source is an
+ * unresolved EXCEPTION ROW, which needs a query. The parameter is kept because
+ * every caller is written against this signature and because the row-only
+ * shortcut is still the right place for anything that can be answered without
+ * one.
  */
 function workspaceHasOpenItems(_workspace: Workspace): boolean {
   return false;
@@ -211,8 +215,17 @@ function workspaceHasOpenItems(_workspace: Workspace): boolean {
  */
 async function workspaceHasOpenItemsAsync(workspace: Workspace): Promise<boolean> {
   if (workspaceHasOpenItems(workspace)) return true;
+
   const { hasUnacknowledgedMention } = await import('./commentService');
-  return hasUnacknowledgedMention(workspace.id);
+  if (await hasUnacknowledgedMention(workspace.id)) return true;
+
+  // PRD-28's source, arriving exactly where the earlier comment promised: an
+  // unresolved exception is outstanding internal work, so a protocol event that
+  // closes the loop while one is open derives `Follow-up-Required` rather than
+  // `Resolved`. Closing the loop with an unplaced artifact against the referral
+  // is precisely the case that should not read as resolved.
+  const { hasOpenException } = await import('./exceptionService');
+  return hasOpenException(workspace.id);
 }
 
 // ── Creation ──────────────────────────────────────────────────────────────────
@@ -263,7 +276,37 @@ export async function createWorkspace(referralId: number): Promise<Workspace> {
   // Existing workspaces are served by backfillParties(), which re-derives.
   await seedParties(row.id, referralId);
 
-  return toWorkspace(row);
+  // PRD-20: route to a queue from the referral's department (AC14/AC15).
+  //
+  // Awaited, and for the same reason as parties: an unrouted workspace is
+  // invisible in every queue view, so firing this off would make a freshly
+  // ingested referral briefly absent from the surface a coordinator works from.
+  // Dynamic import to avoid a cycle — queueService imports this module's
+  // identity and event helpers.
+  //
+  // Tolerant of failure, unlike parties. Routing is recoverable by
+  // backfillQueues(), so a queue table that has not been seeded yet must not
+  // stop a referral from being ingested at all.
+  let routed: number | null = null;
+  try {
+    const { routeWorkspace } = await import('./queueService');
+    routed = await routeWorkspace(row.id, 'system');
+  } catch (err) {
+    // "No queues are seeded yet" is an EXPECTED state, not a failure: unit
+    // suites that do not exercise queues hit it on every createWorkspace, and a
+    // stack trace per call is log noise that hides real errors. Recoverable by
+    // `npm run backfill:queues`, so it is reported once at warn level with no
+    // trace. Anything else is a genuine fault and keeps its stack.
+    if (err instanceof Error && err.name === 'NoDefaultQueueError') {
+      console.warn(
+        '[WorkspaceService] no queues seeded — workspace left unrouted. Run: npm run backfill:queues',
+      );
+    } else {
+      console.error('[WorkspaceService] queue routing failed', err);
+    }
+  }
+
+  return toWorkspace(routed === null ? row : { ...row, queueId: routed });
 }
 
 // ── Work status writes ────────────────────────────────────────────────────────
@@ -327,6 +370,21 @@ async function applyWorkStatus(
       ...(reason ? { reason } : {}),
     },
   }).catch((err) => console.error('[WorkspaceService]', err));
+
+  // PRD-26: the work status is half of the (state x work status) key the rule
+  // table is indexed by, so a change here changes the next action. Hooked at
+  // the single write path rather than at setWorkStatus(), so an APPLIED
+  // PROPOSAL recomputes too — those go through here without touching
+  // setWorkStatus at all.
+  //
+  // Tolerant of failure and not awaited into the return value: a next action is
+  // bookkeeping over the work status, and must never be the reason a status
+  // change fails.
+  try {
+    await recomputeNextAction(workspace.id, now, actor);
+  } catch (err) {
+    console.error('[WorkspaceService] next action recompute failed', err);
+  }
 
   return toWorkspace(row);
 }
@@ -456,6 +514,27 @@ export async function proposeForReferral(
     const workspace = await getWorkspaceByReferralId(referralId);
     if (!workspace) return;
     await proposeWorkStatus(workspace.id, protocolState, actor);
+
+    // PRD-26: recompute the next action and due date from the NEW protocol
+    // state. This is the single funnel for all ten protocol transition sites,
+    // so hooking here covers every one of them rather than asking each to
+    // remember.
+    //
+    // Runs even when the work status proposal was DECLINED, deliberately: the
+    // protocol state moved regardless, so the next action must follow it. Only
+    // recomputing on an applied proposal would leave a manually-held workspace
+    // showing an instruction for a state it has left.
+    //
+    // `new Date()` as the entry moment is exact here rather than approximate —
+    // this runs synchronously with the transition, so now IS when the state was
+    // entered.
+    await recomputeNextAction(workspace.id, new Date(), actor);
+
+    // PRD-27 AC5: the owner and every participant. Hooked to the same funnel as
+    // the next-action recompute, so a protocol transition notifies exactly once
+    // however many call sites reach it.
+    const { notifyStateChange } = await import('./notificationService');
+    await notifyStateChange(workspace.id, protocolState, actor);
   } catch (err) {
     console.error(
       `[WorkspaceService] work status proposal failed for referral ${referralId}:`,

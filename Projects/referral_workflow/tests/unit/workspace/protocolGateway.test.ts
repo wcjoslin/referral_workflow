@@ -22,6 +22,10 @@ jest.mock('../../../src/config', () => ({
     receiving: { directAddress: 'receiving@specialist.direct', orgName: 'Specialist Care Group' },
     database: { url: ':memory:' },
     workspace: {
+        // PRD-27. Without these the notification path silently no-ops and
+        // every assignment or mention in this suite logs a failure.
+        notificationRetentionDays: 90,
+        notificationCollapseWindowMinutes: 15,
       publicBaseUrl: 'http://test.invalid',
       guestInvitationExpiryHours: 336,
       guestSessionExpiryHours: 24,

@@ -1,4 +1,15 @@
 import * as dotenv from 'dotenv';
+// PRD-26's next-action rule table is NOT here. It lives in
+// `modules/workspace/nextActionRules.ts` and that module is its only authority.
+//
+// The draft PRD said to put it in this file, beside the other tunables. It was
+// tried and reverted for two reasons: everything here calls requireEnv() at
+// import time, so tests had to mock this module and restate the table — making
+// every rule assertion run against a copy of itself — and routing a pure lookup
+// through a second re-export created two places a rule could appear to live.
+// The PRD's actual requirement ("changing a deadline must not require editing a
+// service") is met: nextActionRules.ts is data, not logic.
+export type { NextActionRule } from './modules/workspace/nextActionRules';
 dotenv.config();
 
 function requireEnv(key: string): string {
@@ -12,6 +23,7 @@ function requireEnv(key: string): string {
 function optionalEnv(key: string, defaultValue: string): string {
   return process.env[key] ?? defaultValue;
 }
+
 
 export const config = {
   imap: {
@@ -72,6 +84,27 @@ export const config = {
     // 20 MB. Enforced by express.raw() as the body arrives, so an oversized
     // upload is refused before it is buffered rather than after.
     maxUploadBytes: parseInt(optionalEnv('WORKSPACE_MAX_UPLOAD_BYTES', String(20 * 1024 * 1024)), 10),
+
+    // PRD-27. Retention is pruned in the same sweep as the overdue checker
+    // rather than adding a second scheduled job.
+    notificationRetentionDays: parseInt(
+      optionalEnv('WORKSPACE_NOTIFICATION_RETENTION_DAYS', '90'),
+      10,
+    ),
+    // AC13: a burst of activity on one workspace collapses into one row for the
+    // same recipient and type within this window.
+    notificationCollapseWindowMinutes: parseInt(
+      optionalEnv('WORKSPACE_NOTIFICATION_COLLAPSE_WINDOW_MINUTES', '15'),
+      10,
+    ),
+
+    // 15 minutes. The sweep only notices the passage of time — every next
+    // action and due date is computed SYNCHRONOUSLY with its transition, so
+    // this interval controls notification latency, not correctness.
+    overdueSweepIntervalMs: parseInt(
+      optionalEnv('WORKSPACE_OVERDUE_SWEEP_INTERVAL_MS', String(15 * 60 * 1000)),
+      10,
+    ),
   },
   gemini: {
     apiKey: optionalEnv('GEMINI_API_KEY', ''),
