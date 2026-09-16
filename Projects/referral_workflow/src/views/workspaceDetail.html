@@ -649,6 +649,12 @@
   }
 
   function nextActionBlock() {
+    // Declared HERE, not read from an enclosing scope. `renderHeader()` has its
+    // own `var readOnly`, and this function is its sibling rather than nested
+    // inside it -- so referencing a bare `readOnly` threw
+    // `ReferenceError: readOnly is not defined`, out of renderHeader(), which
+    // aborted the whole page render and left all thirteen panels empty.
+    var readOnly = !!ws.archivedAt;
     var rel = relativeDue(ws.nextActionDueAt);
     var dueLine = ws.nextActionDueAt
       ? '<span class="' + (ws.overdue ? 'due-over' : 'due-ok') + '">' +
@@ -698,6 +704,8 @@
   }
 
   function wireNextAction() {
+    // Same sibling-scope bug as nextActionBlock() above.
+    var readOnly = !!ws.archivedAt;
     if (readOnly) return;
     var setBtn = document.getElementById('btnSetNextAction');
     if (setBtn) setBtn.addEventListener('click', async function () {
