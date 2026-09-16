@@ -25,6 +25,7 @@
     "backfill:queues": "ts-node -r ./scripts/node-polyfill.js scripts/backfill-queues.ts",
     "backfill:next-actions": "ts-node -r ./scripts/node-polyfill.js scripts/backfill-next-actions.ts",
     "smoke": "ts-node -r ./scripts/node-polyfill.js scripts/smoke.ts",
+    "pagecheck": "ts-node -r ./scripts/node-polyfill.js scripts/page-check.ts",
     "lint:budget": "node scripts/lint-budget.mjs"
   },
   "dependencies": {

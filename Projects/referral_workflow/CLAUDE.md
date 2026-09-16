@@ -36,9 +36,33 @@ two defects shipped through a green unit suite — a viewer panel calling an API
 that does not exist, and page data embedded without escaping. Run it before
 pushing anything that touches a view or a page route.
 
+**Page check (what the smoke check cannot catch):**
+```bash
+DATABASE_URL=./pagecheck.db npm run db:migrate
+DATABASE_URL=./pagecheck.db npm run pagecheck
+```
+
+Loads every page in a real headless browser over the Chrome DevTools Protocol
+and fails on an uncaught exception, a console error, a failed same-origin
+request, or a page whose every card is empty. Needs a Chrome or Chromium binary;
+it looks at `CHROME_PATH`, `CHROME_BIN`, the usual `/usr/bin` names and the
+Playwright download, and fails loudly if it finds none.
+
+Added because `/workspaces/:id` shipped rendering **thirteen blank cards** — a
+`ReferenceError` aborted its client-side render — while every other gate stayed
+green. The smoke check reads the bytes the *server sends*, which were correct;
+these pages render client-side from an embedded payload, so "the bytes are
+right" and "the page works" are different claims. Neither `tsc` nor eslint looks
+inside an inline `<script>` in a `.html` file, so `no-undef` never saw it.
+
+`/analytics` and `/overview` load Chart.js and mermaid from a CDN. When the
+runner cannot reach it they are reported as `cdn-unavailable` and do not fail
+the run — but only for an exception naming a global whose own script is known to
+have failed to load. Any other error on those pages still fails.
+
 **CI** lives at `.github/workflows/ci.yml` in the *repository root* (one level
-above this directory) and runs build, test, lint budget and smoke on every push
-to `main` and every pull request.
+above this directory) and runs build, test, lint budget, smoke and the page
+check on every push to `main` and every pull request.
 
 The lint step is a **regression budget**, not a clean bill of health: `src/` has
 111 pre-existing problems recorded in `.lint-baseline.json`, and CI fails only
@@ -65,7 +89,7 @@ Example: `npx jest tests/unit/referralStateMachine.test.ts`
 ```
 src/
 ├── index.ts                         # Main entry point (skill catalog, IMAP monitor, server startup)
-├── server.ts                        # Express server (clinician UI at localhost:3001)
+├── server.ts                        # Express server (clinician UI at localhost:3000)
 ├── config.ts                        # Centralized config (env vars, timeouts)
 ├── db/
 │   ├── schema.ts                    # Drizzle ORM schema (patients, referrals, messages, skill_executions)
@@ -177,7 +201,7 @@ Located in [src/state/referralStateMachine.ts](src/state/referralStateMachine.ts
 
 ### UI & Manual Fallbacks
 
-Express server at `localhost:3001` provides:
+Express server at `localhost:3000` (the `PORT` default) provides:
 - Clinician review interface (PRD-02: Accept/Decline decision — intentionally manual)
 - Fallback buttons for PRD-03/05/06 when mock scripts unavailable
 
@@ -261,7 +285,7 @@ overdue items and a populated notification bell. `/walkthrough` path H tours the
 
 1. `npm run seed` — populate database
 2. `npm run dev` — start server and IMAP monitor
-3. Visit `localhost:3001` to see the UI
+3. Visit `localhost:3000` to see the UI
 4. Mock scripts will auto-execute on defined triggers (or trigger manually from UI)
 
 ## Git Workflow
