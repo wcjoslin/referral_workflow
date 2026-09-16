@@ -64,7 +64,13 @@
   (function () {
     'use strict';
 
-    var referralId = window.__CCDA_FRAME__.referralId;
+    // Two callers, one frame. PRD-10's referral route passes a referralId and
+    // this derives the legacy URL from it; PRD-23's document and guest routes
+    // pass an explicit url, because they serve any indexed document rather than
+    // one referral's raw_ccda_xml. The referralId branch is kept exactly as it
+    // was so the review page is untouched.
+    var frame = window.__CCDA_FRAME__;
+    var docUrl = frame.url || '/referrals/' + frame.referralId + '/ccda.xml';
     var status = document.getElementById('frameStatus');
 
     function fail(message, err) {
@@ -82,7 +88,7 @@
     }
 
     try {
-      Promise.resolve(viewer.open({ name: 'referral', url: '/referrals/' + referralId + '/ccda.xml' }))
+      Promise.resolve(viewer.open({ name: 'referral', url: docUrl }))
         .then(function () {
           status.style.display = 'none';
         })

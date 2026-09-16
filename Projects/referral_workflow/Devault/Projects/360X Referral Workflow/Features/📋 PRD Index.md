@@ -298,7 +298,7 @@ The logical order for PRD development:
 - Every guest action and every guest document view audited
 - **Prerequisite:** PRD-24
 
-**Status:** ◐ Phase 2a shipped (2026-09-15, v1.2). PRD-29 filled the assertions and PRD-22 the shared comments; Phase 2b is now down to shared documents (PRD-23).
+**Status:** ✅ Complete (2026-09-16). PRD-29 filled the assertions, PRD-22 the shared comments and PRD-23 the shared documents, so Phase 2b is done. The authentication gap recorded against it is PRD-20's to close.
 **Module:** `workspace/`
 
 ---
@@ -354,7 +354,7 @@ The logical order for PRD development:
   transmits, and sending requires attaching 360X context
 - **Prerequisite:** PRD-19, PRD-24
 
-**Status:** ◐ Refined — ready for implementation (2026-09-16, v1.1)
+**Status:** ✅ Implemented (2026-09-16, v1.2)
 **Module:** `workspace/`
 
 ---
@@ -453,7 +453,7 @@ The logical order for PRD development:
 | [[PRD-20 - Shared Queues & Queue View\|20]] | Shared Queues & Queue View | 📋 | Queue entity, membership scope, four-tab queue view | `workspace/`, `views/` |
 | [[PRD-21 - Ownership & Assignment\|21]] | Ownership & Assignment | ✅ | Claim, assign, release, My work, audited | `workspace/` |
 | [[PRD-22 - Referral Conversation\|22]] | Referral Conversation | ✅ | One thread, Internal/Shared visibility, versioned | `workspace/` |
-| [[PRD-23 - Document Collection\|23]] | Document Collection | ◐ | Index over existing artifacts, delivery + access evidence | `workspace/` |
+| [[PRD-23 - Document Collection\|23]] | Document Collection | ✅ | Index over existing artifacts, delivery + access evidence | `workspace/` |
 | [[PRD-24 - Parties & Participants\|24]] | Parties & Participants | ✅ | Organizations + Direct address + protocol mode; internal roles | `workspace/` |
 | [[PRD-25 - Activity History & Audit\|25]] | Activity History & Audit | 📋 | Per-referral event reader, merged feed, gaps closed | `workspace/`, `analytics/` |
 | [[PRD-26 - Next Action & Due Dates\|26]] | Next Action & Due Dates | 📋 | Config-driven actions, awaited-by, overdue sweep | `workspace/` |

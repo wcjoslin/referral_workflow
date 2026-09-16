@@ -5,7 +5,7 @@ prev: "[[PRD-22 - Referral Conversation]]"
 
 # PRD-23: Referral Document Collection
 
-**Status:** Refined — ready for implementation  
+**Status:** Implemented  
 **Team:** Clinical Workflow & Collaboration  
 **Module:** `workspace/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -487,8 +487,10 @@ export async function assertGuestMayRead(
 ): Promise<WorkspaceDocument>;
 ```
 
-`registerDocument()` returns `null` — not a document — when there is nothing to index, which is how
-AC31's "a thread entry with no content is not a document" is expressed without the caller deciding.
+`registerThreadDocument()` returns `null` — not a document — when there is nothing to index, which is
+how AC31's "a thread entry with no content is not a document" is expressed without the caller
+deciding. `registerDocument()` itself never returns null: it indexes, returns the row that is already
+there, or throws.
 
 `deliveryStatus` is derived, never stored twice. Migration: `0017`.
 Config: `config.workspace.uploadDir` (default `./workspace-uploads`),
@@ -645,3 +647,25 @@ design most:
   across every artifact-creation site. In fact `recordThreadMessage()` is the single funnel eleven
   services already call — PRD-24 hooked it for the same reason — so registration is one hook and
   `referral-ccda` is a legacy fallback for a database whose thread backfill was skipped.
+
+**Version:** 1.2 — Implemented. Built as specified at v1.1, with 846 tests across 46 suites and
+179 smoke checks green. Four things implementation settled, the first only because the smoke check
+caught it:
+
+- **The content route recorded access AFTER resolving it, so a failed read left no evidence.**
+  AC23 requires the record before the bytes, and the route had `resolveContent()` first. A document
+  whose underlying row had vanished therefore answered `410` and logged nothing — the one case an
+  auditor most wants to see. Now: confirm the document exists (so the access row has a real foreign
+  key), record the attempt, then resolve. Both the internal and guest content routes.
+- **Registration is chained after the address observation, not parallel with it.**
+  `registerThreadDocument()` attributes a document by resolving its sender through
+  `findPartyByDirectAddress()`, so running both fire-and-forget hooks concurrently would index the
+  first message from a new departmental address with no sender party. The ordering is load-bearing
+  and the comment in `recordThreadMessage()` says so.
+- **The C-CDA frame is parameterised by URL, not duplicated.** `ccdaFrame.html` now derives its
+  URL from an explicit `url` when given one and from `referralId` otherwise, so PRD-10's review-page
+  route is untouched while the document and guest frames serve any indexed document. A smoke check
+  asserts the legacy route still derives its own URL.
+- **`registerDocument()` does not return null.** The signature said it might; it cannot. It indexes,
+  returns the row already there, or throws. Only `registerThreadDocument()` has a nothing-to-index
+  case, and a signature advertising a null the function never produces is a cost every caller pays.

@@ -606,16 +606,55 @@ describe('buildGuestPayload()', () => {
     expect(payload!.workspace.referralState).toBe(ReferralState.SCHEDULED);
   });
 
-  it('still presents the PRD-23 collection as present and empty', async () => {
+  it('carries shared documents and withholds both internal and patient-scoped ones', async () => {
+    // PRD-23 filled sharedDocuments, so this no longer asserts an empty array.
+    // TWO independent gates, and the second is the interesting one: a
+    // patient-scoped claims attachment marked `Shared` must still be withheld.
     const f = await makeWorkspace();
     const accepted = await acceptInvitation((await invite(f)).token);
     const guest = await requireGuest(withCookie(accepted.sessionToken));
 
+    const { registerDocument } = await import('../../../src/modules/workspace/documentService');
+
+    await registerDocument({
+      workspaceId: f.workspaceId,
+      contentSource: 'referral-ccda',
+      contentRef: f.referralId,
+      contentType: 'application/xml',
+      docType: 'Referral Note',
+      source: 'inbound-dsm',
+      receivedAt: new Date(),
+      visibility: 'Shared',
+    });
+    await registerDocument({
+      workspaceId: f.workspaceId,
+      contentSource: 'prior-auth-request',
+      contentRef: 1,
+      contentType: 'application/json',
+      docType: 'INTERNAL-PRIOR-AUTH-BUNDLE',
+      source: 'payer-outbound',
+      receivedAt: new Date(),
+      visibility: 'Internal',
+    });
+    await registerDocument({
+      workspaceId: f.workspaceId,
+      contentSource: 'attachment-response',
+      contentRef: 1,
+      contentType: 'application/xml',
+      docType: 'PATIENT-LEVEL-CLAIMS-ATTACHMENT',
+      source: 'payer-outbound',
+      scope: 'patient',
+      receivedAt: new Date(),
+      // Marked Shared on purpose. Visibility alone would let this through.
+      visibility: 'Shared',
+    });
+
     const payload = await buildGuestPayload(guest);
 
-    // Present AND empty: a consumer written against Phase 2a must not break
-    // when PRD-23 fills it, so the shape is the contract.
-    expect(payload!.sharedDocuments).toEqual([]);
+    expect(payload!.sharedDocuments.map((d) => d.docType)).toEqual(['Referral Note']);
+    // Asserted over the whole serialised payload, not just the document slice.
+    expect(JSON.stringify(payload)).not.toContain('INTERNAL-PRIOR-AUTH-BUNDLE');
+    expect(JSON.stringify(payload)).not.toContain('PATIENT-LEVEL-CLAIMS-ATTACHMENT');
   });
 
   it('carries shared comments and leaves internal ones out of the payload entirely', async () => {

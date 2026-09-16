@@ -795,6 +795,327 @@ async function main(): Promise<void> {
     'the confirmation does not say who will read it',
   );
 
+  // ── Documents (PRD-23) ────────────────────────────────────────────────────
+  //
+  // Inside the guest block for the same reason the conversation checks are: the
+  // only way to prove both document gates is to read the bytes a guest's
+  // browser actually receives while an internal and a patient-scoped document
+  // exist on the same workspace.
+
+  const { backfillDocuments: smokeBackfill, registerDocument: smokeRegister } = await import(
+    '../src/modules/workspace/documentService'
+  );
+
+  const indexed = await smokeBackfill();
+  check(
+    'the backfill indexes the existing referral documents',
+    indexed.messages + indexed.legacyCcda > 0,
+    `indexed ${indexed.messages} messages and ${indexed.legacyCcda} legacy C-CDAs`,
+  );
+  const reIndexed = await smokeBackfill();
+  check(
+    'and re-running it changes nothing',
+    reIndexed.messages === 0 && reIndexed.alreadyIndexed > 0,
+    `second run indexed ${reIndexed.messages}, skipped ${reIndexed.alreadyIndexed}`,
+  );
+
+  // An internal and a patient-scoped document, the two a guest must never see.
+  // The patient-scoped one is marked Shared on purpose: visibility alone would
+  // let it through, which is why there are two gates.
+  await smokeRegister({
+    workspaceId: wsWith.id,
+    contentSource: 'prior-auth-request',
+    contentRef: 90001,
+    contentType: 'application/json',
+    docType: 'INTERNAL-PRIOR-AUTH-DOC',
+    source: 'payer-outbound',
+    receivedAt: new Date(),
+    visibility: 'Internal',
+  });
+  await smokeRegister({
+    workspaceId: wsWith.id,
+    contentSource: 'attachment-response',
+    contentRef: 90002,
+    contentType: 'application/xml',
+    docType: 'PATIENT-LEVEL-CLAIMS-DOC',
+    source: 'payer-outbound',
+    scope: 'patient',
+    receivedAt: new Date(),
+    visibility: 'Shared',
+  });
+
+  const docsApi = await get(`/api/workspaces/${wsWith.id}/documents`, me.id);
+  check('GET the documents returns 200', docsApi.status === 200, `status ${docsApi.status}`);
+  check(
+    'the internal collection carries every source',
+    docsApi.body.includes('"source":"inbound-dsm"') &&
+      docsApi.body.includes('INTERNAL-PRIOR-AUTH-DOC') &&
+      docsApi.body.includes('PATIENT-LEVEL-CLAIMS-DOC'),
+    'a source is missing from the internal collection',
+  );
+  check(
+    'a patient-scoped document is labelled as such rather than passed off as this referral\u2019s',
+    docsApi.body.includes('"scope":"patient"'),
+    'scope is not being reported',
+  );
+
+  const documents = (JSON.parse(docsApi.body) as {
+    documents: { id: number; docType: string; renderAs: string; contentType: string }[];
+  }).documents;
+  const ccdaDoc = documents.find((d) => d.renderAs === 'ccda' && d.docType === 'Referral Note');
+  const internalDoc = documents.find((d) => d.docType === 'INTERNAL-PRIOR-AUTH-DOC');
+  const patientDoc = documents.find((d) => d.docType === 'PATIENT-LEVEL-CLAIMS-DOC');
+  check(
+    'the referral C-CDA is indexed and opens in the viewer',
+    !!ccdaDoc,
+    'no document reported renderAs ccda',
+  );
+
+  if (ccdaDoc) {
+    const content = await get(`/api/documents/${ccdaDoc.id}/content`, me.id);
+    check(
+      'the content endpoint serves the real C-CDA',
+      content.status === 200 && content.body.includes('ClinicalDocument'),
+      `status ${content.status}`,
+    );
+
+    const frame = await get(`/documents/${ccdaDoc.id}/ccda-frame`, me.id);
+    check(
+      'the document-keyed viewer frame renders and points at the content endpoint',
+      frame.status === 200 && frame.body.includes(`/api/documents/${ccdaDoc.id}/content`),
+      `status ${frame.status}`,
+    );
+    check(
+      'and it still loads the real Sialia viewer rather than a stand-in',
+      frame.body.includes('/static/ccdaview'),
+      'the frame is not wired to the vendor viewer',
+    );
+
+    const log = await get(`/api/documents/${ccdaDoc.id}/access-log`, me.id);
+    check(
+      'fetching content wrote an access record naming the viewer',
+      log.status === 200 && log.body.includes('"action":"view"') && log.body.includes('Chen'),
+      `status ${log.status}, body ${log.body.slice(0, 120)}`,
+    );
+  }
+
+  // The regression that matters most: the review page's own viewer is untouched.
+  const legacyXml = await get(`/referrals/${withCcda.id}/ccda.xml`, me.id);
+  const legacyFrame = await get(`/referrals/${withCcda.id}/ccda-frame`, me.id);
+  check(
+    'the referral-keyed C-CDA route still works unchanged',
+    legacyXml.status === 200 && legacyXml.body.includes('ClinicalDocument'),
+    `status ${legacyXml.status}`,
+  );
+  check(
+    'and so does the referral-keyed frame, still deriving its own URL',
+    legacyFrame.status === 200 &&
+      legacyFrame.body.includes(`"referralId":${withCcda.id}`) &&
+      legacyFrame.body.includes("'/referrals/' + frame.referralId + '/ccda.xml'"),
+    `status ${legacyFrame.status}`,
+  );
+
+  // ── Upload, end to end with real bytes ────────────────────────────────────
+  const PDF_BYTES = Buffer.concat([
+    Buffer.from('%PDF-1.7\n'),
+    Buffer.from('smoke-upload-marker'),
+    Buffer.from('\n%%EOF\n'),
+  ]);
+
+  async function upload(
+    pathname: string,
+    body: Buffer,
+    headers: Record<string, string>,
+  ): Promise<{ status: number; json: Record<string, unknown> }> {
+    // Uint8Array rather than the Buffer itself: `fetch`'s BodyInit does not
+    // accept a Node Buffer under these lib types, and a view over the same
+    // bytes costs nothing.
+    const res = await fetch(`${BASE}${pathname}`, {
+      method: 'POST',
+      headers,
+      body: new Uint8Array(body),
+    });
+    const text = await res.text();
+    let parsed: Record<string, unknown> = {};
+    try {
+      parsed = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      parsed = { _unparseable: text.slice(0, 200) };
+    }
+    return { status: res.status, json: parsed };
+  }
+
+  const uploaded = await upload(`/api/workspaces/${wsWith.id}/documents`, PDF_BYTES, {
+    'content-type': 'application/pdf',
+    'x-document-filename': encodeURIComponent('Prior imaging — Ünïcode.pdf'),
+    'x-document-type': encodeURIComponent('Prior Imaging Report'),
+    'x-document-visibility': 'Internal',
+    cookie: `actingUserId=${me.id}`,
+  });
+  check(
+    'a raw-body upload lands and reports that nothing was transmitted',
+    uploaded.status === 200 && uploaded.json.transmitted === false,
+    `status ${uploaded.status}`,
+  );
+  check(
+    'the detected type comes from the bytes',
+    uploaded.json.detectedContentType === 'application/pdf',
+    `detected ${String(uploaded.json.detectedContentType)}`,
+  );
+
+  const uploadedId = uploaded.json.documentId as number;
+  const roundTrip = await fetch(`${BASE}/api/documents/${uploadedId}/content?download=1`, {
+    headers: { cookie: `actingUserId=${me.id}` },
+  });
+  const returned = Buffer.from(await roundTrip.arrayBuffer());
+  check(
+    'the uploaded bytes come back byte-identical',
+    returned.equals(PDF_BYTES),
+    `${returned.length} bytes back, ${PDF_BYTES.length} sent`,
+  );
+  check(
+    'and the download carries a Content-Disposition that survives a non-ASCII name',
+    (roundTrip.headers.get('content-disposition') ?? '').includes("filename*=UTF-8''"),
+    `disposition was ${String(roundTrip.headers.get('content-disposition'))}`,
+  );
+
+  // A lie about the content type must not decide anything.
+  const lying = await upload(`/api/workspaces/${wsWith.id}/documents`, PDF_BYTES, {
+    'content-type': 'image/png',
+    'x-document-filename': encodeURIComponent('claims-to-be.png'),
+    cookie: `actingUserId=${me.id}`,
+  });
+  check(
+    'a declared type that disagrees with the bytes is overruled',
+    lying.status === 200 && lying.json.detectedContentType === 'application/pdf',
+    `detected ${String(lying.json.detectedContentType)}`,
+  );
+
+  const notAllowed = await upload(`/api/workspaces/${wsWith.id}/documents`, Buffer.from('GIF89a x'), {
+    'content-type': 'application/pdf',
+    'x-document-filename': encodeURIComponent('sneaky.pdf'),
+    cookie: `actingUserId=${me.id}`,
+  });
+  check(
+    'a file whose bytes match nothing on the allow-list is refused',
+    notAllowed.status === 400,
+    `status ${notAllowed.status}`,
+  );
+
+  const emptyUpload = await upload(`/api/workspaces/${wsWith.id}/documents`, Buffer.alloc(0), {
+    'content-type': 'application/pdf',
+    'x-document-filename': encodeURIComponent('nothing.pdf'),
+    cookie: `actingUserId=${me.id}`,
+  });
+  check('a zero-byte upload is refused', emptyUpload.status === 400, `status ${emptyUpload.status}`);
+
+  // ── The two guest gates, read from the bytes ──────────────────────────────
+  const guestDocsApi = await getRaw('/api/guest/documents', guestCookie);
+  check('the guest document API returns 200', guestDocsApi.status === 200, `status ${guestDocsApi.status}`);
+  check(
+    'a guest sees the shared referral document',
+    guestDocsApi.body.includes('Referral Note'),
+    'a shared document did not reach the guest',
+  );
+  check(
+    'a guest sees neither the internal nor the patient-scoped document',
+    !guestDocsApi.body.includes('INTERNAL-PRIOR-AUTH-DOC') &&
+      !guestDocsApi.body.includes('PATIENT-LEVEL-CLAIMS-DOC'),
+    'a withheld document reached a guest',
+  );
+  check(
+    'and no internal document field rides along',
+    !guestDocsApi.body.includes('"scope"') &&
+      !guestDocsApi.body.includes('"visibility"') &&
+      !guestDocsApi.body.includes('"deliveryStatus"') &&
+      !guestDocsApi.body.includes('"accessCount"') &&
+      !guestDocsApi.body.includes('"sha256"'),
+    'an internal document field reached a guest',
+  );
+
+  const guestPageDocs = await getRaw('/guest/workspace', guestCookie);
+  check(
+    'the guest page carries the shared document and not the withheld ones',
+    guestPageDocs.body.includes('Referral Note') &&
+      !guestPageDocs.body.includes('INTERNAL-PRIOR-AUTH-DOC') &&
+      !guestPageDocs.body.includes('PATIENT-LEVEL-CLAIMS-DOC'),
+    'the guest page leaked a withheld document',
+  );
+
+  if (internalDoc) {
+    const denied = await getRaw(`/api/guest/documents/${internalDoc.id}/content`, guestCookie);
+    check(
+      'a guest fetching an internal document is refused',
+      denied.status === 403,
+      `status ${denied.status}`,
+    );
+  }
+  if (patientDoc) {
+    const denied = await getRaw(`/api/guest/documents/${patientDoc.id}/content`, guestCookie);
+    check(
+      'a guest fetching a patient-scoped document is refused even though it is marked Shared',
+      denied.status === 403,
+      `status ${denied.status}`,
+    );
+    const log = await get(`/api/documents/${patientDoc.id}/access-log`, me.id);
+    check(
+      'and the refusal is recorded with its reason',
+      log.body.includes('"action":"denied"') && log.body.includes('patient-scoped'),
+      `log was ${log.body.slice(0, 160)}`,
+    );
+  }
+
+  for (const internalRoute of [
+    `/api/workspaces/${wsWith.id}/documents`,
+    ccdaDoc ? `/api/documents/${ccdaDoc.id}/content` : '/api/documents/1/content',
+    ccdaDoc ? `/api/documents/${ccdaDoc.id}/access-log` : '/api/documents/1/access-log',
+  ]) {
+    const res = await getRaw(internalRoute, guestCookie);
+    check(
+      `a guest cookie is refused at ${internalRoute}`,
+      res.status === 403,
+      `status ${res.status} — a guest reached the internal document API`,
+    );
+  }
+
+  const guestUpload = await upload('/api/guest/documents', PDF_BYTES, {
+    'content-type': 'application/pdf',
+    'x-document-filename': encodeURIComponent('from-the-other-side.pdf'),
+    cookie: guestCookie,
+  });
+  check('a guest can upload a document', guestUpload.status === 200, `status ${guestUpload.status}`);
+
+  const guestForcingDoc = await upload('/api/guest/documents', PDF_BYTES, {
+    'content-type': 'application/pdf',
+    'x-document-filename': encodeURIComponent('private.pdf'),
+    'x-document-visibility': 'Internal',
+    cookie: guestCookie,
+  });
+  check(
+    'a guest cannot ask for an internal document',
+    guestForcingDoc.status === 400,
+    `status ${guestForcingDoc.status} — a guest set their own document visibility`,
+  );
+
+  const docPanel = await get(`/workspaces/${wsWith.id}`, me.id);
+  check(
+    'the workspace page carries the document panel',
+    docPanel.body.includes('renderDocuments') &&
+      docPanel.body.includes('doc-evidence') &&
+      docPanel.body.includes('Opened by'),
+    'the document panel is not wired into the page',
+  );
+  check(
+    'and it keeps delivery and access as two separate facts',
+    docPanel.body.includes('>Delivery<') && docPanel.body.includes('>Opened by<'),
+    'delivery and access were merged into one indicator',
+  );
+  check(
+    'the page no longer renders the PRD-23 placeholder',
+    !docPanel.body.includes('>Documents<span class=\\"slot-tag\\">PRD-23'),
+    'the placeholder is still being rendered alongside the real panel',
+  );
+
   await revokeInvitation(invitation.id, other);
   const afterRevoke = await getRaw('/api/guest/workspace', guestCookie);
   check(

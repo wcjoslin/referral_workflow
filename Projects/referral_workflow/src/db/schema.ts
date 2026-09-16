@@ -660,6 +660,133 @@ export const commentMentions = sqliteTable(
   }),
 );
 
+// ── Referral Document Collection (PRD-23) ──────────────────────────
+//
+// AN INDEX, NOT A STORE. One row per document, pointing at wherever the bytes
+// already live. A second copy of every C-CDA would be a synchronization problem
+// and would double the PHI footprint for no benefit, so the only content this
+// table's own storage holds is an upload — the one case with nowhere to point.
+//
+// SIX CONTENT SOURCES, because the bytes genuinely live in six places:
+//
+//   referral-message     referral_messages.content_xml ?? _hl7 ?? _body
+//   referral-ccda        referrals.raw_ccda_xml — LEGACY FALLBACK ONLY, see below
+//   attachment-response  attachment_responses.ccda_xml
+//   prior-auth-request   prior_auth_requests.bundle_json ?? claim_json
+//   prior-auth-response  prior_auth_responses.response_json
+//   upload               a file at upload_path
+//
+// `referral-ccda` is not the primary path for the inbound C-CDA. The live ingest
+// already writes it into the thread (referralService.ts) with the same bytes,
+// and backfill-thread.ts did the same for history, so a referral-message row
+// normally covers it. This source exists only for a referral whose raw_ccda_xml
+// has no ReferralCCDA thread row — possible where the thread backfill was
+// skipped because the table already had rows.
+export const workspaceDocuments = sqliteTable(
+  'workspace_documents',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workspaceId: integer('workspace_id')
+      .references(() => referralWorkspaces.id)
+      .notNull(),
+
+    contentSource: text('content_source').notNull(),
+    contentRef: integer('content_ref'), // null only for 'upload'
+    uploadPath: text('upload_path'), // set only for 'upload'
+    contentType: text('content_type').notNull(),
+    // What the client CLAIMED, recorded only when it disagreed with the type
+    // detected from the file's magic bytes. The detected type is what we serve;
+    // this is kept so the disagreement is auditable rather than silently lost.
+    claimedContentType: text('claimed_content_type'),
+
+    docType: text('doc_type').notNull(),
+    loincCode: text('loinc_code'),
+    protocolRelationship: text('protocol_relationship'),
+    source: text('source').notNull(),
+    // 'inbound-dsm' | 'outbound-dsm' | 'generated' | 'uploaded'
+    //   | 'payer-outbound' | 'payer-inbound'
+
+    // SCOPE IS NOT VISIBILITY, and both gate a guest.
+    //
+    // attachment_responses has no path to a referral: the chain is
+    // attachment_responses -> attachment_requests -> patients, and
+    // attachment_requests links to PATIENTS. A claims attachment belongs to a
+    // patient and was produced for a payer's claim, which may concern a
+    // different episode of care entirely, so indexing it against a referral is
+    // a patient-level association and a patient with three referrals sees it on
+    // all three.
+    //
+    // Rather than hide that, it is recorded: 'patient' for claims attachments
+    // alone, 'referral' for everything with a real link. A patient-scoped
+    // document is withheld from a guest UNCONDITIONALLY, independent of
+    // visibility — two gates, so a payer document about another episode cannot
+    // reach a referring office because somebody toggled one flag.
+    scope: text('scope').notNull().default('referral'), // 'referral' | 'patient'
+
+    senderPartyId: integer('sender_party_id').references(() => workspaceParties.id),
+    senderAddress: text('sender_address'),
+    receivedAt: integer('received_at', { mode: 'timestamp' }).notNull(),
+
+    // DERIVED FROM DIRECTION, not defaulted to Internal for everything: a
+    // document that has already crossed the wire to a party is Shared, because
+    // calling it internal is a fiction — they have it. "Inbound" and "outbound"
+    // mean from or to a party ON THIS WORKSPACE; a payer is neither, so
+    // prior-auth and claims traffic is Internal despite being outbound in the
+    // everyday sense.
+    visibility: text('visibility').notNull().default('Internal'), // 'Internal' | 'Shared'
+
+    deliveryMode: text('delivery_mode'), // 'transmitted' | 'local-only' | null (inbound)
+    immutable: integer('immutable', { mode: 'boolean' }).notNull().default(true),
+    sha256: text('sha256'),
+    // Metadata ONLY. Never a path component: storage uses a generated name, so a
+    // filename containing traversal characters is inert.
+    originalFilename: text('original_filename'),
+    uploadedByUserId: integer('uploaded_by_user_id').references(() => users.id),
+    uploadedByGuestId: integer('uploaded_by_guest_id').references(() => workspaceGuests.id),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    workspaceIdx: index('idx_workspace_documents_workspace').on(
+      table.workspaceId,
+      table.receivedAt,
+    ),
+    // Idempotency as a DATABASE guarantee rather than a check-then-insert, the
+    // same choice PRD-29 made for assertion_key. An upload has a null
+    // contentRef and SQLite treats NULLs as distinct in a unique index, so every
+    // upload is its own row — which is what we want, since uploading the same
+    // file twice is a real thing a person may mean to do.
+    sourceIdx: uniqueIndex('idx_workspace_documents_source').on(
+      table.workspaceId,
+      table.contentSource,
+      table.contentRef,
+    ),
+  }),
+);
+
+// Who opened what, and when. Written BEFORE the bytes are streamed, so a failed
+// stream still leaves evidence of the attempt.
+//
+// No check constraint on the viewer union, unlike PRD-22's author union: a
+// 'denied' record may legitimately have neither viewer set, because a request
+// with no resolvable identity is exactly the kind of attempt worth recording.
+export const documentAccessLog = sqliteTable(
+  'document_access_log',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    documentId: integer('document_id')
+      .references(() => workspaceDocuments.id)
+      .notNull(),
+    viewerUserId: integer('viewer_user_id').references(() => users.id),
+    viewerGuestId: integer('viewer_guest_id').references(() => workspaceGuests.id),
+    action: text('action').notNull(), // 'view' | 'download' | 'denied'
+    reason: text('reason'), // why, on a 'denied'
+    viewedAt: integer('viewed_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    documentIdx: index('idx_document_access_document').on(table.documentId, table.viewedAt),
+  }),
+);
+
 export const attachmentRequests = sqliteTable('attachment_requests', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   patientId: integer('patient_id').references(() => patients.id), // nullable until FHIR patient matched
