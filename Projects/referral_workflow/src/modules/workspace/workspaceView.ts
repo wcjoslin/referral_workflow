@@ -29,6 +29,7 @@ import { Party, PartyRole, ProtocolMode, getParties } from './partyService';
 import { Participant, ParticipantRole, getParticipants } from './participantService';
 import { getDepartments, getResources } from '../prd03/resourceCalendar';
 import { AwaitedBy, getNextActionState } from './nextActionService';
+import { WorkspaceException, listExceptions } from './exceptionService';
 import { queues } from '../../db/schema';
 import { ExtendedReferralData } from '../prd01/cdaParser';
 import { RoutingAssessment } from '../prd02/claudeService';
@@ -122,6 +123,8 @@ export interface WorkspacePayload {
     exceptionReason: string | null;
     archivedAt: string | null;
   };
+  /** PRD-28: open exceptions on this workspace, newest first. */
+  exceptions: WorkspaceException[];
   referral: {
     id: number;
     state: ReferralState;
@@ -222,6 +225,11 @@ export async function buildWorkspacePayload(
   // write, so this reads the stored state rather than recomputing — the
   // transition that caused it already did that synchronously.
   const nextActionState = await getNextActionState(workspaceId);
+
+  // PRD-28: open exceptions. Unscoped by queue on purpose — this page is already
+  // addressed by workspace id, so queue scope would only hide an exception from
+  // somebody looking straight at the workspace it belongs to.
+  const exceptions = await listExceptions({ workspaceId });
 
   // PRD-20: the queue's name. A workspace with no queue is unrouted rather than
   // in a nameless queue, so null is meaningful here.
@@ -370,6 +378,7 @@ export async function buildWorkspacePayload(
       participants: true,
       owner: true,
     },
+    exceptions,
   };
 }
 

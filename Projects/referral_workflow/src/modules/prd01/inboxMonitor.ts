@@ -1,39 +1,33 @@
 import { ImapFlow } from 'imapflow';
-import * as fs from 'fs';
 import * as path from 'path';
 import { config } from '../../config';
 import { processInboundMessage } from './messageProcessor';
 import { ingestReferral } from '../prd02/referralService';
-
-const PROCESSED_IDS_FILE = path.resolve('.processed_messages.json');
-
-/**
- * Loads the set of already-processed message IDs from disk.
- * Provides idempotency across service restarts.
- */
-function loadProcessedIds(): Set<string> {
-  try {
-    if (fs.existsSync(PROCESSED_IDS_FILE)) {
-      const raw = fs.readFileSync(PROCESSED_IDS_FILE, 'utf-8');
-      const ids = JSON.parse(raw) as string[];
-      return new Set(ids);
-    }
-  } catch {
-    console.warn('[InboxMonitor] Could not load processed message IDs — starting fresh');
-  }
-  return new Set();
-}
+import {
+  importLegacyProcessedFile,
+  isAlreadyProcessed,
+  recordProcessed,
+} from '../workspace/correlationService';
 
 /**
- * Persists the current set of processed message IDs to disk.
+ * The legacy idempotency file, imported ONCE and then ignored (PRD-28 AC3).
+ *
+ * WHY IT IS GONE. This file was the only thing preventing the whole mailbox
+ * from being reprocessed, and it:
+ *
+ *   - did not survive a container rebuild, so a redeploy reprocessed everything
+ *   - could not be shared across instances
+ *   - was invisible to an operator, so nobody could see what had been seen
+ *
+ * `processed_messages` replaces it and records the OUTCOME of each message, not
+ * merely that it was seen. Both are not maintained: the file is read once at
+ * startup and never written again.
+ *
+ * What still actually prevents a duplicate referral is the unique constraint on
+ * `referrals.source_message_id`. That has not changed, and this table does not
+ * replace it.
  */
-function saveProcessedIds(ids: Set<string>): void {
-  try {
-    fs.writeFileSync(PROCESSED_IDS_FILE, JSON.stringify([...ids]), 'utf-8');
-  } catch (err) {
-    console.error('[InboxMonitor] Failed to persist processed message IDs:', err);
-  }
-}
+const LEGACY_PROCESSED_IDS_FILE = path.resolve('.processed_messages.json');
 
 /**
  * Senders to ignore — system/bounce addresses and our own outbound address.
@@ -75,47 +69,70 @@ function shouldIgnore(senderAddress: string, subject: string): boolean {
 /**
  * Polls the IMAP inbox once and processes any new, unprocessed messages.
  */
-async function pollOnce(client: ImapFlow, processedIds: Set<string>): Promise<void> {
+async function pollOnce(client: ImapFlow): Promise<void> {
   await client.mailboxOpen(config.imap.mailbox);
 
   // Fetch all messages
   for await (const message of client.fetch('1:*', { envelope: true, source: true })) {
     const messageId = message.envelope?.messageId ?? `uid-${message.uid}`;
 
-    if (processedIds.has(messageId)) {
-      continue; // already processed
+    // PRD-28 AC1/AC2: the durable check. A deliberate replay (AC4) rewrites the
+    // row's outcome to 'replayed', which this does NOT skip — that is what makes
+    // a replay take effect on the next sweep.
+    if (await isAlreadyProcessed(messageId)) {
+      continue;
     }
 
     // Skip system/bounce/self-generated emails to prevent feedback loops
     const senderAddress = message.envelope?.from?.[0]?.address ?? '';
     const subject = message.envelope?.subject ?? '';
     if (shouldIgnore(senderAddress, subject)) {
-      processedIds.add(messageId);
+      // AC5: recorded as IGNORED rather than silently discarded. The ignore
+      // rules are load-bearing — without them our own MDNs and RRIs land back
+      // in the same inbox and loop — so an operator needs to see them firing.
+      await recordProcessed({ messageId, senderAddress, subject, outcome: 'ignored' });
       continue;
     }
 
     if (!message.source) {
+      // NOT recorded. A message with no source has not been processed, and
+      // recording it would mean never retrying it after a transient fetch
+      // failure.
       console.warn(`[InboxMonitor] Message ${messageId} has no source — skipping`);
       continue;
     }
 
     console.log(`[InboxMonitor] Processing new message: ${messageId}`);
 
+    let outcome: 'referral-created' | 'duplicate' | 'exception' = 'exception';
+    let referralId: number | null = null;
     try {
       const processed = await processInboundMessage(message.source);
       console.log('[InboxMonitor] ReferralData:', JSON.stringify(processed.referralData, null, 2));
-      const referralId = await ingestReferral(processed);
+      referralId = await ingestReferral(processed);
       if (referralId !== null) {
+        outcome = 'referral-created';
         console.log(
           `[InboxMonitor] Referral #${referralId} ready for review at http://localhost:${config.server.port}/referrals/${referralId}/review`,
         );
+      } else {
+        // ingestReferral() returns null when it auto-declined. That is not an
+        // error, and PRD-28 records it durably in auto_declined_referrals with
+        // its own exception — so 'exception' is the honest outcome here.
+        outcome = 'exception';
       }
     } catch (err) {
       console.error(`[InboxMonitor] Error processing message ${messageId}:`, err);
+      // A UNIQUE violation on referrals.source_message_id means the referral
+      // already exists — the constraint doing its job. Recorded as a duplicate
+      // rather than an exception, because nothing is wrong.
+      outcome =
+        err instanceof Error && /UNIQUE constraint failed/i.test(err.message)
+          ? 'duplicate'
+          : 'exception';
     }
 
-    processedIds.add(messageId);
-    saveProcessedIds(processedIds);
+    await recordProcessed({ messageId, senderAddress, subject, outcome, referralId });
   }
 }
 
@@ -125,7 +142,15 @@ async function pollOnce(client: ImapFlow, processedIds: Set<string>): Promise<vo
  */
 export async function startInboxMonitor(): Promise<void> {
   console.log('[InboxMonitor] Starting...');
-  const processedIds = loadProcessedIds();
+
+  // AC3: once, at startup, and then never read again.
+  const imported = await importLegacyProcessedFile(LEGACY_PROCESSED_IDS_FILE);
+  if (imported.fileFound) {
+    console.log(
+      `[InboxMonitor] Imported legacy .processed_messages.json: ${imported.imported} new, ` +
+        `${imported.skipped} already known. The file is no longer read or written.`,
+    );
+  }
 
   const client = new ImapFlow({
     host: config.imap.host,
@@ -139,8 +164,10 @@ export async function startInboxMonitor(): Promise<void> {
   });
 
   const shutdown = (): void => {
+    // Nothing to flush any more: each message's outcome is written to
+    // `processed_messages` as it is processed, so a hard kill loses at most the
+    // message in flight rather than the whole session's progress.
     console.log('[InboxMonitor] Shutting down...');
-    saveProcessedIds(processedIds);
     void client.logout();
     process.exit(0);
   };
@@ -150,10 +177,10 @@ export async function startInboxMonitor(): Promise<void> {
   await client.connect();
   console.log(`[InboxMonitor] Connected to ${config.imap.host}. Polling every ${config.imap.pollIntervalMs}ms`);
 
-  await pollOnce(client, processedIds);
+  await pollOnce(client);
 
   setInterval(() => {
-    pollOnce(client, processedIds).catch((err) => {
+    pollOnce(client).catch((err) => {
       console.error('[InboxMonitor] Poll error:', err);
     });
   }, config.imap.pollIntervalMs);

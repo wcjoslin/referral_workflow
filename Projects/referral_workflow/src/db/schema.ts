@@ -964,3 +964,111 @@ export const priorAuthResponses = sqliteTable('prior_auth_responses', {
   receivedVia: text('received_via').notNull(), // 'sync' | 'subscription' | 'inquire'
   receivedAt: integer('received_at', { mode: 'timestamp' }).notNull(),
 });
+
+// ── Correlation & Exceptions (PRD-28) ─────────────────────────────────────────
+//
+// Three mechanisms currently lose data SILENTLY, and these tables are what stop
+// each of them:
+//
+//   - intake idempotency is `.processed_messages.json`, a file on disk that does
+//     not survive a rebuild, cannot be shared across instances, and is invisible
+//     to an operator
+//   - `processAck()` returns `{ matched: false }` for an unrecognised control id
+//     and the ACK is logged and dropped; a non-'AA' code is logged and ignored
+//   - an auto-declined referral writes NO referral row at all and emits
+//     `referral.auto_declined` with `entityId: 0`, so the decision most worth
+//     reviewing is the least visible
+//
+// RETAINING THE RAW ARTIFACT IS THE POINT. An exception without the original
+// message is not workable, and on these paths the exception row is the ONLY
+// copy — today the content is discarded.
+
+export const processedMessages = sqliteTable(
+  'processed_messages',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    messageId: text('message_id').notNull().unique(), // RFC-822 Message-ID
+    senderAddress: text('sender_address'),
+    subject: text('subject'),
+    // 'referral-created' | 'ack-matched' | 'duplicate' | 'ignored' | 'exception' | 'replayed'
+    outcome: text('outcome').notNull(),
+    referralId: integer('referral_id').references(() => referrals.id),
+    // Plain integer, not an FK: an exception row may be written after this one,
+    // and a real constraint here would order the two writes for no benefit.
+    exceptionId: integer('exception_id'),
+    processedAt: integer('processed_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    messageIdx: index('idx_processed_messages_message').on(table.messageId),
+    outcomeIdx: index('idx_processed_messages_outcome').on(table.outcome, table.processedAt),
+  }),
+);
+
+export const workspaceExceptions = sqliteTable(
+  'workspace_exceptions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    // NULL means an orphan — an inbound artifact that matched no workspace.
+    // Those are exactly the ones that used to vanish, so they must be listable
+    // and workable without one (AC24).
+    workspaceId: integer('workspace_id').references(() => referralWorkspaces.id),
+    exceptionType: text('exception_type').notNull(),
+    /** What arrived and why it could not be placed. */
+    summary: text('summary').notNull(),
+    /** What a human can do about it (AC10). Without this the queue is a list of complaints. */
+    remediation: text('remediation'),
+    /** The retained artifact — often the only copy in existence. */
+    rawContent: text('raw_content'),
+    rawContentType: text('raw_content_type'),
+    senderAddress: text('sender_address'),
+    messageControlId: text('message_control_id'),
+    relatedPatientName: text('related_patient_name'),
+    metadata: text('metadata'), // JSON, type-specific
+    /**
+     * The work status to restore on resolution (AC23).
+     *
+     * Captured at raise time because raising an exception OVERWRITES it, and
+     * without this the resolution has to guess — which for a workspace that was
+     * mid-flight means guessing wrong.
+     */
+    priorWorkStatus: text('prior_work_status'),
+    resolvedAt: integer('resolved_at', { mode: 'timestamp' }),
+    resolvedByActor: text('resolved_by_actor'),
+    resolution: text('resolution'),
+    resolutionNote: text('resolution_note'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    workspaceIdx: index('idx_workspace_exceptions_workspace').on(
+      table.workspaceId,
+      table.resolvedAt,
+    ),
+    openIdx: index('idx_workspace_exceptions_open').on(table.resolvedAt, table.exceptionType),
+    // Deduplication for the edge case in the test plan: two exceptions for the
+    // same inbound message. PARTIAL, on open rows only, so the same message
+    // failing again AFTER a resolution can legitimately raise a fresh one.
+    dedupeIdx: uniqueIndex('idx_workspace_exceptions_dedupe')
+      .on(table.exceptionType, table.messageControlId)
+      .where(sql`${table.resolvedAt} IS NULL AND ${table.messageControlId} IS NOT NULL`),
+  }),
+);
+
+export const autoDeclinedReferrals = sqliteTable(
+  'auto_declined_referrals',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    sourceMessageId: text('source_message_id').notNull().unique(),
+    referrerAddress: text('referrer_address').notNull(),
+    patientName: text('patient_name'),
+    patientDob: text('patient_dob'),
+    declineReasons: text('decline_reasons').notNull(), // JSON array
+    // The inbound C-CDA. Retained because the current code sends an RRI and then
+    // discards it, which is what makes an auto-decline unreviewable today.
+    rawCcdaXml: text('raw_ccda_xml'),
+    convertedReferralId: integer('converted_referral_id').references(() => referrals.id),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    createdIdx: index('idx_auto_declined_created').on(table.createdAt),
+  }),
+);

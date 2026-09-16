@@ -180,8 +180,9 @@ export async function getWorkspaceByReferralId(referralId: number): Promise<Work
  * from a protocol event alone, which is correct: closing the loop is not by
  * itself evidence that internal work is outstanding.
  *
- * PRD-28's source, when it arrives, ORs into workspaceHasOpenItemsAsync() below
- * or into the synchronous row-only rule; it does not fork this function.
+ * PRD-28 HAS NOW SUPPLIED ITS SOURCE TOO: an unresolved exception. So this now
+ * ORs two real sources, exactly where the earlier comment said they would go,
+ * and no caller changed.
  */
 export async function hasOpenInternalItems(workspaceId: number): Promise<boolean> {
   const workspace = await getWorkspace(workspaceId);
@@ -192,9 +193,11 @@ export async function hasOpenInternalItems(workspaceId: number): Promise<boolean
 /**
  * The sources answerable from the workspace ROW ALONE, with no query.
  *
- * Still none of them. The parameter is kept because PRD-28 is expected to add a
- * clause that reads the row, and because every caller is written against this
- * signature.
+ * Still none of them, and PRD-28 did not add one after all: its source is an
+ * unresolved EXCEPTION ROW, which needs a query. The parameter is kept because
+ * every caller is written against this signature and because the row-only
+ * shortcut is still the right place for anything that can be answered without
+ * one.
  */
 function workspaceHasOpenItems(_workspace: Workspace): boolean {
   return false;
@@ -212,8 +215,17 @@ function workspaceHasOpenItems(_workspace: Workspace): boolean {
  */
 async function workspaceHasOpenItemsAsync(workspace: Workspace): Promise<boolean> {
   if (workspaceHasOpenItems(workspace)) return true;
+
   const { hasUnacknowledgedMention } = await import('./commentService');
-  return hasUnacknowledgedMention(workspace.id);
+  if (await hasUnacknowledgedMention(workspace.id)) return true;
+
+  // PRD-28's source, arriving exactly where the earlier comment promised: an
+  // unresolved exception is outstanding internal work, so a protocol event that
+  // closes the loop while one is open derives `Follow-up-Required` rather than
+  // `Resolved`. Closing the loop with an unplaced artifact against the referral
+  // is precisely the case that should not read as resolved.
+  const { hasOpenException } = await import('./exceptionService');
+  return hasOpenException(workspace.id);
 }
 
 // ── Creation ──────────────────────────────────────────────────────────────────

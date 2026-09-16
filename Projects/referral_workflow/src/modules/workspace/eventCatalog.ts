@@ -105,6 +105,14 @@ export const WorkspaceEvents = {
   NEXT_ACTION_CHANGED: 'workspace.next_action_changed',
   DUE_DATE_OVERRIDDEN: 'workspace.due_date_overridden',
   OVERDUE: 'workspace.overdue',
+
+  EXCEPTION_RAISED: 'workspace.exception_raised',
+  EXCEPTION_RESOLVED: 'workspace.exception_resolved',
+  REASSOCIATED: 'workspace.reassociated',
+  AUTO_DECLINED_RECORDED: 'workspace.auto_declined_recorded',
+  AUTO_DECLINED_CONVERTED: 'workspace.auto_declined_converted',
+  MESSAGE_REPLAYED: 'workspace.message_replayed',
+  DUPLICATE_PATIENT_FLAGGED: 'workspace.duplicate_patient_flagged',
 } as const;
 
 /**
@@ -186,6 +194,10 @@ const STATUS_EVENTS: readonly string[] = [
   WorkspaceEvents.WORK_STATUS_PROPOSAL_DECLINED,
   WorkspaceEvents.WORK_STATUS_RESYNCED,
   WorkspaceEvents.ASSERTION_MADE,
+  // PRD-28: both move `work_status` — into Exception and back out — so they
+  // belong with the other status movers rather than reading as system noise.
+  WorkspaceEvents.EXCEPTION_RAISED,
+  WorkspaceEvents.EXCEPTION_RESOLVED,
 ];
 
 /** Events a guest performed, whatever their actor string turns out to be. */

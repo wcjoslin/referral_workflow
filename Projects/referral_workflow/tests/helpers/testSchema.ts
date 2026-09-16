@@ -426,4 +426,64 @@ export const TEST_SCHEMA_DDL = `
   );
   CREATE INDEX idx_saved_filters_user ON saved_filters (user_id, surface);
   CREATE UNIQUE INDEX idx_saved_filters_name ON saved_filters (user_id, surface, name);
+
+  -- ── Correlation & Exceptions (PRD-28) ─────────────────────────────────────
+  --
+  -- idx_workspace_exceptions_dedupe is reproduced deliberately, like the other
+  -- partial indexes above: it is what makes "one open exception per (type,
+  -- control id)" a database invariant rather than a check-then-insert, and a
+  -- suite running without it would pass while the real schema rejected the
+  -- same write.
+  CREATE TABLE processed_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL UNIQUE,
+    sender_address TEXT,
+    subject TEXT,
+    outcome TEXT NOT NULL,
+    referral_id INTEGER,
+    exception_id INTEGER,
+    processed_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_processed_messages_message ON processed_messages (message_id);
+  CREATE INDEX idx_processed_messages_outcome ON processed_messages (outcome, processed_at);
+
+  CREATE TABLE workspace_exceptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id INTEGER,
+    exception_type TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    remediation TEXT,
+    raw_content TEXT,
+    raw_content_type TEXT,
+    sender_address TEXT,
+    message_control_id TEXT,
+    related_patient_name TEXT,
+    metadata TEXT,
+    prior_work_status TEXT,
+    resolved_at INTEGER,
+    resolved_by_actor TEXT,
+    resolution TEXT,
+    resolution_note TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_workspace_exceptions_workspace
+    ON workspace_exceptions (workspace_id, resolved_at);
+  CREATE INDEX idx_workspace_exceptions_open
+    ON workspace_exceptions (resolved_at, exception_type);
+  CREATE UNIQUE INDEX idx_workspace_exceptions_dedupe
+    ON workspace_exceptions (exception_type, message_control_id)
+    WHERE resolved_at IS NULL AND message_control_id IS NOT NULL;
+
+  CREATE TABLE auto_declined_referrals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_message_id TEXT NOT NULL UNIQUE,
+    referrer_address TEXT NOT NULL,
+    patient_name TEXT,
+    patient_dob TEXT,
+    decline_reasons TEXT NOT NULL,
+    raw_ccda_xml TEXT,
+    converted_referral_id INTEGER,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_auto_declined_created ON auto_declined_referrals (created_at);
 `

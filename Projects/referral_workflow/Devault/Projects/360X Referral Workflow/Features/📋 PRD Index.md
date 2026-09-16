@@ -450,7 +450,7 @@ every deadline in the database while looking like the feature working.
 
 ---
 
-### 28. **[[PRD-28 - Correlation & Exception Queue|PRD-28: Correlation, Reconciliation & Exception Queue]]** 📋
+### 28. **[[PRD-28 - Correlation & Exception Queue|PRD-28: Correlation, Reconciliation & Exception Queue]]** ✅
 **Stop losing messages.** Unmatched ACKs are dropped today, auto-declines write no row, patients are never deduped.
 
 - `processed_messages` table replacing the `.processed_messages.json` file
@@ -459,7 +459,12 @@ every deadline in the database while looking like the feature working.
 - Duplicate patients flagged for a human, never auto-merged
 - **Prerequisite:** PRD-18, PRD-20, PRD-29
 
-**Status:** 📋 Drafting
+**Status:** ✅ Complete (2026-09-16). Two real bugs found by tests written for the acceptance
+criteria — the work-status restore used the wrong exception's prior status, and recency alone
+qualified a correlation candidate — plus a gap the live smoke check exposed: with recency correctly
+demoted, an unranked orphan had no reassociation path at all. Also fills PRD-18's reserved
+`hasOpenInternalItems()` slot, so closing the protocol loop with an unplaced artifact now derives
+`Follow-up-Required` rather than `Resolved`.
 **Module:** `workspace/`, `prd01/`
 
 ---
@@ -493,7 +498,7 @@ every deadline in the database while looking like the feature working.
 | [[PRD-25 - Activity History & Audit\|25]] | Activity History & Audit | ✅ | Per-referral event reader, merged feed, gaps closed | `workspace/`, `analytics/` |
 | [[PRD-26 - Next Action & Due Dates\|26]] | Next Action & Due Dates | ✅ | Config-driven actions, awaited-by, overdue sweep | `workspace/` |
 | [[PRD-27 - Notifications\|27]] | Notifications | 📋 | Nine triggers, one funnel, guest allow list | `workspace/` |
-| [[PRD-28 - Correlation & Exception Queue\|28]] | Correlation & Exception Queue | 📋 | Idempotent intake, exceptions, manual reassociation | `workspace/`, `prd01/` |
+| [[PRD-28 - Correlation & Exception Queue\|28]] | Correlation & Exception Queue | ✅ | Idempotent intake, exceptions, manual reassociation | `workspace/`, `prd01/` |
 | [[PRD-29 - 360X Protocol Gateway\|29]] | 360X Protocol Gateway | ✅ | Context authoring, artifact rendering, record-then-transmit | `workspace/` |
 | [[PRD-30 - Guest Participation\|30]] | Guest Participation | ✅ | Scoped invitations, guest view, audited external access | `workspace/` |
 | [[PRD-31 - Caller Authentication\|31]] | Caller Authentication | ⏸️ | Deferred out of the epic; gates public deployment | `workspace/`, `server.ts` |

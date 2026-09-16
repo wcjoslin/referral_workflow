@@ -114,6 +114,17 @@
   .status-block { min-width: 190px; }
   .status-explain { font-size: 0.72rem; color: var(--color-text-muted); margin-top: 5px; max-width: 260px; line-height: 1.45; }
 
+  /* PRD-28 — the exception panel. */
+  .exc-panel { margin-top: 18px; padding: 14px 16px; border-radius: 8px; background: #fff5f5;
+               border-left: 3px solid #dc3545; }
+  .exc-item { padding: 8px 0; border-bottom: 1px solid #f8d7da; }
+  .exc-item:last-child { border-bottom: none; }
+  .exc-type { display: inline-block; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.04em;
+              text-transform: uppercase; background: #f8d7da; color: #58151c; border-radius: 20px;
+              padding: 2px 9px; margin-right: 8px; }
+  .exc-sum { font-size: 0.9rem; font-weight: 600; margin: 4px 0 2px; line-height: 1.4; }
+  .exc-rem { font-size: 0.8rem; color: #664d03; }
+
   /* PRD-26 — next action, due date, awaited-by. */
   .na-block { margin-top: 18px; padding: 14px 16px; border-radius: 8px;
               background: #f8f9fa; border-left: 3px solid var(--color-brand); }
@@ -567,6 +578,37 @@
 
   // ── Header (AC1, AC2, AC5, AC6, AC7, AC7a, AC8) ───────────────────────────
 
+  // ── PRD-28: open exceptions ───────────────────────────────────────────────
+
+  /**
+   * AC22. Shown at the TOP of the header, above the next action, because an
+   * unplaced artifact against this referral outranks whatever the rule table
+   * says to do next — and because the work status reads `Exception` and a
+   * coordinator needs to know why without leaving the page.
+   */
+  function exceptionPanel() {
+    var list = (window.__WORKSPACE_DATA__ && window.__WORKSPACE_DATA__.exceptions) || [];
+    if (!list.length) return '';
+
+    return '<div class="exc-panel">' +
+      '<span class="label">' + list.length +
+        (list.length === 1 ? ' open exception' : ' open exceptions') + '</span>' +
+      list.map(function (e) {
+        return '<div class="exc-item">' +
+          '<div><span class="exc-type">' + esc(e.exceptionType) + '</span>' +
+            '<span class="muted" style="font-size:0.76rem;">' +
+              esc(e.ageHours < 1 ? 'just now' : e.ageHours + 'h old') + '</span></div>' +
+          '<div class="exc-sum">' + esc(e.summary) + '</div>' +
+          (e.remediation ? '<div class="exc-rem">' + esc(e.remediation) + '</div>' : '') +
+        '</div>';
+      }).join('') +
+      '<div class="status-explain" style="max-width:none;">Work on these in the ' +
+        '<a href="/exceptions">exception queue</a>, which holds the retained artifact and the ' +
+        'reassociation controls. Resolving them all returns the work status to what it was before ' +
+        'the first one was raised.</div>' +
+    '</div>';
+  }
+
   // ── PRD-26: next action, due date, and who owes the move ──────────────────
 
   /**
@@ -752,6 +794,7 @@
         '</div>' +
       '</div>' +
 
+      exceptionPanel() +
       nextActionBlock() +
 
       '<div class="hdr-reason">' +

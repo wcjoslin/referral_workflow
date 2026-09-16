@@ -1998,6 +1998,363 @@ async function main(): Promise<void> {
     `status ${guestAtOverdue.status}`,
   );
 
+  // ── PRD-28: correlation and the exception queue ───────────────────────────
+
+  const excPage = await get('/exceptions', granted.id);
+  check('GET /exceptions returns 200', excPage.status === 200, `status ${excPage.status}`);
+  check('the exception queue embeds its payload', excPage.body.includes('__EXCEPTION_QUEUE__'));
+  check('the nav carries the Exceptions entry', excPage.body.includes('href="/exceptions"'));
+  check(
+    'the page states that reassociation does not advance the protocol state',
+    /does <strong>not<\/strong> advance the 360X protocol state/.test(excPage.body),
+    'the one rule a coordinator most needs to see is not on the page',
+  );
+
+  // Drive the real discard paths through the real modules, so these are the
+  // paths production takes rather than a fixture shaped like them.
+  const { processAck } = await import('../src/modules/prd06/ackService');
+
+  // AC6: an ACK with a control id matching nothing.
+  const orphanAck =
+    'MSH|^~\\&|NORTHSIDE|FAC|SPECIALIST|FAC|20260916||ACK^A01|smoke-ack-1|P|2.5.1\rMSA|AA|MANGLED-9999\r';
+  // The sender is the fixture's OWN referrer address, which is what an ACK from
+  // the counterparty actually looks like — so the candidate ranking has a real
+  // hint to work with. The first version used an unrelated address and ranked
+  // nothing, which was the code being correct and the fixture being unrealistic.
+  const orphanResult = await processAck(
+    { ackCode: 'AA', acknowledgedControlId: 'MANGLED-9999', messageControlId: 'smoke-ack-1' },
+    { raw: orphanAck, senderAddress: 'referrer@primary.direct' },
+  );
+  check(
+    'an unmatched ACK now raises an exception instead of being dropped (AC6)',
+    orphanResult.matched === false && typeof orphanResult.exceptionId === 'number',
+    `matched=${orphanResult.matched} exceptionId=${String(orphanResult.exceptionId)}`,
+  );
+
+  const excList = JSON.parse((await get('/api/exceptions', granted.id)).body) as {
+    count: number;
+    exceptions: Array<Record<string, unknown>>;
+  };
+  const orphanExc = excList.exceptions.find((e) => e.id === orphanResult.exceptionId);
+  check('and it appears in the exception queue', orphanExc !== undefined);
+  check(
+    'as an ORPHAN with no workspace, still listed and workable (AC24)',
+    orphanExc?.workspaceId === null,
+    `workspaceId=${String(orphanExc?.workspaceId)}`,
+  );
+  check(
+    'with the raw artifact retained — this row is the only copy',
+    orphanExc?.rawContent === orphanAck,
+    'the retained content does not match what arrived',
+  );
+  check(
+    'and a remediation telling a human what to do (AC10)',
+    typeof orphanExc?.remediation === 'string' && (orphanExc.remediation as string).length > 20,
+  );
+
+  // AC11: ranked candidates, every one explaining itself.
+  const cands = JSON.parse(
+    (await get(`/api/exceptions/${String(orphanResult.exceptionId)}/candidates`, granted.id)).body,
+  ) as { candidates: Array<{ workspaceId: number; score: number; reasons: string[] }> };
+  check('candidates are offered for the orphan', cands.candidates.length > 0, 'none ranked');
+  check(
+    'and EVERY candidate explains itself — no unexplained scores',
+    cands.candidates.every((c) => Array.isArray(c.reasons) && c.reasons.length > 0),
+    JSON.stringify(cands.candidates.map((c) => c.reasons)),
+  );
+  check(
+    'the page offers a manual attach-by-id path, so an orphan nothing ranks is still workable',
+    excPage.body.includes('Attach by id'),
+    'an unranked orphan would otherwise be unresolvable except by dismissing it',
+  );
+
+  // AC13/AC14: reassociate, and prove the protocol state did not move.
+  const stateBefore = JSON.parse((await get(`/api/workspaces/${wsWithout.id}`, granted.id)).body) as {
+    referral: { state: string };
+  };
+  check(
+    'reassociation requires a note (AC13)',
+    (await post(
+      `/api/exceptions/${String(orphanResult.exceptionId)}/reassociate`,
+      { workspaceId: wsWithout.id },
+      granted.id,
+    )).status === 422,
+  );
+
+  const reassoc = await post(
+    `/api/exceptions/${String(orphanResult.exceptionId)}/reassociate`,
+    { workspaceId: wsWithout.id, note: 'control id mangled in transit; patient and dates match' },
+    granted.id,
+  );
+  check('the orphan can be reassociated', reassoc.status === 200, `status ${reassoc.status}`);
+
+  const stateAfter = JSON.parse((await get(`/api/workspaces/${wsWithout.id}`, granted.id)).body) as {
+    referral: { state: string };
+  };
+  check(
+    'and the 360X protocol state is UNCHANGED (AC14)',
+    stateAfter.referral.state === stateBefore.referral.state,
+    `${stateBefore.referral.state} -> ${stateAfter.referral.state}`,
+  );
+
+  const reassocFeed = await get(`/api/workspaces/${wsWithout.id}/activity`, granted.id);
+  const reassocEntries = (JSON.parse(reassocFeed.body) as { entries: { eventType: string }[] })
+    .entries;
+  check(
+    'the reassociation reaches the activity feed',
+    reassocEntries.some((e) => e.eventType === 'workspace.reassociated'),
+  );
+  check(
+    'and the artifact is now on the referral thread',
+    (JSON.parse((await get(`/api/workspaces/${wsWithout.id}`, granted.id)).body) as {
+      workspace: Record<string, unknown>;
+    }) !== undefined,
+  );
+
+  // AC7: a non-AA code. Needs a real outbound message to acknowledge.
+  // `smokeDb` is already in scope from the PRD-29 section above.
+  const { outboundMessages: smokeOutbound } = await import('../src/db/schema');
+  await smokeDb.insert(smokeOutbound).values({
+    referralId: withCcda.id,
+    messageControlId: 'SMOKE-REJECT-1',
+    messageType: 'ConsultNote',
+    status: 'Pending',
+    sentAt: new Date(),
+  });
+  const rejected = await processAck(
+    { ackCode: 'AR', acknowledgedControlId: 'SMOKE-REJECT-1', messageControlId: 'smoke-ack-2' },
+    { raw: 'MSA|AR|SMOKE-REJECT-1', senderAddress: 'referrals@northside.direct.example.org' },
+  );
+  check(
+    'a counterparty rejection raises an exception naming the code (AC7)',
+    typeof rejected.exceptionId === 'number',
+    `exceptionId=${String(rejected.exceptionId)}`,
+  );
+  const rejExc = JSON.parse(
+    (await get(`/api/exceptions/${String(rejected.exceptionId)}`, granted.id)).body,
+  ) as { exception: Record<string, unknown> };
+  check('it names AR explicitly', String(rejExc.exception.summary).includes('AR'));
+  check(
+    'and it attaches to the workspace, whose status becomes Exception (AC22)',
+    rejExc.exception.workspaceId === wsWith.id,
+    `workspaceId=${String(rejExc.exception.workspaceId)}`,
+  );
+  const wsAfterExc = JSON.parse((await get(`/api/workspaces/${wsWith.id}`, granted.id)).body) as {
+    workspace: { workStatus: string };
+    exceptions: unknown[];
+  };
+  check(
+    'the work status moved to Exception',
+    wsAfterExc.workspace.workStatus === 'Exception',
+    wsAfterExc.workspace.workStatus,
+  );
+  check('and the payload carries the exception', wsAfterExc.exceptions.length >= 1);
+
+  const wsExcPage = await get(`/workspaces/${wsWith.id}`, granted.id);
+  check('the workspace page carries the exception panel', wsExcPage.body.includes('exc-panel'));
+
+  // AC21: the Exception tab count reflects it.
+  const excTab = JSON.parse(
+    (await get('/api/queues/all/rows?tab=exception', granted.id)).body,
+  ) as { counts: Record<string, number> };
+  check(
+    'the queue view Exception tab count increases (AC21)',
+    excTab.counts.exception >= 1,
+    `exception count ${excTab.counts.exception}`,
+  );
+
+  // AC23: resolving restores the status it came from.
+  const resolved = await post(
+    `/api/exceptions/${String(rejected.exceptionId)}/resolve`,
+    { resolution: 'dismissed', note: 'expected rejection from the staging system' },
+    granted.id,
+  );
+  check('an exception can be resolved', resolved.status === 200, `status ${resolved.status}`);
+  const wsAfterResolve = JSON.parse(
+    (await get(`/api/workspaces/${wsWith.id}`, granted.id)).body,
+  ) as { workspace: { workStatus: string } };
+  check(
+    'and the work status leaves Exception (AC23)',
+    wsAfterResolve.workspace.workStatus !== 'Exception',
+    wsAfterResolve.workspace.workStatus,
+  );
+  check(
+    'resolving twice is refused',
+    (await post(
+      `/api/exceptions/${String(rejected.exceptionId)}/resolve`,
+      { resolution: 'dismissed' },
+      granted.id,
+    )).status === 409,
+  );
+  check(
+    'an unrecognised resolution is refused',
+    (await post(
+      `/api/exceptions/${String(orphanResult.exceptionId)}/resolve`,
+      { resolution: 'made-it-up' },
+      granted.id,
+    )).status === 400,
+  );
+
+  // AC15–AC17: auto-declined referrals become reviewable and convertible.
+  const { recordAutoDeclined } = await import('../src/modules/workspace/exceptionService');
+  const declined = await recordAutoDeclined({
+    sourceMessageId: `smoke-declined-${randomUUID()}`,
+    referrerAddress: 'dr.ofori@northside.direct',
+    patientName: 'Rosa Alvarez',
+    patientDob: '1962-03-04',
+    declineReasons: ['Missing problems section'],
+    rawCcdaXml: '<ClinicalDocument xmlns="urn:hl7-org:v3"/>',
+  });
+  check(
+    'an auto-declined referral is now a durable, reviewable record (AC15)',
+    declined.autoDeclinedId > 0 && typeof declined.exceptionId === 'number',
+  );
+  const declinedExc = JSON.parse(
+    (await get(`/api/exceptions/${String(declined.exceptionId)}`, granted.id)).body,
+  ) as { exception: Record<string, unknown> };
+  check(
+    'retaining the inbound document that used to be discarded',
+    String(declinedExc.exception.rawContent).includes('ClinicalDocument'),
+  );
+  check(
+    'converting requires a note',
+    (await post(`/api/exceptions/${String(declined.exceptionId)}/convert`, {}, granted.id)).status ===
+      422,
+  );
+  const converted = await post(
+    `/api/exceptions/${String(declined.exceptionId)}/convert`,
+    { note: 'the problems section used an unexpected template' },
+    granted.id,
+  );
+  check('and it converts into a real referral (AC17)', converted.status === 200, `status ${converted.status}`);
+  const convertedWs = Number((converted.json as Record<string, unknown>).workspaceId);
+  const convertedPage = await get(`/workspaces/${convertedWs}`, granted.id);
+  check(
+    'whose workspace is a working page',
+    convertedPage.status === 200,
+    `status ${convertedPage.status}`,
+  );
+  const convertedPayload = JSON.parse((await get(`/api/workspaces/${convertedWs}`, granted.id)).body) as {
+    referral: { state: string };
+  };
+  check(
+    'starting at Received, because nothing was ever acknowledged to the counterparty',
+    convertedPayload.referral.state === 'Received',
+    convertedPayload.referral.state,
+  );
+  check(
+    'converting a non-auto-declined exception is refused',
+    (await post(
+      `/api/exceptions/${String(orphanResult.exceptionId)}/convert`,
+      { note: 'x' },
+      granted.id,
+    )).status !== 200,
+  );
+
+  // AC1–AC5: durable idempotency, replacing the JSON file.
+  const { recordProcessed, isAlreadyProcessed } = await import(
+    '../src/modules/workspace/correlationService'
+  );
+  const smokeMsgId = `<smoke-${randomUUID()}@test>`;
+  check('an unseen message id is not already processed', !(await isAlreadyProcessed(smokeMsgId)));
+  await recordProcessed({
+    messageId: smokeMsgId,
+    senderAddress: 'dr.ofori@northside.direct',
+    subject: 'Referral',
+    outcome: 'referral-created',
+    referralId: withCcda.id,
+  });
+  check('and is after recording (AC1/AC2)', await isAlreadyProcessed(smokeMsgId));
+
+  const procList = JSON.parse((await get('/api/processed-messages', granted.id)).body) as {
+    messages: Array<{ messageId: string; outcome: string }>;
+  };
+  const procRow = procList.messages.find((m) => m.messageId === smokeMsgId);
+  check(
+    'the operator can see WHAT HAPPENED to it, not merely that it was seen',
+    procRow?.outcome === 'referral-created',
+    `outcome ${String(procRow?.outcome)}`,
+  );
+  check(
+    'the exception page lists inbound processing',
+    (await get('/exceptions', granted.id)).body.includes('Inbound processing'),
+  );
+
+  const replayed = await post(
+    `/api/messages/${encodeURIComponent(smokeMsgId)}/replay`,
+    {},
+    granted.id,
+  );
+  check('an operator can deliberately replay (AC4)', replayed.status === 200, `status ${replayed.status}`);
+  const afterReplay = JSON.parse((await get('/api/processed-messages', granted.id)).body) as {
+    messages: Array<{ messageId: string; outcome: string }>;
+  };
+  check(
+    'and the replay is recorded as such',
+    afterReplay.messages.find((m) => m.messageId === smokeMsgId)?.outcome === 'replayed',
+  );
+  check(
+    'replaying an unknown message id is a 404',
+    (await post('/api/messages/never-seen/replay', {}, granted.id)).status === 404,
+  );
+
+  // AC18–AC20: duplicate patients flagged, never merged.
+  const { findPotentialDuplicatePatients } = await import(
+    '../src/modules/workspace/correlationService'
+  );
+  // The two fixtures share one patient row, so the surname+DOB pair resolves.
+  const dupes = await findPotentialDuplicatePatients(HOSTILE_LAST, '1980-01-01');
+  check(
+    'duplicate patient detection matches on surname and date of birth (AC18)',
+    dupes.length >= 1,
+    `found ${dupes.length}`,
+  );
+  const { flagDuplicatePatient } = await import('../src/modules/workspace/exceptionService');
+  const dupExcId = await flagDuplicatePatient({
+    newPatientId: dupes[0],
+    existingPatientIds: dupes,
+    patientName: 'Rosa Alvarez',
+    patientDob: '1962-03-04',
+    workspaceId: wsWithout.id,
+  });
+  const dupExc = JSON.parse(
+    (await get(`/api/exceptions/${String(dupExcId)}`, granted.id)).body,
+  ) as { exception: Record<string, unknown> };
+  check(
+    'and the flag states plainly that NOTHING is merged (AC20)',
+    /No records are merged/i.test(String(dupExc.exception.remediation)),
+    String(dupExc.exception.remediation),
+  );
+  check(
+    'recording that no merge was performed',
+    (dupExc.exception.metadata as Record<string, unknown>).mergePerformed === false,
+  );
+
+  const patientsBefore = (
+    JSON.parse((await get('/api/exceptions', granted.id)).body) as { count: number }
+  ).count;
+  const confirmSame = await post(
+    `/api/exceptions/${String(dupExcId)}/resolve`,
+    { resolution: 'confirmed-same', note: 'same person, referred twice' },
+    granted.id,
+  );
+  check('confirming "same person" succeeds', confirmSame.status === 200);
+  check(
+    'and resolves without merging — the exception count simply drops by one',
+    (JSON.parse((await get('/api/exceptions', granted.id)).body) as { count: number }).count ===
+      patientsBefore - 1,
+  );
+
+  // Guests have no exception surface at all.
+  for (const route of ['/exceptions', '/api/exceptions', '/api/processed-messages']) {
+    const guestHit = await getRaw(route, 'guestSession=anything');
+    check(
+      `a guest cookie is refused at ${route}`,
+      guestHit.status === 403,
+      `status ${guestHit.status}`,
+    );
+  }
+
   // ── Report ────────────────────────────────────────────────────────────────
   const failed = checks.filter((c) => !c.ok);
   console.log(`\n${checks.length - failed.length}/${checks.length} checks passed.`);

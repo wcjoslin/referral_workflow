@@ -79,6 +79,26 @@ import {
   overrideNextAction,
 } from './modules/workspace/nextActionService';
 import {
+  AlreadyAssociatedError,
+  ExceptionAlreadyResolvedError,
+  ExceptionNotFoundError,
+  ExceptionWorkspaceNotFoundError,
+  WrongExceptionTypeError,
+  candidatesFor,
+  convertAutoDeclined,
+  getException,
+  isExceptionResolution,
+  isExceptionType,
+  listExceptions,
+  reassociate,
+  resolveException,
+} from './modules/workspace/exceptionService';
+import {
+  MessageNotProcessedError,
+  listProcessed,
+  replayMessage,
+} from './modules/workspace/correlationService';
+import {
   OwnerFilter,
   buildWorkspacePayload,
   listWorkspaceRows,
@@ -321,6 +341,7 @@ const NAV_HTML = `<style>
   <span style="color:#fff;font-weight:700;font-size:0.95rem;letter-spacing:0.02em;">360X Referral</span>
   <a href="/" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;margin-left:8px;">Home</a>
   <a href="/queues" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Queues</a>
+  <a href="/exceptions" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Exceptions</a>
   <a href="/workspaces" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Workspaces</a>
   <a href="/overview" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Overview</a>
   <a href="/claims" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Claims</a>
@@ -606,6 +627,288 @@ app.post('/api/workspaces/backfill', async (_req: Request, res: Response, next: 
   try {
     const result = await backfillWorkspaces();
     res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── PRD-28 correlation and the exception queue ───────────────────────────────
+
+/**
+ * The exception queue.
+ *
+ * Scoped through queueService like everything else, with ONE deliberate
+ * difference: orphans are always included. An exception with no workspace is
+ * exactly the kind that used to vanish into a log line, and scoping it out of
+ * every queue would recreate that — nobody would ever see it.
+ */
+app.get('/api/exceptions', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user', message: 'No users are seeded. Run: npm run seed' });
+      return;
+    }
+    const typeParam = typeof req.query.type === 'string' ? req.query.type : '';
+    const { getVisibleQueueIds } = await import('./modules/workspace/queueService');
+    const exceptions = await listExceptions({
+      exceptionType: isExceptionType(typeParam) ? typeParam : undefined,
+      // `?open=0` shows resolved ones too, for the audit trail.
+      openOnly: req.query.open !== '0',
+      queueIds: await getVisibleQueueIds(user),
+    });
+    res.json({ count: exceptions.length, exceptions });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/exceptions/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'exception id must be a positive integer' });
+      return;
+    }
+    const exception = await getException(id);
+    if (!exception) {
+      res.status(404).json({ error: `No exception #${id}` });
+      return;
+    }
+    res.json({ exception });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Ranked candidates for reassociation, each carrying its reasons (AC11). */
+app.get('/api/exceptions/:id/candidates', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'exception id must be a positive integer' });
+      return;
+    }
+    try {
+      res.json({ candidates: await candidatesFor(id) });
+    } catch (err) {
+      if (err instanceof ExceptionNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** AC12/AC13 — attach an orphan to a workspace, fully audited. A note is required. */
+app.post('/api/exceptions/:id/reassociate', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'exception id must be a positive integer' });
+      return;
+    }
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const body = (req.body ?? {}) as { workspaceId?: unknown; note?: unknown };
+    const workspaceId = typeof body.workspaceId === 'number' ? body.workspaceId : Number(body.workspaceId);
+    if (!Number.isInteger(workspaceId) || workspaceId <= 0) {
+      res.status(400).json({ error: 'workspaceId must be a positive integer' });
+      return;
+    }
+    // AC13 wants the reason recorded, so it is required rather than optional:
+    // attaching a clinical document to a patient's record on a hunch, with no
+    // note, is the thing the audit exists to prevent.
+    const note = typeof body.note === 'string' ? body.note.trim() : '';
+    if (!note) {
+      res.status(422).json({ error: 'a note explaining the reassociation is required' });
+      return;
+    }
+
+    try {
+      res.json({ ok: true, exception: await reassociate(id, workspaceId, user, note) });
+    } catch (err) {
+      if (err instanceof ExceptionNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof ExceptionWorkspaceNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof ExceptionAlreadyResolvedError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      if (err instanceof AlreadyAssociatedError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/exceptions/:id/resolve', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'exception id must be a positive integer' });
+      return;
+    }
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const body = (req.body ?? {}) as { resolution?: unknown; note?: unknown };
+    const resolution = typeof body.resolution === 'string' ? body.resolution : '';
+    if (!isExceptionResolution(resolution)) {
+      res.status(400).json({ error: 'resolution is not one of the recognised values' });
+      return;
+    }
+    const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined;
+
+    try {
+      res.json({ ok: true, exception: await resolveException(id, resolution, user, note) });
+    } catch (err) {
+      if (err instanceof ExceptionNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof ExceptionAlreadyResolvedError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** AC17 — an auto-declined referral becomes a real one when the decline was wrong. */
+app.post('/api/exceptions/:id/convert', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'exception id must be a positive integer' });
+      return;
+    }
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const body = (req.body ?? {}) as { note?: unknown };
+    const note = typeof body.note === 'string' ? body.note.trim() : '';
+    if (!note) {
+      res.status(422).json({ error: 'a note explaining why the decline was wrong is required' });
+      return;
+    }
+
+    try {
+      res.json({ ok: true, ...(await convertAutoDeclined(id, user, note)) });
+    } catch (err) {
+      if (err instanceof ExceptionNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof WrongExceptionTypeError) {
+        res.status(422).json({ error: err.message });
+        return;
+      }
+      if (err instanceof ExceptionAlreadyResolvedError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** The operator's view of inbound processing — what was seen and what happened. */
+app.get('/api/processed-messages', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '200'), 10) || 200, 1), 500);
+    res.json({ messages: await listProcessed(limit) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * AC4 — deliberate operator replay.
+ *
+ * Clears the idempotency record so the next inbox sweep reprocesses. Cannot
+ * create a duplicate referral: `referrals.source_message_id` is still unique, so
+ * a message that succeeded the first time is refused at insert.
+ */
+app.post('/api/messages/:messageId/replay', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const messageId = decodeURIComponent(String(req.params.messageId));
+    try {
+      await replayMessage(messageId, user);
+      res.json({ ok: true, messageId });
+    } catch (err) {
+      if (err instanceof MessageNotProcessedError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** The exception queue page. */
+app.get('/exceptions', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res
+        .status(409)
+        .send(notFoundPage('No users are seeded, so no exception queue can be scoped. Run: npm run seed'));
+      return;
+    }
+    const { getVisibleQueueIds } = await import('./modules/workspace/queueService');
+    const scope = await getVisibleQueueIds(user);
+    const exceptions = await listExceptions({ queueIds: scope });
+
+    const templatePath = path.join(__dirname, 'views', 'exceptionQueue.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    const html = template.replace(
+      '/*__EXCEPTION_QUEUE__*/',
+      `window.__EXCEPTION_QUEUE__ = ${embedJson({
+        exceptions,
+        resolved: await listExceptions({ openOnly: false, queueIds: scope }),
+        processed: await listProcessed(50),
+        actingUser: { id: user.id, displayName: user.displayName },
+      })};`,
+    );
+    res.setHeader('Content-Type', 'text/html');
+    res.send(injectNav(html));
   } catch (err) {
     next(err);
   }
