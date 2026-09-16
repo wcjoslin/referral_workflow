@@ -39,6 +39,15 @@ import * as path from 'path';
 const PORT = process.env.SMOKE_PORT ?? '3599';
 process.env.PORT = PORT;
 
+// Pin the invite-link reveal OFF, for the same reason the port is pinned: this
+// script asserts the DEFAULT behaviour, that the raw guest token never reaches
+// the inviter's browser. A developer running the demo has
+// WORKSPACE_REVEAL_INVITE_LINK=true in their .env, which dotenv loads into the
+// same process -- so without this the check failed against their local config
+// and read as a security regression in the code. CI never set the variable, so
+// the sensitivity would only ever have bitten someone running the demo.
+process.env.WORKSPACE_REVEAL_INVITE_LINK = 'false';
+
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** The exact shape of the XSS that shipped: a name that closes the element. */
