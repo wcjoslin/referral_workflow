@@ -19,7 +19,7 @@ import Database from 'better-sqlite3';
 import * as path from 'path';
 import { config } from '../src/config';
 import { CLINICIAN_SLUGS, seedUsers } from '../src/modules/workspace/userRoster';
-import { seedQueues } from '../src/modules/workspace/queueService';
+import { seedQueueMemberships, seedQueues } from '../src/modules/workspace/queueService';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -141,7 +141,12 @@ async function main(): Promise<void> {
   // does that afterwards. Seeding the queues is still needed so the backfill and
   // the queue view have somewhere to route TO.
   const queues = await seedQueues();
-  console.log(`Queues: ${queues.created} created, ${queues.existing} already present.\n`);
+  console.log(`Queues: ${queues.created} created, ${queues.existing} already present.`);
+
+  const memberships = await seedQueueMemberships();
+  console.log(
+    `Queue memberships: ${memberships.created} created, ${memberships.existing} already present.\n`,
+  );
 
   const dbPath = config.database.url === ':memory:' ? './referral.db' : config.database.url;
   const sqlite = new Database(dbPath);

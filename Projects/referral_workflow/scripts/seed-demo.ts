@@ -12,7 +12,7 @@ import { processInboundMessage } from '../src/modules/prd01/messageProcessor';
 import { ingestReferral } from '../src/modules/prd02/referralService';
 import { buildRawEmail } from '../src/demoScenarios';
 import { seedUsers } from '../src/modules/workspace/userRoster';
-import { seedQueues } from '../src/modules/workspace/queueService';
+import { seedQueueMemberships, seedQueues } from '../src/modules/workspace/queueService';
 
 const FIXTURE = path.resolve(__dirname, '../tests/fixtures/sample-referral.xml');
 const cdaXml = fs.readFileSync(FIXTURE, 'utf-8');
@@ -31,6 +31,11 @@ async function main(): Promise<void> {
   // an empty queue view, which is exactly the wrong first impression.
   const q = await seedQueues();
   console.log(`Seeded queues: ${q.created} created, ${q.existing} already present.`);
+
+  // Without memberships every non-manager resolves to an EMPTY queue scope,
+  // so the queue list renders blank and each slug refuses with 403.
+  const qm = await seedQueueMemberships();
+  console.log(`Queue memberships: ${qm.created} created, ${qm.existing} already present.`);
 
   console.log('Seeding demo referral...\n');
 

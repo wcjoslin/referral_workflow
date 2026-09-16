@@ -45,6 +45,7 @@ import {
   referralWorkspaces,
   referrals,
   savedFilters,
+  users,
   workspaceParties,
 } from '../../db/schema';
 import { emitEvent } from '../analytics/eventService';
@@ -1092,6 +1093,203 @@ export async function seedQueues(): Promise<{ created: number; existing: number 
   }
 
   return { created, existing };
+}
+
+/**
+ * Who belongs to which queue, by email and slug.
+ *
+ * WHY THIS IS SEEDED AT ALL. `queue_members` held zero rows, and seven of the
+ * eight seeded users have `allQueuesAccess = false`. So `getVisibleQueueIds()`
+ * correctly returned `[]`, `scopeClause()` correctly returned `sql`1 = 0``, and
+ * a fresh install showed an EMPTY queue list with every queue slug refusing
+ * with 403. The scoping was working exactly as designed on an empty roster --
+ * there was simply nothing to scope. Only the manager could see anything.
+ *
+ * The assignments are deliberately UNEVEN so the mechanism is visible rather
+ * than merely present: switching acting user in the nav changes which queues
+ * appear, which is the whole point of PRD-20 and cannot be demonstrated when
+ * everyone sees everything.
+ *
+ * Dr. Emily Chen is first by id, which makes her the fallback acting user for a
+ * request with no cookie -- so whatever she can see IS the first screen of the
+ * demo. She gets Cardiology, her largest caseload in the seed.
+ *
+ * Alex Whitfield gets NO rows on purpose. `allQueuesAccess` already grants
+ * everything, and adding memberships would blur the two mechanisms PRD-20
+ * deliberately keeps apart: the explicit see-all grant, and per-queue
+ * membership. An empty membership list plus full visibility is the evidence
+ * that the grant is what does the work.
+ */
+const QUEUE_MEMBERSHIPS: ReadonlyArray<{
+  email: string;
+  queueSlugs: readonly string[];
+  accessLevel?: 'member' | 'manager';
+}> = [
+  // Clinicians: their own departments.
+  { email: 'echen@specialist.example.org', queueSlugs: ['cardiology'] },
+  { email: 'rpatel@specialist.example.org', queueSlugs: ['cardiology', 'neurology'] },
+  { email: 'crodriguez@specialist.example.org', queueSlugs: ['oncology', 'gastroenterology'] },
+  { email: 'skim@specialist.example.org', queueSlugs: ['neurology', 'orthopedics'] },
+  // A coordinator who covers intake and every clinical queue...
+  {
+    email: 'druiz@specialist.example.org',
+    queueSlugs: [
+      DEFAULT_QUEUE_SLUG,
+      'cardiology',
+      'neurology',
+      'oncology',
+      'orthopedics',
+      'gastroenterology',
+    ],
+    accessLevel: 'manager',
+  },
+  // ...and one who covers two, so the two coordinators show visibly different
+  // scopes. Without the contrast, "coordinator" would look like a role that
+  // grants everything.
+  {
+    email: 'praman@specialist.example.org',
+    queueSlugs: [DEFAULT_QUEUE_SLUG, 'cardiology', 'neurology'],
+  },
+  // The scheduler follows the departments that actually book appointments.
+  {
+    email: 'sokafor@specialist.example.org',
+    queueSlugs: ['cardiology', 'orthopedics', 'gastroenterology'],
+  },
+];
+
+/**
+ * Seeds queue memberships, idempotent on (queue, user).
+ *
+ * Inserts directly rather than calling `addQueueMember()`, which emits a
+ * `queue.member_added` audit event per row and needs an `ActingUser` to
+ * attribute it to. Seeding is not somebody adding a colleague to a queue, and
+ * writing 21 audit events on every re-seed would be noise in the very activity
+ * history PRD-25 exists to keep readable.
+ *
+ * Unknown emails and slugs are counted and returned rather than thrown: a
+ * database seeded before a queue existed should still get the memberships that
+ * do resolve, and the caller can report the rest.
+ */
+export async function seedQueueMemberships(): Promise<{
+  created: number;
+  existing: number;
+  skipped: number;
+}> {
+  const now = new Date();
+  let created = 0;
+  let existing = 0;
+  let skipped = 0;
+
+  for (const entry of QUEUE_MEMBERSHIPS) {
+    const [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, entry.email)).limit(1);
+    if (!user) {
+      skipped += entry.queueSlugs.length;
+      continue;
+    }
+
+    for (const slug of entry.queueSlugs) {
+      const [queue] = await db.select({ id: queues.id }).from(queues).where(eq(queues.slug, slug)).limit(1);
+      if (!queue) {
+        skipped += 1;
+        continue;
+      }
+
+      const [found] = await db
+        .select({ id: queueMembers.id })
+        .from(queueMembers)
+        .where(and(eq(queueMembers.queueId, queue.id), eq(queueMembers.userId, user.id)))
+        .limit(1);
+      if (found) {
+        existing += 1;
+        continue;
+      }
+
+      await db.insert(queueMembers).values({
+        queueId: queue.id,
+        userId: user.id,
+        accessLevel: entry.accessLevel ?? 'member',
+        addedAt: now,
+      });
+      created += 1;
+    }
+  }
+
+  return { created, existing, skipped };
+}
+
+/**
+ * Re-resolves every workspace's queue from its CURRENT department, moving the
+ * ones that no longer match.
+ *
+ * WHY THIS IS NEEDED AND `routeWorkspace()` IS NOT ENOUGH. `routeWorkspace()`
+ * returns early when `queue_id` is already set, which is right for the
+ * application: a coordinator's deliberate move must not be undone by a later
+ * automatic pass. But it means a workspace routed BEFORE its department was
+ * known is stuck in whatever queue it first landed in, and nothing -- not even
+ * `backfill-queues.ts` -- can correct it.
+ *
+ * That is not hypothetical. `seed-full-demo.ts` creates the workspace during
+ * ingest, when `routing_department` is still unset, and applies the real
+ * department afterwards because the background routing assessment overwrites
+ * it. So all 100 seeded workspaces sat in General Intake and every one of the
+ * ten department queues was EMPTY: a clinician scoped to Cardiology saw
+ * nothing, which looked like the queue scoping being broken rather than the
+ * routing having run too early.
+ *
+ * NOT CALLED AUTOMATICALLY ANYWHERE, and it must not be. It cannot tell a
+ * stale automatic route from a considered manual one, so running it on a
+ * schedule would quietly revert coordinators' decisions. It is for a seed, or
+ * for an operator who has just renamed a department or added a queue and wants
+ * the existing workspaces re-resolved.
+ */
+export async function rerouteByDepartment(
+  actor = 'system',
+): Promise<{ moved: number; unchanged: number }> {
+  const rows = await db
+    .select({
+      id: referralWorkspaces.id,
+      queueId: referralWorkspaces.queueId,
+      department: referrals.routingDepartment,
+    })
+    .from(referralWorkspaces)
+    .innerJoin(referrals, eq(referrals.id, referralWorkspaces.referralId))
+    .where(isNull(referralWorkspaces.archivedAt))
+    .orderBy(asc(referralWorkspaces.id));
+
+  let moved = 0;
+  let unchanged = 0;
+
+  for (const row of rows) {
+    const resolution = await resolveQueueForDepartment(row.department ?? 'Unassigned');
+    if (row.queueId === resolution.queueId) {
+      unchanged += 1;
+      continue;
+    }
+
+    await db
+      .update(referralWorkspaces)
+      .set({ queueId: resolution.queueId, updatedAt: new Date() })
+      .where(eq(referralWorkspaces.id, row.id));
+
+    await emitEvent({
+      eventType: WorkspaceEvents.QUEUE_CHANGED,
+      entityType: 'referral',
+      entityId: row.id,
+      fromState: row.queueId === null ? undefined : String(row.queueId),
+      toState: String(resolution.queueId),
+      actor,
+      metadata: {
+        workspaceId: row.id,
+        department: row.department,
+        reason: 'rerouted-by-department',
+        matched: resolution.matched,
+        resolutionReason: resolution.reason,
+      },
+    });
+    moved += 1;
+  }
+
+  return { moved, unchanged };
 }
 
 /**

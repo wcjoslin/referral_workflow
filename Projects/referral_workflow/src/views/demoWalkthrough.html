@@ -42,6 +42,7 @@
     .color-e { border-left-color: #e6a817; }
     .color-f { border-left-color: #0d6efd; }
     .color-g { border-left-color: #20c997; }
+    .color-h { border-left-color: #d63384; }
 
     .path-header {
       padding: 13px 20px; display: flex; align-items: center; gap: 11px;
@@ -447,6 +448,137 @@
     </div>
   </div>
 
+  <!-- ══════════════════════════════════════════════════════════
+       Path H — Collaboration Workspace (PRD-16 … PRD-30)
+  ═══════════════════════════════════════════════════════════ -->
+  <div class="path-card color-h" id="card-h">
+    <div class="path-header" onclick="toggleCard('h')">
+      <div class="path-label">H</div>
+      <h2 class="path-title">Collaboration Workspace</h2>
+      <span class="path-badge" id="badge-h">Needs full demo seed</span>
+      <span class="path-chevron">▾</span>
+    </div>
+    <div class="path-body">
+      <p class="path-desc">
+        The internal side of a referral: who owns it, what the next move is and who owes it, what was said
+        about it, and what the other organisation can see. Unlike paths A–G this one does not seed its own
+        referral — it tours the board that <code>npm run seed:full-demo</code> produces, because an empty
+        workspace demonstrates none of it. Run that first, then reload this page.
+      </p>
+      <ol class="step-list">
+        <li class="step" id="step-h1">
+          <div class="step-icon" data-num="1"></div>
+          <div class="step-body">
+            <div class="step-desc">See only your own queues</div>
+            <div class="step-hint">
+              Open <strong>Queues</strong>. You are acting as the first user in the roster, who belongs to one
+              queue — so that is all you see. Switch <em>Acting as</em> in the nav to <strong>Dana Ruiz</strong>
+              (a coordinator, six queues) and then <strong>Alex Whitfield</strong> (a manager, who holds the
+              explicit see-all-queues grant rather than any membership). The scope is resolved server-side and
+              applied before any filter you ask for, so a queue you are not in is <em>refused</em>, not hidden.
+            </div>
+            <a class="step-action" id="link-h-queues" href="/queues">Queues →</a>
+          </div>
+        </li>
+        <li class="step" id="step-h2">
+          <div class="step-icon" data-num="2"></div>
+          <div class="step-body">
+            <div class="step-desc">Read a queue by what it owes</div>
+            <div class="step-hint">
+              Open a department queue. Each row carries a <strong>next action</strong>, a <strong>due date</strong>
+              and an <strong>awaited-by</strong> indicator — whether the next move is ours or theirs. Roughly a
+              third of the seeded board is overdue, which is arithmetic rather than decoration: the deadline is
+              computed from the moment the state was entered, against a backlog spread over ninety days. The
+              work-status tabs split the same rows by where they are internally.
+            </div>
+            <a class="step-action disabled" id="link-h-queue" href="#">Open a queue →</a>
+          </div>
+        </li>
+        <li class="step" id="step-h3">
+          <div class="step-icon" data-num="3"></div>
+          <div class="step-body">
+            <div class="step-desc">Open one workspace — the two statuses</div>
+            <div class="step-hint">
+              A workspace carries <strong>two</strong> statuses. The protocol state is what 360X says and is
+              externally authoritative. The work status is ours and local. Set the work status by hand and note
+              that it is then held: the advisory mapping stops overwriting it until you re-sync, so a protocol
+              event cannot silently discard a coordinator's judgement.
+            </div>
+            <a class="step-action disabled" id="link-h-workspace" href="#">Open the workspace →</a>
+          </div>
+        </li>
+        <li class="step" id="step-h4">
+          <div class="step-icon" data-num="4"></div>
+          <div class="step-body">
+            <div class="step-desc">Claim it, and watch the bell</div>
+            <div class="step-hint">
+              About seven in ten seeded workspaces have an owner; the rest are unclaimed. Claim an unclaimed one,
+              or reassign this one to somebody else — then switch <em>Acting as</em> to that person and open the
+              bell. Assignment notifies the new owner and deliberately not the actor: telling you what you just
+              did is noise. A guest can only ever receive two of the notification types, and that is an allow
+              list, so an internal type added later cannot leak by omission.
+            </div>
+          </div>
+        </li>
+        <li class="step" id="step-h5">
+          <div class="step-icon" data-num="5"></div>
+          <div class="step-body">
+            <div class="step-desc">Say something — internal, then shared</div>
+            <div class="step-hint">
+              Post an internal note. Then post one and mark it <strong>Shared</strong>: that needs an explicit
+              confirmation, because crossing to the other organisation is a decision and not a checkbox. Mention
+              a colleague with <code>@</code> and leave it unacknowledged — an open mention is one of the two
+              things that makes a closing referral propose <em>Follow-up-Required</em> instead of
+              <em>Resolved</em>.
+            </div>
+          </div>
+        </li>
+        <li class="step" id="step-h6">
+          <div class="step-icon" data-num="6"></div>
+          <div class="step-body">
+            <div class="step-desc">Invite the other side, and be the guest</div>
+            <div class="step-hint">
+              In <strong>Parties &amp; participants</strong>, invite the referring organisation by email. On a
+              demo box SMTP is unreachable, so start the server with
+              <code>WORKSPACE_REVEAL_INVITE_LINK=true</code> and the link is printed in the panel — open it in a
+              private window to arrive as the guest. Note what a guest does <em>not</em> get: no queues, no
+              overdue, no exceptions, no internal notes, no bell. Then <strong>revoke</strong> the access and
+              reload the guest window: the next request is refused even with the page already open.
+            </div>
+          </div>
+        </li>
+        <li class="step" id="step-h7">
+          <div class="step-icon" data-num="7"></div>
+          <div class="step-body">
+            <div class="step-desc">Exceptions — what would otherwise be lost</div>
+            <div class="step-hint">
+              Open <strong>Exceptions</strong>. The seeded board carries three possible-duplicate patients: same
+              surname and date of birth, different given name and record number. They are <em>flagged, never
+              merged</em> — wrongly merging two people's records is worse than carrying two records for one
+              person, so the decision is a human's and confirming "same person" moves no clinical data. This
+              queue is also where a mangled acknowledgement or an auto-declined referral lands, each keeping its
+              raw artifact, because that row is often the only copy.
+            </div>
+            <a class="step-action" id="link-h-exceptions" href="/exceptions">Exceptions →</a>
+          </div>
+        </li>
+        <li class="step" id="step-h8">
+          <div class="step-icon" data-num="8"></div>
+          <div class="step-body">
+            <div class="step-desc">Check the receipts</div>
+            <div class="step-hint">
+              Every step above wrote an audit event. Open the workspace's <strong>Activity</strong> panel and read
+              it back: who did what, when, and as which actor. Re-association records
+              <code>protocolStateReplayed: false</code> — attaching an orphaned message is a records operation and
+              must never advance the externally authoritative protocol state.
+            </div>
+            <a class="step-action disabled" id="link-h-activity" href="#">Activity →</a>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </div>
+
 </div><!-- /page-wrap -->
 
 <script>
@@ -660,7 +792,11 @@
       badge.classList.add('state-complete');
     } else if (['Pended', 'Pending-Information'].includes(state)) {
       badge.classList.add('state-pending');
-    } else if (!['Not seeded', 'Not started', 'Standalone PA'].includes(state)) {
+      // 'Needs full demo seed' is Path H's not-ready state — the equivalent of
+      // 'Not seeded' for a path that tours existing data rather than seeding
+      // its own. Without it here the badge renders as active, which reads as
+      // "ready to go" when the board is in fact empty.
+    } else if (!['Not seeded', 'Not started', 'Standalone PA', 'Needs full demo seed'].includes(state)) {
       badge.classList.add('state-active');
     }
   }
@@ -738,6 +874,50 @@
       btn.disabled = false;
     }
   }
+
+  // ── Path H — Collaboration Workspace ──────────────────────
+  //
+  // Independent of the A-G seed session on purpose. Those paths each drive a
+  // referral through a transition and so seed their own; this one tours the
+  // surfaces the collaboration epic added, which need a POPULATED board
+  // (`npm run seed:full-demo`). A workspace created fresh for the tour would
+  // show an empty panel at every step.
+  //
+  // So it resolves its targets from whatever is already in the database, and
+  // when nothing is there it says which command to run instead of offering
+  // links that 404.
+  (function initPathH() {
+    window.addEventListener('DOMContentLoaded', async function () {
+      try {
+        const res = await fetch('/walkthrough/collab-target');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (!data.workspace) {
+          updateBadge('badge-h', 'Needs full demo seed');
+          return;
+        }
+
+        const ws = data.workspace;
+        setLink('link-h-workspace', '/workspaces/' + ws.workspaceId);
+        setLink('link-h-activity', '/workspaces/' + ws.workspaceId + '#wsActivity');
+        if (ws.queueSlug) setLink('link-h-queue', '/queues/' + ws.queueSlug);
+
+        // The badge names the example the links point at, so somebody reading
+        // the steps knows which of the hundred rows to look for.
+        updateBadge('badge-h', (data.counts ? data.counts.workspaces + ' workspaces — ' : '') + ws.patientName);
+
+        const hint = document.querySelector('#step-h3 .step-hint');
+        if (hint) {
+          const note = document.createElement('div');
+          note.style.cssText = 'margin-top:6px;font-style:italic;';
+          note.textContent = 'The link opens ' + ws.patientName
+            + (ws.queueName ? ' in the ' + ws.queueName + ' queue.' : '.');
+          hint.appendChild(note);
+        }
+      } catch { /* leave the steps disabled */ }
+    });
+  })();
 </script>
 </body>
 </html>

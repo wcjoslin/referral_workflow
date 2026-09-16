@@ -316,11 +316,66 @@ letting "due in 4 hours" on a Friday evening read as a promise.
 **7. The `route-to-queue` skill action, and a notification preferences page.** Both dropped with
 reasons recorded in their PRDs rather than silently omitted.
 
-Beyond these, two demo-honesty gaps worth naming: the invitation link is only ever delivered by
-email, so demonstrating guest access needs the link read out of the mail log; and
-`seed-analytics-demo.ts` inserts referrals directly rather than through the ingest pipeline, so it
-produces no exceptions, no processed-message rows and no auto-declines — correct, since PRD-28's
-capture points are on the pipeline that script bypasses.
+Beyond these, one demo-honesty gap remains: `seed-analytics-demo.ts` inserts referrals directly
+rather than through the ingest pipeline, so it produces no exceptions, no processed-message rows and
+no auto-declines — correct, since PRD-28's capture points are on the pipeline that script bypasses.
+
+The other gap recorded here — that the invitation link was only ever delivered by email, leaving
+guest access undemonstrable without reading the mail log — has since been closed by
+`WORKSPACE_REVEAL_INVITE_LINK`, off by default. See *Demo readiness* below.
+
+---
+
+## Demo readiness
+
+Shipping the features is not the same as being able to show them. Measured against a freshly seeded
+database after the epic closed, most of what the epic added rendered **empty or degenerate**, and
+two of those read as product defects rather than as missing data:
+
+| Surface | Was | Now |
+|---|---|---|
+| Queue list, as the default acting user | **Empty** — `queue_members` held 0 rows and 7 of 8 users lack `allQueuesAccess`, so the scope resolved to `[]` and every slug returned 403 | 19 memberships; an uneven scope per person, so switching acting user visibly changes it |
+| Work status | `Exception` ×95, `Triage` ×5 | `Resolved` 50, `Waiting-External` 28, `In-Progress` 19, `Triage` 6, `Exception` 3 |
+| Patient identity | 106 patients from **5** distinct (surname, DOB) pairs — 78 named "Sarah Chen" | 106 distinct names, 103 distinct (surname, DOB) pairs |
+| Duplicate-patient exceptions | 95, all noise | 3, each a deliberate and genuinely ambiguous pair |
+| Next action | 95 of 100 overridden to "Review and resolve the exception" | 6 distinct actions drawn from the real rule table |
+| Awaited-by | `us` ×95, never `party` | `nobody` 50, `us` 28, `party` 28 |
+| Overdue | **0** | 32 |
+| Owners | **0** | 76 owned across 6 people, 30 unclaimed |
+| Conversation | **0** comments | 54 comments: 39 internal, 15 shared, 11 open mentions |
+| Participants | **0** | 98 (27 explicit; the rest from `syncOwnerParticipant`) |
+| Notifications | **0** | 81, with 41 unread across 6 of 8 users |
+| Department queues | **All 10 empty** — every workspace sat in General Intake | 5 populated, matching their department |
+| Guided walkthrough | 7 paths, **none** touching this epic | Path H, an 8-step tour ending in the guest view |
+
+Three of these were defects in the seed rather than thin data, and are worth keeping named because
+each looked like a working feature:
+
+1. **The C-CDA fixtures carry one hard-coded patient each**, and the seed ingested them unmodified.
+   `findPotentialDuplicatePatients()` matches on surname and date of birth, so it fired correctly 95
+   times. That one artifact put 95 workspaces into `Exception`, which in turn overrode every next
+   action and flattened the awaited-by indicator. The fixtures are *not* edited — they are pinned by
+   name in four test suites and the single-scenario launcher — so `scripts/demo-patients.ts`
+   rewrites the identity in memory, and throws rather than returning the input unchanged.
+2. **`spreadTimestamps()` subtracted a millisecond delta from a seconds column.** 963 of 1,703
+   workflow events were dated to the year **1785**, which is what the activity history and every
+   analytics time series read from.
+3. **Queue routing ran before the department was known.** The workspace is created during ingest,
+   and the seed applies the real department afterwards because the background routing assessment
+   overwrites it — so all 100 workspaces routed to the catch-all. `routeWorkspace()` cannot correct
+   this by design (it must not undo a coordinator's deliberate move), so
+   `rerouteByDepartment()` was added for exactly this case and is called by nothing automatically.
+
+Ordering matters in the fix and is easy to get backwards: the advisory mapping stamps
+`work_status_set_at = now`, and the due date derives from it, so the mapping must run **before** the
+timestamps are backdated and the deadline computed **after**. Doing it the other way gives every
+workspace a deadline in the near future and an empty overdue list.
+
+`WORKSPACE_REVEAL_INVITE_LINK=true` prints the guest invitation link in the inviter's own browser.
+Off by default, and it must stay off anywhere real: the link is a 256-bit bearer token, and
+displaying it puts that token in browser history and any screenshot. It is a local demo affordance,
+separate from PRD-31 rather than covered by it — PRD-31 authenticates *internal* callers, this is
+about not printing a *guest's* credential. Both must be settled before this faces a network.
 
 ---
 

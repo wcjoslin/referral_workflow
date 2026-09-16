@@ -212,6 +212,10 @@ All config is centralized in [src/config.ts](src/config.ts). Environment variabl
 - `PORT` — Express server port (default: `3000`)
 - `SKILLS_DIR` — skill definitions directory (default: `./skills`)
 - `CLAIMS_WATCH_DIR` / `CLAIMS_OUTBOUND_DIR` — EDI file-watcher directories (default: `./claims-inbox`, `./claims-outbox`)
+- `WORKSPACE_REVEAL_INVITE_LINK` — **demo only, default `false`.** Prints the guest invitation link
+  in the inviter's browser instead of only emailing it, so guest access is reachable on a box with
+  no working SMTP. The link is a bearer token; turning this on puts it in browser history and any
+  screenshot. Never set it on anything reachable.
 
 ## PRD Workflow Pattern
 
@@ -249,6 +253,12 @@ Example: PRD-01 (Receive) →
 - `inboxMonitor.ts` will retry if IMAP fails; server stays up
 
 **Run the full demo:**
+
+Use `npm run seed:full-demo` rather than `npm run seed` for anything involving queues, due dates,
+ownership, the conversation or notifications: `seed` creates a single referral, so those surfaces
+render empty. The full seed produces 106 referrals with queue memberships, owners, comments,
+overdue items and a populated notification bell. `/walkthrough` path H tours them.
+
 1. `npm run seed` — populate database
 2. `npm run dev` — start server and IMAP monitor
 3. Visit `localhost:3001` to see the UI
