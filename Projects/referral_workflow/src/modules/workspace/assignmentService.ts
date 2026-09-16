@@ -159,6 +159,20 @@ export async function assignOwner(
     },
   }).catch((err) => console.error('[AssignmentService]', err));
 
+  // PRD-27 AC1/AC3. Fire-and-forget, so a mail failure cannot roll back an
+  // assignment, and `excludeUserId` inside notify() is what makes AC2 true —
+  // assigning yourself notifies nobody.
+  void (async (): Promise<void> => {
+    const { notifyAssignment, notifyUnassignment } = await import('./notificationService');
+    await notifyAssignment(workspaceId, toUserId, actor.id, actor.displayName);
+    // A REASSIGNMENT also takes the referral off whoever held it. AC3 wants
+    // them told, and only reassignment reaches this — a first assignment has
+    // no previous owner to notify.
+    if (previousOwnerUserId !== null && previousOwnerUserId !== toUserId) {
+      await notifyUnassignment(workspaceId, previousOwnerUserId, actor.id, actor.displayName);
+    }
+  })().catch((err) => console.error('[AssignmentService] assignment notification failed', err));
+
   // PRD-24 AC10: the owner is a Manager participant. Recorded here rather than
   // computed when the roster is read, so the roster is a real list instead of a
   // list plus an implicit extra member every consumer must remember to add.
@@ -271,6 +285,16 @@ export async function releaseOwnership(
       ...(trimmed ? { reason: trimmed } : {}),
     },
   }).catch((err) => console.error('[AssignmentService]', err));
+
+  // AC3: the previous owner is told when somebody ELSE took it off them.
+  // Releasing your own work needs no telling, which notify()'s excludeUserId
+  // handles.
+  if (previousOwnerUserId !== null) {
+    void (async (): Promise<void> => {
+      const { notifyUnassignment } = await import('./notificationService');
+      await notifyUnassignment(workspaceId, previousOwnerUserId, actor.id, actor.displayName);
+    })().catch((err) => console.error('[AssignmentService] release notification failed', err));
+  }
 
   return { workspaceId, ownerUserId: null, ownerDisplayName: null, changed: true };
 }

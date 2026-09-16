@@ -529,6 +529,12 @@ export async function proposeForReferral(
     // this runs synchronously with the transition, so now IS when the state was
     // entered.
     await recomputeNextAction(workspace.id, new Date(), actor);
+
+    // PRD-27 AC5: the owner and every participant. Hooked to the same funnel as
+    // the next-action recompute, so a protocol transition notifies exactly once
+    // however many call sites reach it.
+    const { notifyStateChange } = await import('./notificationService');
+    await notifyStateChange(workspace.id, protocolState, actor);
   } catch (err) {
     console.error(
       `[WorkspaceService] work status proposal failed for referral ${referralId}:`,

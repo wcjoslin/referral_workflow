@@ -486,4 +486,44 @@ export const TEST_SCHEMA_DDL = `
     created_at INTEGER NOT NULL
   );
   CREATE INDEX idx_auto_declined_created ON auto_declined_referrals (created_at);
+
+  -- ── Notifications (PRD-27) ────────────────────────────────────────────────
+  --
+  -- The recipient CHECK is reproduced deliberately: a notification addressed to
+  -- both an internal user and a guest, or to neither, is malformed, and a suite
+  -- running without the constraint would pass while the real schema refused the
+  -- same write.
+  CREATE TABLE notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_user_id INTEGER,
+    recipient_guest_id INTEGER,
+    workspace_id INTEGER NOT NULL,
+    notification_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    link_path TEXT NOT NULL,
+    triggered_by_actor TEXT,
+    collapse_key TEXT,
+    collapsed_count INTEGER NOT NULL DEFAULT 1,
+    email_sent_at INTEGER,
+    read_at INTEGER,
+    created_at INTEGER NOT NULL,
+    CONSTRAINT notifications_recipient_union
+      CHECK ((recipient_user_id IS NULL) <> (recipient_guest_id IS NULL))
+  );
+  CREATE INDEX idx_notifications_user
+    ON notifications (recipient_user_id, read_at, created_at);
+  CREATE INDEX idx_notifications_guest ON notifications (recipient_guest_id, read_at);
+  CREATE INDEX idx_notifications_collapse ON notifications (collapse_key, created_at);
+
+  CREATE TABLE notification_preferences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    notification_type TEXT NOT NULL,
+    muted INTEGER NOT NULL DEFAULT 0,
+    email_enabled INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX idx_notification_prefs_user ON notification_preferences (user_id);
+  CREATE UNIQUE INDEX idx_notification_prefs_unique
+    ON notification_preferences (user_id, notification_type);
 `

@@ -1072,3 +1072,87 @@ export const autoDeclinedReferrals = sqliteTable(
     createdIdx: index('idx_auto_declined_created').on(table.createdAt),
   }),
 );
+
+// ── Notifications (PRD-27) ────────────────────────────────────────────────────
+//
+// The application could not tell anyone anything before this — no table, no
+// badge, no bell, no digest. The nearest things were a `console.warn` in the
+// overdue checker and the demo's SSE stream that polls `referrals.state` to
+// drive a progress animation. Outbound email existed only as protocol
+// transport: nodemailer sent Direct messages and MDNs, never a message to a
+// colleague.
+//
+// That was workable while every action was initiated by whoever was looking at
+// the screen. Assignment, mentions, overdue detection, guest actions and
+// exceptions all break that assumption.
+
+export const notifications = sqliteTable(
+  'notifications',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+
+    // EXACTLY ONE recipient, internal or guest — enforced by the check below.
+    // A notification addressed to both, or to neither, is not a notification.
+    recipientUserId: integer('recipient_user_id').references(() => users.id),
+    recipientGuestId: integer('recipient_guest_id').references(() => workspaceGuests.id),
+
+    workspaceId: integer('workspace_id')
+      .references(() => referralWorkspaces.id)
+      .notNull(),
+    notificationType: text('notification_type').notNull(),
+    title: text('title').notNull(),
+    /**
+     * NO CLINICAL CONTENT for anything that may be emailed. Patient name,
+     * organization and a link — the content lives behind the link, the same
+     * discipline PRD-30 applies to the invitation email.
+     */
+    body: text('body').notNull(),
+    linkPath: text('link_path').notNull(),
+    triggeredByActor: text('triggered_by_actor'),
+    /** recipient + workspace + type. AC13 collapses a burst into one row. */
+    collapseKey: text('collapse_key'),
+    collapsedCount: integer('collapsed_count').notNull().default(1),
+    emailSentAt: integer('email_sent_at', { mode: 'timestamp' }),
+    readAt: integer('read_at', { mode: 'timestamp' }),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => ({
+    userIdx: index('idx_notifications_user').on(
+      table.recipientUserId,
+      table.readAt,
+      table.createdAt,
+    ),
+    guestIdx: index('idx_notifications_guest').on(table.recipientGuestId, table.readAt),
+    collapseIdx: index('idx_notifications_collapse').on(table.collapseKey, table.createdAt),
+    // Same XOR shape as referral_comments' author union: a notification has one
+    // recipient or it is malformed.
+    recipientUnion: check(
+      'notifications_recipient_union',
+      sql`(${table.recipientUserId} IS NULL) <> (${table.recipientGuestId} IS NULL)`,
+    ),
+  }),
+);
+
+export const notificationPreferences = sqliteTable(
+  'notification_preferences',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: integer('user_id')
+      .references(() => users.id)
+      .notNull(),
+    notificationType: text('notification_type').notNull(),
+    /**
+     * Muting PREVENTS CREATION rather than hiding a row. A muted notification
+     * that exists but is hidden still shows in counts and still costs a row —
+     * and the count is the thing a bell is for.
+     */
+    muted: integer('muted', { mode: 'boolean' }).notNull().default(false),
+    emailEnabled: integer('email_enabled', { mode: 'boolean' }).notNull().default(false),
+  },
+  (table) => ({
+    userIdx: index('idx_notification_prefs_user').on(table.userId),
+    // One preference row per (user, type), so setPreference is an upsert rather
+    // than a check-then-insert that can race.
+    uniqueIdx: uniqueIndex('idx_notification_prefs_unique').on(table.userId, table.notificationType),
+  }),
+);

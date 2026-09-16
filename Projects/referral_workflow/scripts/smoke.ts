@@ -2355,6 +2355,263 @@ async function main(): Promise<void> {
     );
   }
 
+  // ── PRD-27: notifications ─────────────────────────────────────────────────
+
+  // The bell is in the nav, on every page, and polls rather than pushes.
+  const navPage = await get('/workspaces', granted.id);
+  check('the nav carries the notification bell', navPage.body.includes('id="notifBell"'));
+  check('with an unread badge', navPage.body.includes('id="notifCount"'));
+  check(
+    'polled on an interval rather than over a WebSocket',
+    navPage.body.includes('setInterval(load') && !/new WebSocket/.test(navPage.body),
+  );
+  check(
+    'and opening the panel paints it WITHOUT marking anything read (AC11)',
+    /Opening PAINTS; it does not mark anything read/.test(navPage.body),
+  );
+
+  /**
+   * Notifications are FIRE-AND-FORGET by design — a mail failure must never
+   * roll back an assignment — so they land a tick or two after the action that
+   * caused them. The first version of this check read the API immediately and
+   * saw nothing, which was the design working and the assertion being wrong.
+   * Bounded poll rather than a fixed sleep.
+   */
+  async function waitForNotifications(
+    userId: number,
+    timeoutMs = 5000,
+  ): Promise<{ unreadCount: number; notifications: Array<Record<string, unknown>> }> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const body = JSON.parse((await get('/api/notifications', userId)).body) as {
+        unreadCount: number;
+        notifications: Array<Record<string, unknown>>;
+      };
+      if (body.notifications.length > 0 || Date.now() > deadline) return body;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  const { db: notifDb } = await import('../src/db');
+  const { notifications: notifTable } = await import('../src/db/schema');
+  const { isNotNull: notifIsNotNull } = await import('drizzle-orm');
+
+  /**
+   * WHICH user to read the bell as is not assumable.
+   *
+   * The first version read it as `granted`, who at this point in the run owns
+   * nothing and participates in nothing — so it correctly saw zero, and the
+   * assertion was wrong rather than the code. Notifications go to OWNERS and
+   * PARTICIPANTS, so the honest check is to find a real recipient from the rows
+   * and read the API as them.
+   */
+  const notifRows = await notifDb
+    .select({ userId: notifTable.recipientUserId, type: notifTable.notificationType })
+    .from(notifTable);
+  check(
+    'the run above produced real notifications',
+    notifRows.length > 0,
+    'nothing was notified during a run that assigned, transitioned and raised an exception',
+  );
+  const storedTypes = new Set(notifRows.map((r) => String(r.type)));
+  check(
+    'including a state change from a protocol transition (AC5)',
+    storedTypes.has('state_change'),
+    `saw: ${[...storedTypes].join(', ')}`,
+  );
+  check(
+    'and an assignment (AC1)',
+    storedTypes.has('assignment'),
+    `saw: ${[...storedTypes].join(', ')}`,
+  );
+  check(
+    'and an exception (AC9)',
+    storedTypes.has('exception'),
+    `saw: ${[...storedTypes].join(', ')}`,
+  );
+  check(
+    'and guest activity delivered INTERNALLY (AC19)',
+    notifRows.some((r) => r.type === 'guest_activity' && r.userId !== null),
+    'a guest acting must tell the internal side',
+  );
+
+  // Read the bell as somebody who actually has one.
+  const recipient = notifRows.find((r) => r.userId !== null)?.userId as number;
+  check('a real recipient was found to read the bell as', typeof recipient === 'number');
+  const notifApi = await waitForNotifications(recipient);
+  check(
+    'GET /api/notifications returns a count and a list',
+    typeof notifApi.unreadCount === 'number' && Array.isArray(notifApi.notifications),
+  );
+  check(
+    'and the recipient sees their own notifications',
+    notifApi.notifications.length > 0,
+    `user ${recipient} has rows in the table but the API returned none`,
+  );
+  check(
+    'each carrying the patient it is about',
+    notifApi.notifications.every((n) => typeof n.patientName === 'string' && n.patientName !== ''),
+  );
+  check(
+    'and a link straight to the workspace or the exception queue (AC4)',
+    notifApi.notifications.every((n) => String(n.linkPath).startsWith('/')),
+  );
+  const guestAddressed = await notifDb
+    .select({ type: notifTable.notificationType })
+    .from(notifTable)
+    .where(notifIsNotNull(notifTable.recipientGuestId));
+  const { GUEST_ELIGIBLE_TYPES } = await import('../src/modules/workspace/notificationService');
+  check(
+    'every guest-addressed notification is on the allow list (AC17)',
+    guestAddressed.every((r) => (GUEST_ELIGIBLE_TYPES as readonly string[]).includes(r.type)),
+    `guest-addressed types were: ${JSON.stringify(guestAddressed.map((r) => r.type))}`,
+  );
+  check(
+    'and no internal type appears against a guest',
+    !guestAddressed.some((r) => ['assignment', 'state_change', 'mention', 'exception'].includes(r.type)),
+  );
+
+  // Marking read, individually and all at once.
+  if (notifApi.notifications.length > 0) {
+    const target = notifApi.notifications.find((n) => n.read === false);
+    if (target) {
+      const readOne = await post(
+        `/api/notifications/${String(target.id)}/read`,
+        {},
+        recipient,
+      );
+      check('one notification can be marked read', readOne.status === 200, `status ${readOne.status}`);
+      check(
+        'and the unread count drops',
+        Number((readOne.json as Record<string, unknown>).unreadCount) < notifApi.unreadCount,
+        `${String((readOne.json as Record<string, unknown>).unreadCount)} vs ${notifApi.unreadCount}`,
+      );
+      check(
+        'marking the same one again is a 404, not a silent success',
+        (await post(`/api/notifications/${String(target.id)}/read`, {}, recipient)).status === 404,
+      );
+    }
+
+    // Scoped to the recipient: another user cannot mark it read.
+    const someoneElse = notifApi.notifications[0];
+    check(
+      'another user cannot mark a notification read',
+      (await post(`/api/notifications/${String(someoneElse.id)}/read`, {}, ungranted.id)).status ===
+        404,
+      'a cross-user write would be a real defect',
+    );
+  }
+
+  const readAll = await post('/api/notifications/read-all', {}, recipient);
+  check('all notifications can be marked read', readAll.status === 200);
+  check(
+    'and the count is then zero',
+    (JSON.parse((await get('/api/notifications', recipient)).body) as { unreadCount: number })
+      .unreadCount === 0,
+  );
+
+  // AC12: muting PREVENTS CREATION.
+  const prefs = JSON.parse((await get('/api/notification-preferences', granted.id)).body) as {
+    preferences: Array<{ notificationType: string; muted: boolean; emailEnabled: boolean }>;
+  };
+  check(
+    'every notification type has a preference switch',
+    prefs.preferences.length >= 12,
+    `${prefs.preferences.length} types`,
+  );
+  check(
+    'and guest-addressed types default to email on, because a guest has no bell',
+    prefs.preferences.find((p) => p.notificationType === 'shared_activity')?.emailEnabled === true,
+  );
+  check(
+    'an unrecognised notification type is refused',
+    (await post(
+      '/api/notification-preferences',
+      { notificationType: 'made-it-up', muted: true },
+      granted.id,
+    )).status === 400,
+  );
+
+  const muted = await post(
+    '/api/notification-preferences',
+    { notificationType: 'state_change', muted: true },
+    granted.id,
+  );
+  check('a type can be muted', muted.status === 200, `status ${muted.status}`);
+
+  const { notify: smokeNotify } = await import('../src/modules/workspace/notificationService');
+  const beforeMuted = (
+    JSON.parse((await get('/api/notifications', granted.id)).body) as { notifications: unknown[] }
+  ).notifications.length;
+  // granted is the workspace's owner for this call, so an owner-audience
+  // notification of a muted type must create NOTHING.
+  await notifDb
+    .update((await import('../src/db/schema')).referralWorkspaces)
+    .set({ ownerUserId: granted.id })
+    .where(
+      (await import('drizzle-orm')).eq(
+        (await import('../src/db/schema')).referralWorkspaces.id,
+        wsWithout.id,
+      ),
+    );
+  await smokeNotify({
+    workspaceId: wsWithout.id,
+    type: 'state_change',
+    title: 'should not exist',
+    body: 'muted',
+    linkPath: `/workspaces/${wsWithout.id}`,
+    audience: { kind: 'owner' },
+  });
+  const afterMuted = (
+    JSON.parse((await get('/api/notifications', granted.id)).body) as {
+      notifications: Array<Record<string, unknown>>;
+    }
+  ).notifications;
+  check(
+    'a muted type creates NO ROW rather than a hidden one (AC12)',
+    afterMuted.length === beforeMuted &&
+      !afterMuted.some((n) => n.title === 'should not exist'),
+    `${beforeMuted} -> ${afterMuted.length}`,
+  );
+
+  // And an unmuted one does arrive, so the check above is not vacuous.
+  await post(
+    '/api/notification-preferences',
+    { notificationType: 'state_change', muted: false },
+    granted.id,
+  );
+  await smokeNotify({
+    workspaceId: wsWithout.id,
+    type: 'state_change',
+    title: 'should exist',
+    body: 'not muted',
+    linkPath: `/workspaces/${wsWithout.id}`,
+    audience: { kind: 'owner' },
+  });
+  check(
+    'and an unmuted type does arrive',
+    (await waitForNotifications(granted.id)).notifications.some((n) => n.title === 'should exist'),
+  );
+
+  // Guests have no bell and no notification API.
+  for (const route of ['/api/notifications', '/api/notification-preferences']) {
+    const guestHit = await getRaw(route, 'guestSession=anything');
+    check(
+      `a guest cookie is refused at ${route}`,
+      guestHit.status === 403,
+      `status ${guestHit.status}`,
+    );
+  }
+
+  // AC14: pruning runs in the overdue sweep, not a second job.
+  const { runOverdueSweep } = await import('../src/modules/prd07/overdueChecker');
+  const swept = await runOverdueSweep();
+  check(
+    'the overdue sweep also prunes notifications (AC14)',
+    typeof swept.notificationsPruned === 'number',
+    'pruning is not wired into the sweep',
+  );
+
   // ── Report ────────────────────────────────────────────────────────────────
   const failed = checks.filter((c) => !c.ok);
   console.log(`\n${checks.length - failed.length}/${checks.length} checks passed.`);

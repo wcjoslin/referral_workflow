@@ -20,6 +20,9 @@
 
 jest.mock('../../../src/config', () => ({
   config: {
+      // PRD-27. Without these the notification path silently no-ops and every
+      // assignment or mention in this suite logs a failure.
+      workspace: { notificationRetentionDays: 90, notificationCollapseWindowMinutes: 15 },
     smtp: { host: 'smtp.test', port: 587, user: 'user', password: 'pass' },
     receiving: { directAddress: 'receiving@specialist.direct', orgName: 'Specialist Care Group' },
     database: { url: ':memory:' },

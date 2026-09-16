@@ -24,7 +24,11 @@ jest.mock('../../../src/config', () => ({
     smtp: { host: 'smtp.test', port: 587, user: 'user', password: 'pass' },
     receiving: { directAddress: 'receiving@specialist.direct', orgName: 'Specialist Care Group' },
     database: { url: ':memory:' },
-    workspace: { overdueSweepIntervalMs: 900000 },
+    workspace: {
+        // PRD-27. Without these the notification path silently no-ops and
+        // every assignment or mention in this suite logs a failure.
+        notificationRetentionDays: 90,
+        notificationCollapseWindowMinutes: 15, overdueSweepIntervalMs: 900000 },
   },
 }));
 

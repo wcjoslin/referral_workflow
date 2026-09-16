@@ -741,6 +741,41 @@ export async function postComment(input: PostCommentInput): Promise<Comment> {
   }
   await emitMentionEvents(referralId, input.workspaceId, comment.id, actor, targets);
 
+  // PRD-27. Two DIFFERENT notifications depending on who wrote it, and the
+  // direction is the whole point:
+  //
+  //   - a GUEST comment is guest_activity, delivered INTERNALLY, naming the
+  //     organization that acted (AC19/AC20)
+  //   - an INTERNAL shared comment is shared_activity, delivered to the guest
+  //     by email with NO comment text in the body (AC16)
+  //
+  // An internal-only comment notifies nobody externally, which is the boundary
+  // the guest allow list enforces at the funnel rather than here.
+  void (async (): Promise<void> => {
+    const n = await import('./notificationService');
+    if (input.author.kind === 'guest') {
+      const { getParty } = await import('./partyService');
+      const party = await getParty(input.author.guest.partyId);
+      await n.notifyGuestActivity(
+        input.workspaceId,
+        input.author.guest.displayName ?? 'A guest',
+        party?.orgName ?? null,
+        'posted a comment',
+      );
+      return;
+    }
+    if (visibility === 'Shared') {
+      for (const guestId of await n.activeGuestIds(input.workspaceId)) {
+        await n.notifySharedActivity(
+          input.workspaceId,
+          guestId,
+          'A comment',
+          `/guest/workspace`,
+        );
+      }
+    }
+  })().catch((err) => console.error('[CommentService] comment notification failed', err));
+
   return getComment(input.workspaceId, comment.id);
 }
 
@@ -1081,6 +1116,16 @@ async function emitMentionEvents(
       actor,
       metadata: { workspaceId, commentId, mentionedKind: 'user', mentionedUserId: userId },
     }).catch((err) => console.error('[CommentService]', err));
+
+    // PRD-27 AC8: the MENTIONED USER ONLY, never the participant list. A
+    // mention that notified everybody would make @-mentioning meaningless —
+    // and the whole point of the ack in PRD-22 is that it is addressed to one
+    // person.
+    void (async (): Promise<void> => {
+      const { notifyMention } = await import('./notificationService');
+      const actorUserId = actor.startsWith('user:') ? Number(actor.slice(5)) : undefined;
+      await notifyMention(workspaceId, userId, actor, Number.isNaN(actorUserId) ? undefined : actorUserId);
+    })().catch((err) => console.error('[CommentService] mention notification failed', err));
   }
   for (const partyId of targets.parties) {
     await emitEvent({

@@ -212,6 +212,16 @@ export async function checkAndFlagOverdueWorkspaces(now: Date = new Date()): Pro
         awaitedBy: r.awaitedBy,
       },
     });
+
+    // PRD-27 AC10: the owner, or the queue's managers when unowned. Emitted
+    // once per due date because THIS loop runs once per due date — the
+    // idempotence gate above is what makes the notification idempotent too,
+    // rather than a second mechanism that could disagree with it.
+    void (async (): Promise<void> => {
+      const { notifyOverdue } = await import('../workspace/notificationService');
+      await notifyOverdue(r.workspaceId, r.nextAction ?? 'the next action', hoursOverdue);
+    })().catch((err) => console.error('[OverdueChecker] overdue notification failed', err));
+
     emitted += 1;
   }
 
@@ -225,11 +235,27 @@ export async function checkAndFlagOverdueWorkspaces(now: Date = new Date()): Pro
  * pending-info and prior-auth checkers (AC13). PRD-07's checker was written but
  * never connected — nothing called it — so this is also the fix for that.
  */
-export async function runOverdueSweep(): Promise<{ messages: number; workspaces: number }> {
+export async function runOverdueSweep(): Promise<{
+  messages: number;
+  workspaces: number;
+  notificationsPruned: number;
+}> {
   const messages = await checkAndLogOverdue();
   const workspaces = await checkAndFlagOverdueWorkspaces();
   if (workspaces > 0) {
     console.warn(`[OverdueChecker] ${workspaces} workspace(s) newly overdue.`);
   }
-  return { messages, workspaces };
+
+  // PRD-27 AC14. Pruned HERE rather than in a second scheduled job, which is
+  // the PRD's constraint — one sweep, one interval, one place to look when
+  // something stops running.
+  let notificationsPruned = 0;
+  try {
+    const { pruneOld } = await import('../workspace/notificationService');
+    notificationsPruned = await pruneOld();
+  } catch (err) {
+    console.error('[OverdueChecker] notification pruning failed', err);
+  }
+
+  return { messages, workspaces, notificationsPruned };
 }

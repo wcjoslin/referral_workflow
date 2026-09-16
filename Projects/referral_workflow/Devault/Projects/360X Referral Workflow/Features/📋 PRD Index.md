@@ -436,7 +436,7 @@ every deadline in the database while looking like the feature working.
 
 ---
 
-### 27. **[[PRD-27 - Notifications|PRD-27: Notifications]]** 📋
+### 27. **[[PRD-27 - Notifications|PRD-27: Notifications]]** ✅
 **Telling people things** — there is no notification infrastructure of any kind today.
 
 - The seven triggers from the source document, plus guest invitation and guest activity
@@ -445,7 +445,12 @@ every deadline in the database while looking like the feature working.
 - Email carries a link and no clinical content
 - **Prerequisite:** PRD-24, and each trigger's own PRD
 
-**Status:** 📋 Drafting
+**Status:** ✅ Complete (2026-09-16). The guest boundary is an ALLOW list, asserted by iterating every
+notification type rather than listing the forbidden ones — so a type added later is invisible to
+guests by default. Muting prevents creation rather than hiding a row, and pruning never touches an
+unread notification however old. Two smoke assertions were wrong rather than the code, one
+instructively: it read the bell as the user with `allQueuesAccess`, who owns nothing and participates
+in nothing, so zero was correct.
 **Module:** `workspace/`
 
 ---
@@ -497,7 +502,7 @@ demoted, an unranked orphan had no reassociation path at all. Also fills PRD-18'
 | [[PRD-24 - Parties & Participants\|24]] | Parties & Participants | ✅ | Organizations + Direct address + protocol mode; internal roles | `workspace/` |
 | [[PRD-25 - Activity History & Audit\|25]] | Activity History & Audit | ✅ | Per-referral event reader, merged feed, gaps closed | `workspace/`, `analytics/` |
 | [[PRD-26 - Next Action & Due Dates\|26]] | Next Action & Due Dates | ✅ | Config-driven actions, awaited-by, overdue sweep | `workspace/` |
-| [[PRD-27 - Notifications\|27]] | Notifications | 📋 | Nine triggers, one funnel, guest allow list | `workspace/` |
+| [[PRD-27 - Notifications\|27]] | Notifications | ✅ | Nine triggers, one funnel, guest allow list | `workspace/` |
 | [[PRD-28 - Correlation & Exception Queue\|28]] | Correlation & Exception Queue | ✅ | Idempotent intake, exceptions, manual reassociation | `workspace/`, `prd01/` |
 | [[PRD-29 - 360X Protocol Gateway\|29]] | 360X Protocol Gateway | ✅ | Context authoring, artifact rendering, record-then-transmit | `workspace/` |
 | [[PRD-30 - Guest Participation\|30]] | Guest Participation | ✅ | Scoped invitations, guest view, audited external access | `workspace/` |

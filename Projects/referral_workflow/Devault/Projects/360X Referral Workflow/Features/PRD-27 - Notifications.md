@@ -5,7 +5,7 @@ prev: "[[PRD-26 - Next Action & Due Dates]]"
 
 # PRD-27: Notifications
 
-**Status:** Drafting  
+**Status:** Refined — implemented  
 **Team:** Clinical Workflow & Collaboration  
 **Module:** `workspace/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -148,6 +148,63 @@ organization acted.
 - Retention pruning runs in the same interval sweep as the overdue checker rather than adding a second
   scheduled job.
 
+### Refinement findings and decisions
+
+**1. `audience: 'queue-managers'` became `'owner-or-queue-managers'`.** AC9 and AC10 both say "the
+owner, and the queue's managers when there is no owner" — a fallback, not two audiences. The draft's
+separate `queue-managers` kind would have made every caller implement that fallback itself, which is
+exactly the duplication the single-funnel constraint exists to prevent. Both kinds now exist; the
+triggers use the fallback one.
+
+**2. `excludeUserId` generalises AC2.** The draft handled "assigning myself does not notify me" as a
+special case of assignment. It is not special: nobody needs telling about their own action, and
+self-notification is the fastest way to make a bell worthless. One field on `NotifyInput`, applied in
+the funnel, covers assignment, unassignment, mention and document upload.
+
+**3. Collapsing only collapses UNREAD rows.** The draft keyed on recipient + workspace + type within
+a window. Once somebody has READ a notification, a new event deserves a new one rather than silently
+bumping a count on something already dismissed — otherwise the bell can show "×4" on a row the reader
+believes they have dealt with.
+
+**4. Pruning never touches an unread notification, however old.** The draft said "older than a
+configured retention period are pruned". An unread notification is still outstanding work, and
+deleting it on age alone would be the notification equivalent of losing a message. Only READ ones are
+pruned.
+
+**5. `notify()` THROWS for a guest-ineligible type rather than dropping it.** A caller trying to send
+an internal type to a guest is a bug in the caller, and swallowing it would hide that. The funnel is
+the right place to fail loudly, and `notifyQuietly()` exists for call sites that must not propagate.
+
+**6. The guest revocation and scope checks live at SEND time, not in the caller.** `notifyGuest()`
+re-reads the invitation for `revokedAt` and `expiresAt` (AC18) and refuses a notification whose
+workspace is not the one the guest is bound to. Trusting the caller would mean every future trigger
+has to remember both.
+
+**7. Two smoke assertions were wrong, not the code — and the second was instructive.**
+
+- The first read the bell immediately after the actions that cause notifications. They are
+  fire-and-forget by design, so nothing had landed yet. Replaced with a bounded poll.
+- The second read it as the user holding `allQueuesAccess`, who at that point in the run **owns
+  nothing and participates in nothing** — so zero was the correct answer. Notifications go to owners
+  and participants, not to whoever can see the most queues. The check now finds a real recipient from
+  the stored rows and reads the API as them, which also proves the row-to-API path rather than
+  assuming a fixture.
+
+**8. Fourteen test suites needed the new config keys.** Every workspace suite mocks `src/config`, and
+without `notificationCollapseWindowMinutes` the notification path threw inside its own
+fire-and-forget wrapper — so it silently no-opped and logged a failure on every assignment and
+mention. The path is now genuinely exercised in each of them, and the run produces no
+`notification failed` lines at all.
+
+**9. The migration guard test earned its keep again.** Adding `notifications` with a foreign key to
+`referral_workspaces` failed `dbMigrations.test.ts`'s pinned child-table list for the second time —
+PRD-28's `workspace_exceptions` was the first. Both were intentional, and the test is what made them
+visible rather than silent.
+
+**10. Migration number.** The draft said `0020_add_notifications.sql`; 0020 went to PRD-26 and 0021
+to PRD-28, so this is **`0022_unusual_ultimatum.sql`**. Two tables, additive, with the recipient XOR
+check emitted on the create-table path.
+
 ### Data Models
 
 ```typescript
@@ -255,15 +312,15 @@ document's list:
 | `response_received` | owner | no |
 | `new_document` | participants | no |
 | `mention` | the mentioned user only | no |
-| `overdue` | owner, or queue managers when unowned | no |
-| `exception` | owner, or queue managers when unowned | no |
+| `overdue` | owner, or queue managers when unowned (`owner-or-queue-managers`) | no |
+| `exception` | owner, or queue managers when unowned (`owner-or-queue-managers`) | no |
 | `guest_invited` | the guest | **yes** |
 | `guest_activity` | participants | no |
 | `shared_activity` | the guest | **yes** |
 
 Guest-addressed types default to email because a guest has no bell to look at.
 
-Migration: `0020_add_notifications.sql`.
+Migration: `0022_unusual_ultimatum.sql` (see finding 10).
 Config: `config.workspace.notificationRetentionDays` (default 90),
 `config.workspace.notificationCollapseWindowMinutes` (default 15).
 
@@ -341,7 +398,28 @@ deliberately cheap.
 - Retention pruning added to the existing interval sweep
 - `config.workspace.notificationRetentionDays`,
   `config.workspace.notificationCollapseWindowMinutes`
-- `tests/unit/workspace/notificationService.test.ts`
+- `tests/unit/workspace/notificationService.test.ts` — 44 tests, of which the one that matters most
+  iterates EVERY notification type asserting that anything outside `GUEST_ELIGIBLE_TYPES` is refused
+  for a guest. That shape is deliberate: a type added later is covered automatically.
+- 33 new smoke checks, including the allow list asserted against the STORED ROWS rather than the
+  service, so a future route that bypassed `notify()` would still be caught
+
+**Not built, and why:**
+
+- **A dedicated notification preferences PAGE.** `GET`/`POST /api/notification-preferences` exist and
+  list every type with its switches, but nothing renders them yet. The bell is where the value is,
+  and a settings page with twelve toggles nobody has asked to change is the wrong next thing to
+  build.
+- **`pending_response` and `response_received` triggers.** The types exist and are notifiable, but
+  the codebase has no single point where "a request to the counterparty became outstanding" or "an
+  inbound reply cleared it" is decided — PRD-07's ack tracking and PRD-09's info requests each hold
+  half of it. Wiring them would mean inventing that concept here rather than in the PRD that owns it.
+  Recorded rather than silently skipped.
+- **`guest_invited` as a notification row.** PRD-30 already emails the invitation with the same
+  no-clinical-content discipline, so routing it through `notify()` as well would send two emails. The
+  type is guest-eligible so the path is open when PRD-30's own send is consolidated.
+- **SSE or WebSocket delivery.** The bell polls every 20 seconds, which the PRD explicitly permits —
+  "a missed poll is acceptable".
 
 ---
 
@@ -359,5 +437,13 @@ deliberately cheap.
 ## History
 
 **Created:** 2026-09-14  
-**Last Updated:** 2026-09-14  
-**Version:** 1.0
+**Last Updated:** 2026-09-16  
+**Version:** 1.1
+
+**v1.1 — refinement and implementation.** Ten findings recorded above. Three changed behaviour for
+the better: collapsing no longer folds into an already-read notification, pruning never touches an
+unread one however old, and `owner-or-queue-managers` replaced the draft's separate audience so the
+AC9/AC10 fallback lives in the funnel rather than in every caller. Two smoke assertions were mine
+being wrong rather than the code — the second instructively so: it read the bell as the user with
+`allQueuesAccess`, who owns nothing and participates in nothing, so zero was the right answer.
+Notifications go to owners and participants, not to whoever can see the most queues.

@@ -99,6 +99,16 @@ import {
   replayMessage,
 } from './modules/workspace/correlationService';
 import {
+  GuestIneligibleTypeError,
+  getUnreadCount,
+  isNotificationType,
+  listNotifications,
+  listPreferences,
+  markAllRead,
+  markRead,
+  setPreference,
+} from './modules/workspace/notificationService';
+import {
   OwnerFilter,
   buildWorkspacePayload,
   listWorkspaceRows,
@@ -350,7 +360,21 @@ const NAV_HTML = `<style>
   <a href="/rules/admin" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Skills</a>
   <a href="/walkthrough" style="color:#20c997;text-decoration:none;font-size:0.88rem;font-weight:600;">Walkthrough</a>
   <a href="/demo" style="color:#ffc107;text-decoration:none;font-size:0.88rem;font-weight:600;">Demo Launcher</a>
-  <label style="margin-left:auto;display:flex;align-items:center;gap:6px;color:#adb5bd;font-size:0.8rem;">
+  <div id="notifBell" style="margin-left:auto;position:relative;">
+    <button id="notifBtn" title="Notifications"
+      style="background:#12404f;border:1px solid #1d5a6d;border-radius:6px;color:#fff;cursor:pointer;
+             padding:4px 10px;font-size:0.9rem;line-height:1.3;position:relative;">
+      &#128276;<span id="notifCount"
+        style="display:none;position:absolute;top:-6px;right:-6px;background:#dc3545;color:#fff;
+               border-radius:20px;font-size:0.62rem;font-weight:700;padding:1px 5px;min-width:16px;
+               text-align:center;"></span>
+    </button>
+    <div id="notifPanel"
+      style="display:none;position:absolute;right:0;top:34px;width:380px;max-height:460px;overflow:auto;
+             background:#fff;color:#212529;border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,0.3);
+             z-index:200;text-align:left;"></div>
+  </div>
+  <label style="display:flex;align-items:center;gap:6px;color:#adb5bd;font-size:0.8rem;">
     Acting as
     <select id="actingUserSelect" style="background:#12404f;color:#fff;border:1px solid #1d5a6d;border-radius:4px;padding:4px 8px;font-size:0.82rem;max-width:230px;">
       <option value="">Loading…</option>
@@ -435,8 +459,111 @@ const NAV_HTML = `<style>
 })();
 </script>`;
 
+/**
+ * The notification bell, polled rather than pushed.
+ *
+ * Polling on an interval, not a WebSocket — the PRD's constraint, and a missed
+ * poll is explicitly acceptable. 20 seconds is frequent enough that a bell feels
+ * live and infrequent enough to be invisible on a demo box.
+ *
+ * OPENING THE PANEL MARKS NOTHING READ (AC11). Reading is an explicit act:
+ * clicking one, or "mark all read". A bell that empties itself the moment you
+ * glance at it has lost the only thing it was for.
+ */
+const NAV_BELL_SCRIPT = `
+(function () {
+  var btn = document.getElementById('notifBtn');
+  var panel = document.getElementById('notifPanel');
+  var badge = document.getElementById('notifCount');
+  if (!btn || !panel || !badge) return;
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  var latest = [];
+
+  function paintBadge(n) {
+    if (n > 0) { badge.style.display = ''; badge.textContent = n > 99 ? '99+' : String(n); }
+    else { badge.style.display = 'none'; }
+  }
+
+  function paintPanel() {
+    if (!latest.length) {
+      panel.innerHTML = '<div style="padding:18px 16px;color:#6c757d;font-size:0.85rem;">' +
+        'Nothing yet. Assignments, mentions, overdue actions and exceptions arrive here.</div>';
+      return;
+    }
+    panel.innerHTML =
+      '<div style="padding:8px 14px;border-bottom:1px solid #dee2e6;display:flex;align-items:center;">' +
+        '<strong style="font-size:0.8rem;">Notifications</strong>' +
+        '<button id="notifAll" style="margin-left:auto;font-size:0.74rem;border:1px solid #dee2e6;' +
+          'background:#fff;border-radius:6px;padding:3px 8px;cursor:pointer;">Mark all read</button>' +
+      '</div>' +
+      latest.map(function (n) {
+        return '<div style="padding:10px 14px;border-bottom:1px solid #f1f3f5;' +
+            (n.read ? 'opacity:0.6;' : 'background:#f8fbfc;') + '">' +
+          '<div style="display:flex;gap:8px;align-items:baseline;">' +
+            '<span style="font-size:0.6rem;font-weight:700;text-transform:uppercase;' +
+              'letter-spacing:0.04em;background:#e0e7ff;color:#3730a3;border-radius:20px;' +
+              'padding:1px 7px;">' + esc(n.notificationType) + '</span>' +
+            (n.collapsedCount > 1
+              ? '<span style="font-size:0.66rem;color:#6c757d;">&times;' + n.collapsedCount + '</span>'
+              : '') +
+          '</div>' +
+          '<div style="font-size:0.85rem;font-weight:600;margin:3px 0 2px;">' + esc(n.title) + '</div>' +
+          '<div style="font-size:0.78rem;color:#495057;line-height:1.4;">' + esc(n.body) + '</div>' +
+          '<div style="margin-top:5px;display:flex;gap:10px;font-size:0.74rem;">' +
+            '<a href="' + esc(n.linkPath) + '">Open &rarr;</a>' +
+            (n.read ? '' : '<a href="#" data-read="' + n.id + '">Mark read</a>') +
+          '</div>' +
+        '</div>';
+      }).join('');
+
+    var all = document.getElementById('notifAll');
+    if (all) all.addEventListener('click', function () {
+      fetch('/api/notifications/read-all', { method: 'POST' }).then(load);
+    });
+    panel.querySelectorAll('[data-read]').forEach(function (a) {
+      a.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        fetch('/api/notifications/' + a.getAttribute('data-read') + '/read', { method: 'POST' })
+          .then(load);
+      });
+    });
+  }
+
+  function load() {
+    return fetch('/api/notifications')
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        latest = j.notifications || [];
+        paintBadge(j.unreadCount || 0);
+        if (panel.style.display !== 'none') paintPanel();
+      })
+      .catch(function () { /* a missed poll is acceptable */ });
+  }
+
+  btn.addEventListener('click', function () {
+    var hidden = panel.style.display === 'none';
+    panel.style.display = hidden ? '' : 'none';
+    // Opening PAINTS; it does not mark anything read.
+    if (hidden) paintPanel();
+  });
+
+  document.addEventListener('click', function (ev) {
+    if (!document.getElementById('notifBell').contains(ev.target)) panel.style.display = 'none';
+  });
+
+  load();
+  setInterval(load, 20000);
+})();
+`;
+
 function injectNav(html: string): string {
-  return html.replace('<!--__NAV__-->', NAV_HTML);
+  return html.replace('<!--__NAV__-->', `${NAV_HTML}\n<script>${NAV_BELL_SCRIPT}</script>`);
 }
 
 // ── PRD-19 workspace route helpers ───────────────────────────────────────────
@@ -628,6 +755,120 @@ app.post('/api/workspaces/backfill', async (_req: Request, res: Response, next: 
     const result = await backfillWorkspaces();
     res.json({ success: true, ...result });
   } catch (err) {
+    next(err);
+  }
+});
+
+// ── PRD-27 notifications ─────────────────────────────────────────────────────
+
+/**
+ * The bell. Polled on an interval by the nav, rather than a WebSocket.
+ *
+ * `unreadOnly` defaults to FALSE: opening the list shows recent notifications
+ * whether read or not, because AC11 requires that opening it does not mark
+ * anything read — and a list that shows only unread ones would look like it
+ * had, the moment you marked one.
+ */
+app.get('/api/notifications', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      // Not an error: a database with no users seeded has no bell.
+      res.json({ unreadCount: 0, notifications: [] });
+      return;
+    }
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '30'), 10) || 30, 1), 100);
+    res.json({
+      unreadCount: await getUnreadCount(user.id),
+      notifications: await listNotifications(user.id, {
+        unreadOnly: req.query.unread === '1',
+        limit,
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/notifications/:id/read', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'notification id must be a positive integer' });
+      return;
+    }
+    // Scoped to the recipient inside the service, so marking somebody else's
+    // notification read is a 404 rather than a cross-user write.
+    const changed = await markRead(id, user.id);
+    if (!changed) {
+      res.status(404).json({ error: 'no unread notification with that id for this user' });
+      return;
+    }
+    res.json({ ok: true, unreadCount: await getUnreadCount(user.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/notifications/read-all', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    res.json({ ok: true, marked: await markAllRead(user.id), unreadCount: 0 });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Per-type mute and email switches. Muting PREVENTS CREATION (AC12). */
+app.get('/api/notification-preferences', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    res.json({ preferences: await listPreferences(user.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/notification-preferences', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user' });
+      return;
+    }
+    const body = (req.body ?? {}) as {
+      notificationType?: unknown;
+      muted?: unknown;
+      emailEnabled?: unknown;
+    };
+    const type = typeof body.notificationType === 'string' ? body.notificationType : '';
+    if (!isNotificationType(type)) {
+      res.status(400).json({ error: 'notificationType is not one of the recognised values' });
+      return;
+    }
+    const updated = await setPreference(user.id, type, {
+      muted: typeof body.muted === 'boolean' ? body.muted : undefined,
+      emailEnabled: typeof body.emailEnabled === 'boolean' ? body.emailEnabled : undefined,
+    });
+    res.json({ ok: true, notificationType: type, ...updated });
+  } catch (err) {
+    if (err instanceof GuestIneligibleTypeError) {
+      res.status(422).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 });

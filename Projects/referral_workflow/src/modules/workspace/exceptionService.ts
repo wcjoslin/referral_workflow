@@ -313,6 +313,18 @@ export async function raiseException(input: RaiseExceptionInput): Promise<number
     },
   }).catch((err) => console.error('[ExceptionService] exception_raised audit failed', err));
 
+  // PRD-27 AC9: the owner, or the queue's managers when unowned. An exception
+  // with nobody told is the case this whole feature exists for, so an ORPHAN —
+  // which has no workspace and therefore no owner — deliberately notifies
+  // nobody here: it is surfaced by the exception queue instead, and inventing a
+  // recipient for it would mean broadcasting.
+  if (input.workspaceId) {
+    void (async (): Promise<void> => {
+      const { notifyException } = await import('./notificationService');
+      await notifyException(input.workspaceId as number, input.exceptionType, input.summary);
+    })().catch((err) => console.error('[ExceptionService] exception notification failed', err));
+  }
+
   if (input.workspaceId && priorWorkStatus !== null) {
     try {
       const { setWorkStatus } = await import('./workspaceService');

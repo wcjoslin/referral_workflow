@@ -194,12 +194,13 @@ describe('migrations against a populated database', () => {
         (f) => f.table === 'referral_workspaces',
       ),
     );
-    // Ten as of PRD-28. A table recreation that dropped these would silently
+    // Eleven as of PRD-27. A table recreation that dropped these would silently
     // orphan the workspace children, so the list is pinned deliberately — and
-    // it did its job: adding workspace_exceptions failed this test until the
-    // list was updated on purpose.
+    // it has now done its job twice, failing when PRD-28 added
+    // workspace_exceptions and again when PRD-27 added notifications.
     expect(children.sort()).toEqual([
       'comment_mentions',
+      'notifications',
       'party_addresses',
       'referral_comments',
       'workspace_assertions',

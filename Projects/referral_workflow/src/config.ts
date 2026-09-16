@@ -85,6 +85,19 @@ export const config = {
     // upload is refused before it is buffered rather than after.
     maxUploadBytes: parseInt(optionalEnv('WORKSPACE_MAX_UPLOAD_BYTES', String(20 * 1024 * 1024)), 10),
 
+    // PRD-27. Retention is pruned in the same sweep as the overdue checker
+    // rather than adding a second scheduled job.
+    notificationRetentionDays: parseInt(
+      optionalEnv('WORKSPACE_NOTIFICATION_RETENTION_DAYS', '90'),
+      10,
+    ),
+    // AC13: a burst of activity on one workspace collapses into one row for the
+    // same recipient and type within this window.
+    notificationCollapseWindowMinutes: parseInt(
+      optionalEnv('WORKSPACE_NOTIFICATION_COLLAPSE_WINDOW_MINUTES', '15'),
+      10,
+    ),
+
     // 15 minutes. The sweep only notices the passage of time — every next
     // action and due date is computed SYNCHRONOUSLY with its transition, so
     // this interval controls notification latency, not correctness.
