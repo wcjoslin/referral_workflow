@@ -1612,8 +1612,8 @@ app.delete('/api/saved-filters/:id', async (req: Request, res: Response, next: N
 /**
  * PRD-19 — the flat workspace index.
  *
- * Unfiltered and unscoped on purpose. PRD-20 adds queue grouping, the tab
- * vocabulary and allQueuesAccess scoping, and may replace this page outright.
+ * Unfiltered and unscoped on purpose, and kept so. The scoped, grouped, tabbed
+ * surface is PRD-20's `/queues`; this remains the flat "everything" index.
  */
 app.get('/workspaces', async (req: Request, res: Response, next: NextFunction) => {
   try {

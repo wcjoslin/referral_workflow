@@ -492,7 +492,8 @@ export async function submitAssertion(req: AssertionRequest): Promise<AssertionR
   const now = new Date();
 
   // STORE BEFORE ANYTHING ELSE MOVES. The thread row is where the bytes live,
-  // and PRD-23 will index it.
+  // and PRD-23's hook in recordThreadMessage() indexes it into the document
+  // collection as it is written.
   await recordThreadMessage({
     referralId: referral.id,
     direction: 'outbound',

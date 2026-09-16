@@ -153,8 +153,9 @@ export interface WorkspacePayload {
   resources: { id: string; name: string; department: string }[];
   /**
    * Which reserved panels have real content. Each later PRD flips its own flag
-   * on; the shell renders a labelled "coming in PRD-NN" state for the rest, so
-   * the layout is the real layout from day one (AC13).
+   * on. All five are now true — every reserved panel has real content — and the
+   * flags stay rather than being deleted so a future panel has somewhere to
+   * declare itself unbuilt.
    */
   slots: {
     conversation: boolean;
@@ -403,9 +404,11 @@ export type OwnerFilter = { kind: 'any' } | { kind: 'unassigned' } | { kind: 'us
 /**
  * Every workspace, newest activity first, for the flat index.
  *
- * Deliberately unfiltered and unscoped. PRD-20 adds queue grouping, the tab
- * vocabulary and `allQueuesAccess` scoping, and may replace this page outright
- * rather than extend it — this exists so the detail page is reachable.
+ * Deliberately unfiltered and unscoped, and KEPT that way. PRD-20 shipped the
+ * queue view with grouping, the tab vocabulary and membership scoping at
+ * `/queues`; this flat index remains as the "everything, no scope" surface the
+ * workspace detail page is reachable from. It is not the queue view and does not
+ * pretend to be scoped.
  */
 export async function listWorkspaceRows(
   owner: OwnerFilter = { kind: 'any' },

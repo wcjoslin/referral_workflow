@@ -196,13 +196,19 @@ The logical order for PRD development:
 
 ---
 
-### 16. **[[PRD-16 - 360X Referral Collaboration Workspace|PRD-16: 360X Referral Collaboration Workspace]]** 📋
+### 16. **[[PRD-16 - 360X Referral Collaboration Workspace|PRD-16: 360X Referral Collaboration Workspace]]** ✅
 **Epic.** Turns every recognized 360X referral into a persistent, accountable unit of collaborative work — owner, next action, conversation, documents, participants and a complete history — and makes the workspace itself the 360X enablement layer so neither party needs its own protocol implementation.
 
 - Separate authoritative 360X status from Concord-local work status
 - Referral workspace created automatically from a recognized 360X request
 - Guest participation scoped to a single workspace; protocol artifacts rendered on a party's behalf
 - Parent of PRD-17 through PRD-30; not directly implementable
+
+**Status:** ✅ Complete (2026-09-16). All fourteen children refined and implemented — 1144 unit tests
+across 52 suites, 362 render smoke checks, migrations 0011 … 0022, lint held at the pre-epic
+baseline. Every open question answered except authentication, deferred by explicit decision as
+[[PRD-31 - Caller Authentication]] and still a gate on public deployment. PRD-16 carries a *What this
+epic did NOT deliver* section listing the seven things it left.
 - **Prerequisite:** None (children have their own)
 
 **Status:** 📋 Drafting (2026-09-14)
@@ -212,7 +218,7 @@ The logical order for PRD development:
 
 #### Phase 1 — Foundation
 
-### 17. **[[PRD-17 - Identity & Acting User|PRD-17: Identity & Acting User Model]]** 📋
+### 17. **[[PRD-17 - Identity & Acting User|PRD-17: Identity & Acting User Model]]** ✅
 **The smallest identity layer that unblocks collaboration.** No users table or auth exists today — `referrals.clinician_id` is a free-text input.
 
 - `users` table seeded with demo coordinators, clinicians, schedulers and managers
@@ -225,7 +231,7 @@ The logical order for PRD development:
 
 ---
 
-### 18. **[[PRD-18 - Workspace Entity & Dual Status|PRD-18: Workspace Entity & Dual Status Model]]** 📋
+### 18. **[[PRD-18 - Workspace Entity & Dual Status|PRD-18: Workspace Entity & Dual Status Model]]** ✅
 **The structural foundation.** One workspace row per referral, plus a second status dimension that cannot touch the protocol state.
 
 - `referral_workspaces` table: work status, owner, queue, next action, due date, correlation ids
@@ -244,7 +250,7 @@ The logical order for PRD development:
 
 #### Phase 2 — Workspace surface & cross-party enablement
 
-### 19. **[[PRD-19 - Workspace Shell|PRD-19: Workspace Shell]]** 📋
+### 19. **[[PRD-19 - Workspace Shell|PRD-19: Workspace Shell]]** ✅
 **The page.** A new `/workspaces/:id` surface; `/referrals/:id/review` stays the clinical disposition screen.
 
 - Header: patient, reason, organizations, owner, due date, next action, two distinct status badges
@@ -258,7 +264,7 @@ The logical order for PRD development:
 
 ---
 
-### 21. **[[PRD-21 - Ownership & Assignment|PRD-21: Ownership & Assignment]]** 📋
+### 21. **[[PRD-21 - Ownership & Assignment|PRD-21: Ownership & Assignment]]** ✅
 **Who owns the next action.** One accountable owner per workspace, or an explicitly visible unassigned state.
 
 - Assign, reassign, claim and release, each with a from→to audit event
@@ -273,7 +279,7 @@ The logical order for PRD development:
 
 ---
 
-### 24. **[[PRD-24 - Parties & Participants|PRD-24: Parties & Participants]]** 📋
+### 24. **[[PRD-24 - Parties & Participants|PRD-24: Parties & Participants]]** ✅
 **Who is involved on each side** — and the prerequisite for guest access and the protocol gateway.
 
 - `workspace_parties`: organization, canonical intake Direct address, party role, protocol mode
@@ -289,7 +295,7 @@ The logical order for PRD development:
 
 ---
 
-### 30. **[[PRD-30 - Guest Participation|PRD-30: Guest Participation & Secure Invitations]]** 📋
+### 30. **[[PRD-30 - Guest Participation|PRD-30: Guest Participation & Secure Invitations]]** ✅
 **The other side of the referral, invited in.** Scoped, expiring, revocable access to one workspace.
 
 - Tokenized invitations following the SFT limited-sender/recipient pattern; no passwords
@@ -303,7 +309,7 @@ The logical order for PRD development:
 
 ---
 
-### 29. **[[PRD-29 - 360X Protocol Gateway|PRD-29: 360X Protocol Gateway & Context Authoring]]** 📋
+### 29. **[[PRD-29 - 360X Protocol Gateway|PRD-29: 360X Protocol Gateway & Context Authoring]]** ✅
 **The central bet.** The workspace supplies the protocol, so neither party has to implement 360X — a party brings only a Direct address.
 
 - Any participant attaches 360X context to a message or document; the gateway renders the artifact
@@ -319,7 +325,7 @@ The logical order for PRD development:
 
 #### Phase 3 — Collaboration artifacts
 
-### 22. **[[PRD-22 - Referral Conversation|PRD-22: Referral Conversation (Dual-Visibility)]]** 📋
+### 22. **[[PRD-22 - Referral Conversation|PRD-22: Referral Conversation (Dual-Visibility)]]** ✅
 **One conversation attached to the referral**, carrying internal notes and shared messages in one thread.
 
 - Per-comment `Internal` / `Shared` visibility; internal is the default, sharing needs confirmation
@@ -338,7 +344,7 @@ The logical order for PRD development:
 
 ---
 
-### 23. **[[PRD-23 - Document Collection|PRD-23: Referral Document Collection]]** 📋
+### 23. **[[PRD-23 - Document Collection|PRD-23: Referral Document Collection]]** ✅
 **Everything clinical on a referral in one list** — as an index over content that already exists, not a second copy.
 
 - `workspace_documents` indexing six content sources: protocol messages, the legacy referral C-CDA,
@@ -359,7 +365,7 @@ The logical order for PRD development:
 
 ---
 
-### 25. **[[PRD-25 - Activity History & Audit|PRD-25: Unified Activity History & Audit]]** 📋
+### 25. **[[PRD-25 - Activity History & Audit|PRD-25: Unified Activity History & Audit]]** ✅
 **The first per-referral reader of the PRD-14 event log**, which has only ever been aggregated.
 
 - Merged feed: system events, user actions, guest actions, comments, documents, delivery receipts
@@ -491,7 +497,7 @@ demoted, an unranked orphan had no reassociation path at all. Also fills PRD-18'
 | [[PRD-14 - Analytics Agent (Phase 1)\|14]] | Analytics Agent (Phase 1) | ✅ | Event log, indexes, emission | `analytics/` |
 | [[PRD-14 - Analytics Agent (Phase 2)\|14b]] | Analytics Agent (Phase 2) | 🔧 | SQL dashboard, KPI charts, seed data | `analytics/` |
 | [[PRD-15 - Analytics Agent AI\|15]] | Analytics Agent AI | 📋 | Anomaly detection, Claude pattern analysis, findings UI | `analytics/` |
-| [[PRD-16 - 360X Referral Collaboration Workspace\|16]] | 360X Collaboration Workspace (Epic) | 📋 | Persistent referral workspace; 360X enablement layer | `workspace/` |
+| [[PRD-16 - 360X Referral Collaboration Workspace\|16]] | 360X Collaboration Workspace (Epic) | ✅ | Persistent referral workspace; 360X enablement layer | `workspace/` |
 | [[PRD-17 - Identity & Acting User\|17]] | Identity & Acting User | ✅ | Users table, acting-user picker, `user:<id>` actors | `workspace/` |
 | [[PRD-18 - Workspace Entity & Dual Status\|18]] | Workspace Entity & Dual Status | ✅ | Workspace row, work status machine, closure conflict | `workspace/`, `state/` |
 | [[PRD-19 - Workspace Shell\|19]] | Workspace Shell | ✅ | `/workspaces/:id`, header, dual badges, panel slots | `workspace/`, `views/` |

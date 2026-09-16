@@ -26,8 +26,13 @@
  * present. A guest who edits their URL to `/workspaces/3` would be served a
  * different patient's internal workspace. `guestCookiePresent()` below is the
  * mitigation: internal routes refuse a request carrying a guest cookie, which
- * closes the path this PRD opens. It is not authentication, and PRD-20 owns the
- * real boundary.
+ * closes the path this PRD opens.
+ *
+ * It is NOT authentication. PRD-20 was originally going to own the real
+ * boundary; it does not — that work was deferred out of the epic by an explicit
+ * decision and is tracked as PRD-31. PRD-20 ships queue scoping as a
+ * server-side least-privilege DEFAULT against this same forgeable identity.
+ * Deploying guest access to a publicly reachable host is gated on PRD-31.
  */
 
 import { eq } from 'drizzle-orm';

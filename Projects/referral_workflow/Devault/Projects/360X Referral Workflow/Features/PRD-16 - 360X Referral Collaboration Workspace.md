@@ -5,7 +5,7 @@ prev: "[[PRD-15 - Analytics Agent AI]]"
 
 # PRD-16: 360X Referral Collaboration Workspace (Epic)
 
-**Status:** Drafting  
+**Status:** ✅ Complete — all fourteen children shipped  
 **Team:** Clinical Workflow & Collaboration  
 **Module:** `workspace/`  
 **Epic:** This document *is* the epic — PRD-17 through PRD-30 are its children
@@ -146,10 +146,53 @@ do not — and every child PRD that touches outbound data must carry a test asse
 
 ## Feature map
 
-**Refinement status.** PRD-17 and PRD-18 are refined and Ready for Dev. PRD-19 … PRD-30 are first
-drafts at Drafting; the migration numbers they quote are indicative and get assigned when each is
-implemented, and PRD-20, PRD-24, PRD-29 and PRD-30 carry known-issue notes recorded during the
-PRD-17/18 refinement.
+**Delivery status: all fourteen children are refined and implemented.** Each was refined against the
+codebase first — which repeatedly found the draft describing what its author assumed rather than what
+was there — then built, tested and shipped as its own change.
+
+| | |
+|---|---|
+| Unit tests | **1144**, across 52 suites |
+| Render smoke checks | **362**, against a live server and a real database |
+| Migrations | **0011 … 0022** |
+| Lint | **111 problems — the pre-epic baseline, never raised** |
+
+**What the refinements changed.** Not cosmetic. A sample of the design decisions that came out of
+reading the code rather than the draft:
+
+- PRD-18's advisory-mapping rule as drafted was **unimplementable** — its condition was always true,
+  making the decline path unreachable. Replaced with an explicit `workStatusIsManual` flag.
+- PRD-18's first `hasOpenInternalItems()` definition was `workStatus !== Resolved`, which was true for
+  every workspace in Phase 1 — so 30 of 100 demo referrals derived `Follow-up-Required` and the
+  `Resolved` branch was unreachable. PRD-22 and PRD-28 later supplied its two real sources.
+- PRD-20's claim to own the authentication fix was **reassigned out of the epic** by an explicit
+  decision, and is now [[PRD-31 - Caller Authentication]] — a named follow-up rather than an unowned
+  comment.
+- PRD-26's rule table was moved OUT of `config.ts`, because a test mocking that module had been
+  asserting the table against a copy of itself and would have stayed green with a wrong table
+  shipped.
+- PRD-24's single `directAddress` column was wrong about Direct address cardinality; a party holds
+  several.
+
+**Bugs found and fixed during implementation**, each caught by a test or a live smoke check written
+for an acceptance criterion rather than by review:
+
+- A migration that **applied to an empty database and failed on a populated one** — drizzle-kit emits
+  `PRAGMA foreign_keys=OFF`, which is a no-op inside a transaction. It would have passed CI and
+  broken the demo database. Guarded now by `dbMigrations.test.ts`, which has since caught two
+  intentional schema changes as well.
+- A due-date entry moment that fell back to `updated_at`, which the recompute itself writes — so a
+  backfill **silently reset every deadline in the database** while looking exactly like the feature
+  working.
+- An exception-resolution path that restored the wrong work status whenever two exceptions were open,
+  discarding the state the workspace was actually in.
+- `raiseException()` awaiting its own audit event, so an audit failure **lost the exception** —
+  inverting the priority that whole feature defends.
+- A share lock that never fired, because both timestamps are drizzle `mode: 'timestamp'` and store
+  whole seconds, so same-second activity compared equal.
+- Access logged AFTER resolving content, so a vanished document answered 410 and recorded nothing.
+
+Migration numbers quoted in the children were indicative when drafted and are now the real ones.
 
 | PRD | Feature | Phase | Module |
 |---|---|---|---|
@@ -224,16 +267,60 @@ removes bilateral deployment as an adoption blocker.
 
 Carried from the source document's risk table; each is assigned to the PRD that must decide it.
 
-| Question | Owner |
-|---|---|
-| Are comment edits prohibited or versioned? How is deletion represented? | PRD-22 |
-| Which receipts prove technical delivery versus human access? | PRD-25 |
-| How is a completed protocol lifecycle with open internal follow-up represented? | PRD-18, PRD-26 |
-| What enforces least-privilege access to PHI in queues and workspaces? | PRD-20, PRD-30 |
-| **Internal routes have no authentication at all** — `tryGetActingUser()` falls back to the first active user, so an unauthenticated request is served as real staff. Harmless while every user was internal; a PHI exposure the moment PRD-30 hands a URL to an external organization. PRD-30 v1.1 ships a mitigation (internal routes refuse a guest cookie) and records this as a gate on deploying guest access publicly. | PRD-20 owns the fix |
-| Whose Direct identity signs an artifact rendered on a party's behalf? | PRD-29 |
-| ~~How many Direct addresses does a party have, and which is canonical for sending?~~ **Answered in PRD-24 v1.1:** several — a canonical intake address on the party plus a `party_addresses` row per address observed. PRD-29 sends to the inbound address, falling back to intake. | PRD-24 ✅, then PRD-29 and PRD-30 |
-| How are duplicate, late, unmatched and contradictory messages reconciled? | PRD-28 |
+Every one is now answered. The answers are recorded here rather than only in the child PRDs, because
+a question asked at the epic level deserves its resolution at the epic level.
+
+| Question | Answer | Owner |
+|---|---|---|
+| ~~Are comment edits prohibited or versioned? How is deletion represented?~~ | **Versioned, and deletion is a tombstone.** `referral_comments` holds identity only; `comment_revisions` holds content, with a PARTIAL unique index making "exactly one current revision" a database invariant. A delete sets `deleted_at` and keeps every revision — a shared comment cannot be unshared, and the history says so. | PRD-22 ✅ |
+| ~~Which receipts prove technical delivery versus human access?~~ | **Kept separate, deliberately.** `delivery` evidence is an MDN or HL7 ACK reaching an address; `access` evidence is a `document_access_log` row. `evidenceOf()` classifies each event as one or the other, and merging them into a single "seen" indicator is the specific mistake PRD-23 and PRD-25 both refuse — a HISP receipt is not evidence a person read anything. | PRD-25 ✅ |
+| ~~How is a completed protocol lifecycle with open internal follow-up represented?~~ | **`Closed-Confirmed` + `Follow-up-Required`**, and the branch is computed inside `proposeWorkStatus()` from `hasOpenInternalItems()`. That function now ORs two real sources: an unacknowledged mention (PRD-22) and an unresolved exception (PRD-28). Its first definition was wrong in a way only real data exposed. | PRD-18 ✅, PRD-26 ✅ |
+| ~~What enforces least-privilege access to PHI in queues and workspaces?~~ | **Queue membership, as a server-side predicate — but NOT an access control.** Scope resolves before any caller filter and an out-of-scope slug is refused rather than filtered, so a client cannot widen its own scope. It scopes against a forgeable cookie identity, so it is a least-privilege DEFAULT. Stated plainly everywhere it appears rather than overclaimed. | PRD-20 ✅, PRD-30 ✅ |
+| **Internal routes have no authentication at all** — `tryGetActingUser()` falls back to the first active user, so an unauthenticated request is served as real staff. | **STILL OPEN, and deliberately so.** Reassigned out of this epic by an explicit decision and tracked as [[PRD-31 - Caller Authentication]]. PRD-30's mitigation (internal routes refuse a guest cookie) stands. **Deploying to a publicly reachable host is gated on PRD-31** — repeated in the schema, the guest middleware, the queue list page and the PRD index so an engineer meets it where they work. | **PRD-31 — deferred, not scheduled** |
+| ~~Whose Direct identity signs an artifact rendered on a party's behalf?~~ | **Configurable, because real deployments differ.** `config.workspace.senderIdentityMode` is `organization` (the default, and a no-op against every existing outbound path) or `individual` (the acting user's own address, falling back to the org intake address). It changes the AUTHORSHIP claim, not the transport signature: under Mode A the licensed party's HISP signs either way, and that is not non-repudiation of the individual. | PRD-29 ✅ |
+| ~~How many Direct addresses does a party have, and which is canonical for sending?~~ | **Several** — a canonical intake address on the party plus a `party_addresses` row per address observed. PRD-29 sends to the inbound address, falling back to intake. | PRD-24 ✅ |
+| ~~How are duplicate, late, unmatched and contradictory messages reconciled?~~ | **Each becomes a visible exception retaining the raw artifact**, because on those paths the exception row is the only copy. Reassociation attaches an orphan to a workspace with full audit and **never replays a protocol transition** — coupling them would let a mis-association corrupt the externally authoritative state. Idempotency moved from a JSON file to `processed_messages`, which records the OUTCOME rather than merely that a message was seen. | PRD-28 ✅ |
+
+---
+
+## What this epic did NOT deliver
+
+Stated plainly, because an epic that reports itself complete owes a reader the list of what it left.
+
+**1. Authentication — [[PRD-31 - Caller Authentication]], deferred by explicit decision.** The single
+most consequential omission. Everything the epic built that looks like an access boundary — queue
+scope, comment visibility, document gates — is correct *relative to the identity beneath it*, and
+none of them is stronger than a cookie anybody can set. **Deploying to a publicly reachable host is
+gated on it.**
+
+**2. `referral_id` on `attachment_requests`.** Claims attachments still have no path to a referral
+(`attachment_responses → attachment_requests → patients`). PRD-28 defines an
+`unlinked-attachment-request` exception type so the capture point is ready, and nothing raises it;
+the claims PRD owns the column.
+
+**3. An inbound correlation path for `InfoReply`.** It has none, and adding one would mean inventing
+an inbound format no counterparty sends. Such a message lands as `unmatched-message`.
+
+**4. `pending_response` / `response_received` notifications.** The types exist and are notifiable,
+but no single point in the codebase decides "a request to the counterparty became outstanding" —
+PRD-07's ack tracking and PRD-09's info requests each hold half of it.
+
+**5. PRD-29 gateway failure capture.** `delivery-failed`, `counterparty-rejected` and
+`unresolvable-address` are defined and raisable. `ack-error-code` already covers the rejection case
+that actually occurs; wiring the gateway's own failure paths is a change to its module.
+
+**6. Business-hours and holiday awareness for due dates.** Offsets are elapsed hours — 48 hours
+includes a weekend. Said so where the offsets are edited and on the page that shows them, rather than
+letting "due in 4 hours" on a Friday evening read as a promise.
+
+**7. The `route-to-queue` skill action, and a notification preferences page.** Both dropped with
+reasons recorded in their PRDs rather than silently omitted.
+
+Beyond these, two demo-honesty gaps worth naming: the invitation link is only ever delivered by
+email, so demonstrating guest access needs the link read out of the mail log; and
+`seed-analytics-demo.ts` inserts referrals directly rather than through the ingest pipeline, so it
+produces no exceptions, no processed-message rows and no auto-declines — correct, since PRD-28's
+capture points are on the pipeline that script bypasses.
 
 ---
 
@@ -377,5 +464,16 @@ No application code. Per `CLAUDE.md`, each child PRD is implemented on its own
 ## History
 
 **Created:** 2026-09-14  
-**Last Updated:** 2026-09-14  
-**Version:** 1.0
+**Last Updated:** 2026-09-16  
+**Version:** 1.2
+
+**v1.2 — epic closed.** All fourteen children refined and implemented: 1144 unit tests across 52
+suites, 362 render smoke checks against a live server, migrations 0011 … 0022, lint held at the
+pre-epic baseline throughout. Every open question in the table above is answered except
+authentication, which was reassigned out of the epic by explicit decision as
+[[PRD-31 - Caller Authentication]] and remains a gate on public deployment. A *What this epic did NOT
+deliver* section was added, because an epic reporting itself complete owes a reader that list.
+
+**v1.1 — PRD-17/18 refinement.** Recorded that the two Phase-1 prerequisites were refined, that
+migration numbers in the unrefined children were indicative, and that Direct address cardinality was
+an open model question spanning PRD-24/29/30.
