@@ -26,9 +26,9 @@
 import express, { Request, Response, NextFunction } from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
-import { eq, inArray } from 'drizzle-orm';
+import { asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from './db';
-import { referrals, patients, outboundMessages, attachmentRequests, attachmentResponses, priorAuthRequests, referralMessages } from './db/schema';
+import { referrals, patients, outboundMessages, attachmentRequests, attachmentResponses, priorAuthRequests, referralMessages, referralWorkspaces, queues } from './db/schema';
 import { accept, decline, ReferralNotFoundError as DispositionNotFoundError } from './modules/prd02/dispositionService';
 import { getCachedAssessment } from './modules/prd02/referralService';
 import { scheduleReferral, ReferralNotFoundError, SchedulingConflictError } from './modules/prd03/schedulingService';
@@ -3086,7 +3086,7 @@ app.post('/api/workspaces/:id/invitations', async (req: Request, res: Response, 
       return;
     }
 
-    const { invitation } = await createInvitation(
+    const { invitation, inviteUrl } = await createInvitation(
       workspaceId,
       body.partyId,
       body.recipientEmail.trim(),
@@ -3094,14 +3094,21 @@ app.post('/api/workspaces/:id/invitations', async (req: Request, res: Response, 
       typeof body.expiresInHours === 'number' ? body.expiresInHours : undefined,
     );
 
-    // NOTE the absence of `inviteUrl`. The raw token goes to the invited
+    // `inviteUrl` is WITHHELD BY DEFAULT. The raw token goes to the invited
     // address and nowhere else — returning it here would put it in the
     // inviter's browser history, and from there into a screenshot.
+    //
+    // `WORKSPACE_REVEAL_INVITE_LINK=true` overrides that for a local demo,
+    // where SMTP is unreachable and the guest half of PRD-30 would otherwise
+    // be impossible to reach at all. The flag is read per request rather than
+    // captured at startup so nothing caches it, and the response says
+    // `devOnly` so a client cannot mistake it for normal API output.
     res.json({
       success: true,
       invitationId: invitation.id,
       expiresAt: invitation.expiresAt.toISOString(),
       emailDelivered: invitation.emailDelivered,
+      ...(config.workspace.revealInviteLink ? { inviteUrl, devOnly: true } : {}),
     });
   } catch (err) {
     if (err instanceof PartyNotOnWorkspaceError) {
@@ -3152,12 +3159,16 @@ app.post(
         res.status(401).json({ error: 'No acting user. Seed users first.' });
         return;
       }
-      const { invitation } = await reissueInvitation(invitationId, actor);
+      const { invitation, inviteUrl } = await reissueInvitation(invitationId, actor);
+      // Same dev-only reveal as the create route. Re-issue mints a NEW token,
+      // so without it here the link shown after a failed email delivery would
+      // be the superseded one — the confusing half-fix.
       res.json({
         success: true,
         invitationId: invitation.id,
         expiresAt: invitation.expiresAt.toISOString(),
         emailDelivered: invitation.emailDelivered,
+        ...(config.workspace.revealInviteLink ? { inviteUrl, devOnly: true } : {}),
       });
     } catch (err) {
       if (err instanceof InvitationNotFoundError) {
@@ -5152,6 +5163,66 @@ app.post('/walkthrough/seed', async (_req: Request, res: Response, next: NextFun
       pathE:  { referralId: referralEId, patientId: patientEId },
       pathF:  { referralId: referralFId, patientId: patientFId },
       pathG:  { patientId: patientGId },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Picks a good example workspace for the walkthrough's collaboration tour.
+ *
+ * Path H tours SURFACES rather than driving a transition, so unlike paths A-G
+ * it does not seed its own referral: a workspace created fresh would have no
+ * owner, no conversation and no parties, and the tour would walk somebody
+ * through a series of empty panels. It reads the board that
+ * `npm run seed:full-demo` produces instead.
+ *
+ * "Good" means it actually exercises what the steps talk about -- a party to
+ * invite, an owner to show, and a comment thread -- so the ordering prefers
+ * those. Returns `workspace: null` when the board has not been seeded, and the
+ * page then keeps the steps disabled with a hint rather than offering dead
+ * links.
+ */
+app.get('/walkthrough/collab-target', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rows = await db
+      .select({
+        workspaceId: referralWorkspaces.id,
+        referralId: referralWorkspaces.referralId,
+        firstName: patients.firstName,
+        lastName: patients.lastName,
+        queueSlug: queues.slug,
+        queueName: queues.name,
+        hasParty: sql<number>`(select count(*) from workspace_parties wp where wp.workspace_id = ${referralWorkspaces.id})`,
+        hasComment: sql<number>`(select count(*) from referral_comments rc where rc.workspace_id = ${referralWorkspaces.id})`,
+      })
+      .from(referralWorkspaces)
+      .innerJoin(referrals, eq(referrals.id, referralWorkspaces.referralId))
+      .innerJoin(patients, eq(patients.id, referrals.patientId))
+      .leftJoin(queues, eq(queues.id, referralWorkspaces.queueId))
+      .where(isNull(referralWorkspaces.archivedAt))
+      .orderBy(asc(referralWorkspaces.id));
+
+    const best =
+      rows.find((r) => r.hasParty > 0 && r.hasComment > 0) ??
+      rows.find((r) => r.hasParty > 0) ??
+      rows[0];
+
+    if (!best) {
+      res.json({ workspace: null, hint: 'Run `npm run seed:full-demo` to populate the board.' });
+      return;
+    }
+
+    res.json({
+      workspace: {
+        workspaceId: best.workspaceId,
+        referralId: best.referralId,
+        patientName: `${best.firstName} ${best.lastName}`,
+        queueSlug: best.queueSlug,
+        queueName: best.queueName,
+      },
+      counts: { workspaces: rows.length },
     });
   } catch (err) {
     next(err);

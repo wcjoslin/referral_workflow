@@ -1524,6 +1524,37 @@
     el.textContent = text;
   }
 
+  // The dev-only invite link (WORKSPACE_REVEAL_INVITE_LINK=true).
+  //
+  // Built with DOM properties rather than an innerHTML string: the URL carries
+  // a bearer token from the server, and concatenating it into markup is how a
+  // value like that ends up parsed as markup. It is also why the link is
+  // rendered with `rel="noreferrer"` -- following it must not put the token in
+  // a Referer header.
+  function showInviteLink(url) {
+    var el = document.getElementById('pMsg');
+    if (!el || !url) return;
+
+    var warn = document.createElement('div');
+    warn.style.cssText = 'margin-top:8px;padding:8px 10px;border-radius:6px;background:#fff3cd;color:#664d03;border:1px solid #ffe69c;font-size:0.82rem;';
+
+    var label = document.createElement('strong');
+    label.textContent = 'Dev only — this link is a credential. ';
+    warn.appendChild(label);
+    warn.appendChild(document.createTextNode(
+      'It is shown because WORKSPACE_REVEAL_INVITE_LINK is on. Anyone holding it has this party\u2019s access until it is used or expires, so keep it out of screenshots.'
+    ));
+
+    var a = document.createElement('a');
+    a.href = url;
+    a.textContent = url;
+    a.rel = 'noreferrer';
+    a.style.cssText = 'display:block;margin-top:6px;word-break:break-all;font-family:ui-monospace,Menlo,monospace;font-size:0.78rem;';
+    warn.appendChild(a);
+
+    el.appendChild(warn);
+  }
+
   async function setMode(partyId, mode) {
     try {
       var res = await fetch('/api/workspaces/' + ws.id + '/parties/' + partyId + '/protocol-mode', {
@@ -1644,11 +1675,15 @@
       var json = await res.json();
       if (!res.ok) { pMsg(json.error || 'Could not send the invitation.', false); return; }
       await reloadParties();
-      // Deliberately does not show a link: the server never returns the token,
-      // so there is nothing to display even if we wanted to.
+      // The link is shown ONLY when the server chose to return it, which it
+      // does only under WORKSPACE_REVEAL_INVITE_LINK. There is nothing to
+      // display otherwise, and the client does not ask.
       pMsg(json.emailDelivered
         ? 'Invitation emailed to ' + recipientEmail + '.'
-        : 'Invitation created, but the email could not be sent. Use Re-issue to try again.', json.emailDelivered);
+        : 'Invitation created, but the email could not be sent.'
+          + (json.inviteUrl ? ' Use the link below to open it as the guest.' : ' Use Re-issue to try again.'),
+        json.emailDelivered || Boolean(json.inviteUrl));
+      showInviteLink(json.inviteUrl);
     } catch (err) {
       pMsg('Could not send the invitation: ' + err.message, false);
     }
@@ -1673,6 +1708,7 @@
       if (!res.ok) { pMsg(json.error || 'Could not re-issue it.', false); return; }
       await reloadParties();
       pMsg('New link sent. The previous one no longer works.', true);
+      showInviteLink(json.inviteUrl);
     } catch (err) {
       pMsg('Could not re-issue it: ' + err.message, false);
     }

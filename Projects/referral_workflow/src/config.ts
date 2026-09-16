@@ -58,6 +58,28 @@ export const config = {
   workspace: {
     publicBaseUrl: optionalEnv('PUBLIC_BASE_URL', `http://localhost:${optionalEnv('PORT', '3000')}`),
     guestInvitationExpiryHours: parseInt(optionalEnv('GUEST_INVITATION_EXPIRY_HOURS', '336'), 10),
+    /**
+     * Shows the raw guest invitation link in the inviter's own browser after
+     * they create an invitation. OFF unless explicitly set to 'true'.
+     *
+     * WHY IT EXISTS. The link is delivered by email and nowhere else, so on a
+     * demo box with no reachable SMTP the guest half of PRD-30 is unreachable:
+     * you can create an invitation and then have no way to open it. This makes
+     * the guest experience demonstrable.
+     *
+     * WHAT IT COSTS, stated plainly because the default is off for a reason.
+     * The link contains a 256-bit bearer token. Displaying it puts that token
+     * in the inviter's browser, its history, and any screenshot or screen share
+     * of that page -- which is exactly what `createInvitation()`'s comment says
+     * it is avoiding. Anyone holding the link has the invited party's access
+     * until it is used or expires.
+     *
+     * So: a local demo affordance, never a deployment setting. It is separate
+     * from PRD-31 rather than covered by it -- PRD-31 is about authenticating
+     * internal callers, while this is about not printing a guest's credential.
+     * Both must be settled before this application faces a network.
+     */
+    revealInviteLink: optionalEnv('WORKSPACE_REVEAL_INVITE_LINK', 'false') === 'true',
     guestSessionExpiryHours: parseInt(optionalEnv('GUEST_SESSION_EXPIRY_HOURS', '24'), 10),
     // PRD-29. 'organization' is the default because it is what every outbound
     // path in this codebase already does — each passes

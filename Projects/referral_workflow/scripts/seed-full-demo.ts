@@ -21,11 +21,19 @@ import { processInboundMessage } from '../src/modules/prd01/messageProcessor';
 import { ingestReferral } from '../src/modules/prd02/referralService';
 import { emitEvent } from '../src/modules/analytics/eventService';
 import { db } from '../src/db';
-import { referrals, priorAuthRequests, priorAuthResponses } from '../src/db/schema';
+import { referralWorkspaces, referrals, priorAuthRequests, priorAuthResponses } from '../src/db/schema';
 import { ReferralState } from '../src/state/referralStateMachine';
 import { PriorAuthState } from '../src/state/priorAuthStateMachine';
 import { PROVIDER_NAMES, seedUsers } from '../src/modules/workspace/userRoster';
-import { seedQueues } from '../src/modules/workspace/queueService';
+import {
+  rerouteByDepartment,
+  seedQueueMemberships,
+  seedQueues,
+} from '../src/modules/workspace/queueService';
+import { recomputeNextAction } from '../src/modules/workspace/nextActionService';
+import { proposeForReferral } from '../src/modules/workspace/workspaceService';
+import { applyPatientIdentity, identityForIndex, type DemoPatientIdentity } from './demo-patients';
+import { seedCollaboration } from './demo-collaboration';
 
 const FIXTURES_DIR = path.resolve(__dirname, '../tests/fixtures');
 
@@ -79,6 +87,7 @@ interface Scenario {
   dept: string;
   clinicianId: string;
   endState:
+    | 'Acknowledged'
     | 'Closed-Confirmed'
     | 'Encounter'
     | 'No-Show'
@@ -226,6 +235,24 @@ const SCENARIOS: Scenario[] = [
   { index: 98,  fixture: 'demo-full-workflow.xml', dept: 'Oncology',         clinicianId: 'dr-chen',      endState: 'Encounter', daysBack: 7 },
   { index: 99,  fixture: 'demo-full-workflow.xml', dept: 'Cardiology',       clinicianId: 'dr-kim',       endState: 'Encounter', daysBack: 5 },
   { index: 100, fixture: 'demo-full-workflow.xml', dept: 'Neurology',        clinicianId: 'dr-patel',     endState: 'Encounter', daysBack: 3 },
+
+  // ── Fresh arrivals ─────────────────────────────────────────────────────────
+  //
+  // Referrals that have been acknowledged and NOT yet dispositioned, which is
+  // what "sitting in my queue this morning" looks like. Without these the
+  // seeded board had nothing in `Triage` at all: every referral was already
+  // accepted, declined or closed, so the work-status tab a coordinator starts
+  // their day on was empty and the accept/decline decision -- the one step
+  // PRD-02 deliberately leaves to a human -- had nothing to act on.
+  //
+  // The `Acknowledged|Triage` rule is due 24 hours after arrival, so the ones
+  // over a day old are genuinely overdue and the newer ones are not.
+  { index: 101, fixture: 'demo-full-workflow.xml',   dept: 'Cardiology',       clinicianId: 'dr-chen',      endState: 'Acknowledged', daysBack: 3 },
+  { index: 102, fixture: 'demo-full-workflow.xml',   dept: 'Neurology',        clinicianId: 'dr-kim',       endState: 'Acknowledged', daysBack: 2 },
+  { index: 103, fixture: 'demo-incomplete-info.xml', dept: 'Orthopedics',      clinicianId: 'dr-patel',     endState: 'Acknowledged', daysBack: 2 },
+  { index: 104, fixture: 'demo-full-workflow.xml',   dept: 'Oncology',         clinicianId: 'dr-rodriguez', endState: 'Acknowledged', daysBack: 1 },
+  { index: 105, fixture: 'demo-full-workflow.xml',   dept: 'Gastroenterology', clinicianId: 'dr-kim',       endState: 'Acknowledged', daysBack: 0 },
+  { index: 106, fixture: 'demo-consult.xml',         dept: 'Cardiology',       clinicianId: 'dr-chen',      endState: 'Acknowledged', daysBack: 0 },
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -234,13 +261,20 @@ function readFixture(filename: string): string {
   return fs.readFileSync(path.join(FIXTURES_DIR, filename), 'utf-8');
 }
 
-function buildRawEmail(cdaContent: string, suffix: string, fromAddress = 'referrer@hospital.direct'): string {
+function buildRawEmail(
+  cdaContent: string,
+  suffix: string,
+  fromAddress = 'referrer@hospital.direct',
+  patientName = 'Demo Patient',
+): string {
   const boundary = 'SEED_BOUNDARY_001';
   const CRLF = '\r\n';
   const headers = [
     `From: Demo Referrer <${fromAddress}>`,
     'To: receiving@specialist.direct',
-    'Subject: Referral — Demo Patient',
+    // The patient's name, so the message history and document list read as 100
+    // distinct referrals rather than 100 rows of "Demo Patient".
+    `Subject: Referral — ${patientName}`,
     `Message-ID: <demo-full-demo-seed-${suffix}@hospital.direct>`,
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     '',
@@ -260,9 +294,17 @@ function buildRawEmail(cdaContent: string, suffix: string, fromAddress = 'referr
   return headers + [textPart, cdaPart, `--${boundary}--`].join(CRLF);
 }
 
-async function ingestFixture(fixtureName: string, suffix: string, fromAddress?: string): Promise<number> {
-  const cda = readFixture(fixtureName);
-  const rawEmail = buildRawEmail(cda, suffix, fromAddress);
+async function ingestFixture(
+  fixtureName: string,
+  suffix: string,
+  identity: DemoPatientIdentity,
+  fromAddress?: string,
+): Promise<number> {
+  // Each fixture carries one hard-coded patient, so ingesting them as-is gave
+  // 100 patients from five distinct (surname, DOB) pairs and 95 correct
+  // duplicate-patient exceptions. See scripts/demo-patients.ts.
+  const cda = applyPatientIdentity(readFixture(fixtureName), identity);
+  const rawEmail = buildRawEmail(cda, suffix, fromAddress, `${identity.firstName} ${identity.lastName}`);
   const processed = await processInboundMessage(rawEmail);
   const referralId = await ingestReferral(processed);
   if (referralId === null) {
@@ -502,13 +544,20 @@ async function insertPriorAuth(
 }
 
 /**
- * Backdate a referral and all its related workflow events to targetDate.
+ * Backdate a referral, its workflow events and its workspace to targetDate.
  * Events are offset proportionally so relative timing is preserved.
+ *
+ * THE OFFSET IS IN SECONDS, NOT MILLISECONDS. `workflow_events.created_at` is
+ * a drizzle `mode: 'timestamp'` column, which stores WHOLE SECONDS. This
+ * function used to subtract a millisecond delta from it, so backdating a
+ * referral by 85 days moved its events back by 85,000 days: 963 of the 1,703
+ * seeded events landed in the year 1785. The activity history and every
+ * analytics time series read from that column.
  */
 async function spreadTimestamps(referralId: number, targetDate: Date): Promise<void> {
   const nowMs = Date.now();
   const targetMs = targetDate.getTime();
-  const deltaMs = nowMs - targetMs; // positive = subtract to go backward
+  const deltaSeconds = Math.floor((nowMs - targetMs) / 1000); // positive = go backward
 
   // Update referral created_at
   await db.update(referrals).set({ createdAt: targetDate }).where(eq(referrals.id, referralId));
@@ -516,18 +565,94 @@ async function spreadTimestamps(referralId: number, targetDate: Date): Promise<v
   // Backdate referral workflow events
   await db.run(sql`
     UPDATE workflow_events
-    SET created_at = created_at - ${deltaMs}
+    SET created_at = created_at - ${deltaSeconds}
     WHERE entity_type = 'referral' AND entity_id = ${referralId}
   `);
 
   // Backdate PA events for this referral
   await db.run(sql`
     UPDATE workflow_events
-    SET created_at = created_at - ${deltaMs}
+    SET created_at = created_at - ${deltaSeconds}
     WHERE entity_type = 'priorAuth' AND entity_id IN (
       SELECT id FROM prior_auth_requests WHERE referral_id = ${referralId}
     )
   `);
+
+  // The workspace shares the referral's timeline.
+  //
+  // WHY THIS MATTERS BEYOND TIDINESS. `recomputeNextAction()` derives the due
+  // date from `work_status_set_at ?? created_at`, so a workspace stamped "now"
+  // against an 85-day-old referral gets a deadline 8 to 72 hours in the FUTURE.
+  // Every one of the 100 seeded workspaces was inside its deadline and the
+  // overdue list, the overdue badge and `notifyOverdue()` had nothing to show.
+  //
+  // Backdating the stored timestamps rather than passing an explicit `enteredAt`
+  // is deliberate: the recompute must reach the same answer when the sweep or a
+  // later transition runs it, and those pass no override.
+  await db.run(sql`
+    UPDATE referral_workspaces
+    SET created_at = ${Math.floor(targetMs / 1000)},
+        updated_at = ${Math.floor(targetMs / 1000)},
+        work_status_set_at = CASE
+          WHEN work_status_set_at IS NULL THEN NULL
+          ELSE work_status_set_at - ${deltaSeconds}
+        END
+    WHERE referral_id = ${referralId}
+  `);
+
+  // The next action is NOT recomputed here. `settleWorkspaceTimeline()` does it
+  // once at the end, after the advisory mapping has set the real work status --
+  // which itself stamps `work_status_set_at` with the current time and would
+  // undo the backdating above if it ran afterwards.
+}
+
+/**
+ * The final pass: give every workspace its real work status, then its real
+ * deadline.
+ *
+ * TWO PROBLEMS, ONE ORDER-SENSITIVE FIX.
+ *
+ * First, this seed applies every transition after `Acknowledged` by writing
+ * `referrals.state` DIRECTLY, to dodge the SMTP and Gemini dependencies in the
+ * live paths. That bypasses `proposeForReferral()`, the single funnel where the
+ * advisory mapping runs -- so the work status never moved off its initial
+ * `Triage`. 97 of 100 workspaces read `Triage` against referrals that were
+ * variously scheduled, declined and closed: the dual-status model that PRD-18
+ * exists to demonstrate, demonstrating nothing.
+ *
+ * Second, the mapping stamps `work_status_set_at = now`, and the due date is
+ * derived from that. So the mapping MUST run before the timestamps are settled,
+ * and the deadline MUST be computed after. Doing it the other way round gives
+ * every workspace a deadline in the near future and an empty overdue list --
+ * which is the state this seed shipped in.
+ */
+async function settleWorkspaceTimeline(): Promise<{ statuses: number; dueDates: number }> {
+  const rows = await db
+    .select({
+      id: referralWorkspaces.id,
+      referralId: referralWorkspaces.referralId,
+      state: referrals.state,
+    })
+    .from(referralWorkspaces)
+    .innerJoin(referrals, eq(referrals.id, referralWorkspaces.referralId))
+    .orderBy(referralWorkspaces.id);
+
+  // 1. The advisory mapping, via the same funnel every real transition uses.
+  for (const row of rows) {
+    await proposeForReferral(row.referralId, row.state as ReferralState);
+  }
+
+  // 2. Re-backdate the entry moment the mapping just overwrote. `created_at` is
+  //    the referral's own backdated date, so this keeps the workspace on the
+  //    same timeline as the referral it belongs to.
+  await db.run(sql`UPDATE referral_workspaces SET work_status_set_at = created_at`);
+
+  // 3. Now the deadline follows from the rule table and a real entry moment.
+  for (const row of rows) {
+    await recomputeNextAction(row.id);
+  }
+
+  return { statuses: rows.length, dueDates: rows.length };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -538,9 +663,10 @@ function sleep(ms: number): Promise<void> {
 
 async function runScenario(scenario: Scenario): Promise<number> {
   const suffix = `${scenario.index}-${Date.now()}`;
-  console.log(`  Scenario ${scenario.index}: ${scenario.fixture} → ${scenario.dept}/${scenario.clinicianId} → ${scenario.endState}${scenario.pa ? ` (PA ${scenario.pa})` : ''}`);
+  const identity = identityForIndex(scenario.index);
+  console.log(`  Scenario ${scenario.index}: ${identity.firstName} ${identity.lastName} → ${scenario.dept}/${scenario.clinicianId} → ${scenario.endState}${scenario.pa ? ` (PA ${scenario.pa})` : ''}`);
 
-  const referralId = await ingestFixture(scenario.fixture, suffix, scenario.referrerAddress);
+  const referralId = await ingestFixture(scenario.fixture, suffix, identity, scenario.referrerAddress);
 
   // Set routing department (Gemini routing fires in background but we override synchronously)
   await setDepartment(referralId, scenario.dept);
@@ -585,6 +711,11 @@ async function runScenario(scenario: Scenario): Promise<number> {
       await declineReferral(referralId, scenario.clinicianId, reason);
       break;
     }
+    case 'Acknowledged':
+      // Nothing to do: `ingestReferral()` already left it Acknowledged. Named
+      // explicitly so a reader sees this is the intended resting state and not
+      // a missing case.
+      break;
     case 'Pending-Information': {
       await pendingInfoReferral(referralId);
       break;
@@ -664,7 +795,14 @@ async function main(): Promise<void> {
   // PRD-20: queues before the scenarios run, so each ingested referral routes
   // to its department queue on creation rather than needing a backfill after.
   const queues = await seedQueues();
-  console.log(`Queues: ${queues.created} created, ${queues.existing} already present.\n`);
+  console.log(`Queues: ${queues.created} created, ${queues.existing} already present.`);
+
+  // Memberships are what make the queue scope non-empty for the seven users
+  // who do not have allQueuesAccess -- the default acting user among them.
+  const memberships = await seedQueueMemberships();
+  console.log(
+    `Queue memberships: ${memberships.created} created, ${memberships.existing} already present.\n`,
+  );
 
   console.log(`Running ${SCENARIOS.length} scenarios:\n`);
 
@@ -691,6 +829,27 @@ async function main(): Promise<void> {
   for (let i = 0; i < inserted.length; i++) {
     await setDepartment(inserted[i], SCENARIOS[i].dept);
   }
+
+  // The department is only final NOW, and the workspace was routed during
+  // ingest when it was still unset -- so every workspace is sitting in General
+  // Intake and all ten department queues are empty. Re-resolve them.
+  const rerouted = await rerouteByDepartment();
+  console.log(`Re-routed ${rerouted.moved} workspaces to their department queue (${rerouted.unchanged} already correct).`);
+
+  // The work status and the deadline, in that order -- see settleWorkspaceTimeline().
+  const settled = await settleWorkspaceTimeline();
+  console.log(`Settled ${settled.statuses} work statuses and ${settled.dueDates} due dates.`);
+
+  // Ownership, participants and the conversation -- every one of which was an
+  // empty table after a full seed. Runs last because it assigns owners from
+  // each referral's department, which is only settled above.
+  const collaboration = await seedCollaboration();
+  console.log(
+    `Collaboration: ${collaboration.owners} owners, ${collaboration.participants} participants, ` +
+      `${collaboration.comments} comments (${collaboration.mentions} with a mention), ` +
+      `${collaboration.notificationsRead} notifications marked read` +
+      (collaboration.skipped > 0 ? `, ${collaboration.skipped} skipped` : ''),
+  );
 
   console.log(`\n✓ Seeded ${inserted.length}/${SCENARIOS.length} referrals`);
   console.log('\nRun `npm run dev` → visit http://localhost:3000/analytics');
