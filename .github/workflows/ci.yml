@@ -10,6 +10,7 @@
 #   test       the full Jest suite
 #   lint       a REGRESSION BUDGET, not a clean bill of health (see below)
 #   smoke      boots the server and reads the bytes a browser would get
+#   pages      loads every page in a real browser and fails on a JS exception
 #
 # On lint: src/ carries 111 pre-existing problems. A job that ran `npm run lint`
 # directly would be red from the first commit and stay red, which teaches people
@@ -22,6 +23,14 @@
 # exist, and page data embedded without escaping, which let a patient name close
 # the script element. Both were obvious on sight. This gate exists so the next
 # one is caught by a machine instead.
+#
+# On pages: the smoke gate reads the bytes the SERVER SENDS, and the workspace
+# pages render client-side from an embedded payload — so "the bytes are right"
+# and "the page works" are different claims. /workspaces/:id shipped rendering
+# thirteen blank cards, because a ReferenceError aborted its render, and every
+# gate above stayed green: the tests never load a view, the smoke check saw a
+# byte-perfect response, and neither tsc nor eslint looks inside an inline
+# <script> in a .html file. This gate executes the pages.
 
 name: CI
 
@@ -42,7 +51,7 @@ defaults:
 
 jobs:
   verify:
-    name: build · test · lint · smoke
+    name: build · test · lint · smoke · pages
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -93,3 +102,46 @@ jobs:
       - name: Smoke check the rendered pages
         if: ${{ !cancelled() }}
         run: npm run smoke
+
+      # The page check needs a browser. GitHub's ubuntu images ship Google
+      # Chrome, so this normally just records where it is; the apt fallback
+      # keeps the gate working if that ever stops being true. It FAILS rather
+      # than skipping when no browser can be obtained — a gate that quietly
+      # does nothing is worse than no gate.
+      - name: Locate a browser
+        if: ${{ !cancelled() }}
+        run: |
+          for c in "$CHROME_PATH" "$CHROME_BIN" /usr/bin/google-chrome \
+                   /usr/bin/google-chrome-stable /usr/bin/chromium /usr/bin/chromium-browser; do
+            if [ -n "$c" ] && [ -x "$c" ]; then
+              echo "CHROME_PATH=$c" >> "$GITHUB_ENV"
+              echo "using $c"
+              exit 0
+            fi
+          done
+          echo "No preinstalled browser found; installing chromium."
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq chromium-browser || sudo apt-get install -y -qq chromium
+          for c in /usr/bin/chromium /usr/bin/chromium-browser; do
+            if [ -x "$c" ]; then
+              echo "CHROME_PATH=$c" >> "$GITHUB_ENV"
+              echo "using $c"
+              exit 0
+            fi
+          done
+          echo "Could not obtain a browser for the page check." >&2
+          exit 1
+
+      # Its own database: the page check seeds fixtures of its own, and reusing
+      # the smoke database would make each gate's data depend on the other's.
+      - name: Migrate the page-check database
+        if: ${{ !cancelled() }}
+        env:
+          DATABASE_URL: ./ci-pagecheck.db
+        run: npm run db:migrate
+
+      - name: Page check every page in a real browser
+        if: ${{ !cancelled() }}
+        env:
+          DATABASE_URL: ./ci-pagecheck.db
+        run: npm run pagecheck
