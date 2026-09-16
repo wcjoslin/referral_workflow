@@ -5,7 +5,7 @@ prev: "[[PRD-25 - Activity History & Audit]]"
 
 # PRD-26: Next Action & Due Dates
 
-**Status:** Drafting  
+**Status:** Refined — implemented  
 **Team:** Clinical Workflow & Collaboration  
 **Module:** `workspace/`  
 **Epic:** [[PRD-16 - 360X Referral Collaboration Workspace]]
@@ -147,6 +147,86 @@ working and the message history view is unaffected.
 - No business-hours or holiday awareness. State it plainly in the PRD as a known limitation rather
   than implying the offsets are contractual SLAs.
 
+### Refinement findings and decisions
+
+Recorded here because several were wrong in the draft, and one was a real bug found during
+implementation.
+
+**1. The transition hook is TWO call sites, not "every transition site".** The draft said
+`recomputeNextAction()` is "called from every protocol and work status transition". It does not need
+to be: `proposeForReferral()` is the single funnel every protocol transition already goes through —
+ten call sites across PRD-02/03/04/05/06/09/11 and the protocol gateway — and `applyWorkStatus()` is
+the single write path for `work_status`, covering both a manual `setWorkStatus()` and an applied
+proposal. Hooking those two covers everything, so no call site has to remember.
+
+The protocol hook recomputes **even when the work status proposal was declined**, deliberately: the
+protocol state moved regardless, and only recomputing on an applied proposal would leave a
+manually-held workspace showing an instruction for a state it has left.
+
+**2. The rule table is NOT in `config.ts`.** The draft said to put it there, beside
+`skills.pendingInfoTimeoutHours`. That was tried and reverted. Everything in `config.ts` calls
+`requireEnv()` at import time, so every test suite has to mock the module — and the first version of
+the test suite consequently **restated the entire rule table inside the mock**, meaning every rule
+assertion ran against a copy of itself. That suite would have stayed green with a wrong table
+shipped.
+
+The table now lives in `src/modules/workspace/nextActionRules.ts`, which has no environment
+dependency, and `resolveRule()` reads it directly. `config.ts` carries a comment saying so. The PRD's
+actual requirement — "changing a deadline must not require editing a service" — is met: that file is
+data, not logic. Only `overdueSweepIntervalMs` stayed in `config.ts`, because it genuinely is
+env-driven.
+
+**3. `'appointment'` is a third kind of offset.** The draft's table said "until appointment" as
+prose, which is not expressible as `dueInHours: number`. `dueInHours` is now
+`number | 'appointment' | null`. When the referral has no appointment date — or an unparseable one —
+there is **no due date**, applying AC8's principle (a fabricated deadline is worse than an absent
+one, because it gets chased).
+
+**4. `Scheduled` is deliberately NOT ack-gated, unlike `Closed`.** AC11 says the awaited-by
+determination uses outbound ack state. That is right for `Closed`, where "they owe us" *is* a
+delivery claim. It is wrong for `Scheduled`: what is awaited there is the appointment happening, not
+a message, so gating it would flip the indicator to "nobody" the moment the SIU came back
+acknowledged while the appointment is still days away and very much awaited.
+
+**5. A real bug, found by the test that was written to catch it.** The entry-moment fallback was
+`workStatusSetAt ?? updatedAt`. But `recomputeNextAction()` **writes `updatedAt`** — so every
+recompute without an explicit entry moment pushed the due date forward by however long had passed.
+A backfill over an existing database therefore reset every deadline to the moment of the backfill and
+un-overdued the lot, **while looking exactly like the feature working**. The fallback is now
+`workStatusSetAt ?? createdAt`; `createdAt` never moves. Pinned by two tests asserting that repeated
+runs produce an identical due date.
+
+**6. `NextActionWorkspaceNotFoundError`, not `WorkspaceNotFoundError`.** `workspaceService` already
+exports a class by the latter name and `server.ts` imports *that* one, so two same-named classes in
+different modules would make `err instanceof WorkspaceNotFoundError` silently false for whichever the
+route did not import — a 500 where a 404 belongs. Reusing the existing class would need an import
+back into a module that already imports this one, so the distinct name is the cheap fix.
+
+**7. AC15 already shipped.** The queue-view overdue marking and the `overdueOnly` filter were built
+in PRD-20, which needed them for its own row rendering. Nothing further was required here.
+
+**8. A log-noise fix.** `createWorkspace()` logged a full stack trace whenever queue routing found no
+seeded queues — an expected state in every unit suite that does not exercise queues. That is now a
+single warn line with no trace, so real routing faults are still visible.
+
+### Migrations
+
+The draft said `0017_add_next_action_fields.sql`. 0017 went to PRD-23; this is
+**`0020_hot_tiger_shark.sql`**, and it is six plain `ALTER TABLE ... ADD COLUMN` statements with no
+table recreation.
+
+That last point is a deliberate decision rather than luck. The draft modelled
+`awaitedByPartyId` with `.references(() => workspaceParties.id)`. A real foreign key on a new column
+would have made drizzle-kit recreate `referral_workspaces` — and PRD-20's `0019` already showed what
+that costs: a hand-edited migration, because drizzle-kit emits a `PRAGMA foreign_keys=OFF` that is a
+no-op inside a transaction and fails against the nine tables referencing that table. Not worth a
+second one for a **nullable advisory pointer** that the service revalidates on every read anyway
+(it downgrades to `us` when the party is gone, which is tested). So `awaited_by_party_id` is a plain
+integer, and the schema comment says why.
+
+`tests/unit/workspace/dbMigrations.test.ts` from PRD-20 picked this migration up automatically and
+proves it applies to a populated database.
+
 ### Data Models
 
 One additive migration on the existing table:
@@ -158,23 +238,28 @@ One additive migration on the existing table:
   dueDateOverrideReason: text('due_date_override_reason'),
   overdueNotifiedAt: integer('overdue_notified_at', { mode: 'timestamp' }),
   awaitedBy: text('awaited_by'),                        // 'us' | 'party' | 'nobody'
-  awaitedByPartyId: integer('awaited_by_party_id').references(() => workspaceParties.id),
+  awaitedByPartyId: integer('awaited_by_party_id'),   // plain integer, NOT an FK — see Migrations
 ```
 
 ```typescript
-// src/config.ts — new section
+// src/modules/workspace/nextActionRules.ts — new, and NOT in config.ts (finding 2)
 export interface NextActionRule {
-  action: string;                 // the plain instruction shown to a coordinator
-  dueInHours: number | null;      // null => no deadline for this combination
+  action: string;                              // the instruction a coordinator reads
+  dueInHours: number | 'appointment' | null;   // null => no deadline; see finding 3
   awaitedBy: 'us' | 'party' | 'nobody';
 }
 
-config.workspace.nextActions: {
-  byStateAndWorkStatus: Record<string, NextActionRule>;   // 'Scheduled|Waiting-External'
-  byState: Record<ReferralState, NextActionRule>;         // fallback
-  overdueSweepIntervalMs: number;                         // default 900000 (15 min)
-}
+// Three lookup layers, most specific first. resolveRule() reads these directly.
+export const NEXT_ACTION_BY_WORK_STATUS: Record<string, NextActionRule>;        // 'Exception'
+export const NEXT_ACTION_BY_STATE_AND_WORK_STATUS: Record<string, NextActionRule>; // 'Scheduled|Waiting-External'
+export const NEXT_ACTION_BY_STATE: Record<string, NextActionRule>;              // fallback
+
+// src/config.ts keeps only the genuinely env-driven value:
+config.workspace.overdueSweepIntervalMs   // default 900000 (15 min)
 ```
+
+The work-status layer is new in refinement and wins outright: an `Exception` is the thing to deal
+with, and what the protocol happens to say meanwhile is not the next action.
 
 Starting table (refine during implementation — these are defaults, not contractual):
 
@@ -184,14 +269,16 @@ Starting table (refine during implementation — these are defaults, not contrac
 | `Acknowledged` | `Triage` | Review clinical information and accept or decline | 24h | us |
 | `Pending-Information` | any | Follow up with the referring office for the missing information | 48h | party |
 | `Accepted` | `In-Progress` | Schedule the patient and notify the referrer | 48h | us |
-| `Scheduled` | `Waiting-External` | Awaiting the appointment; confirm attendance | until appointment | party |
+| `Scheduled` | `Waiting-External` | Awaiting the appointment — confirm the patient attends | the appointment date | party |
 | `No-Show` | any | Contact the patient and reschedule | 24h | us |
-| `Encounter` | any | Complete and send the consult note | 72h | us |
+| `Encounter` | any | Complete the encounter and send the consult note | 72h | us |
 | `Consult` | any | Resolve the consultation request | 48h | us |
 | `Closed` | any | Awaiting acknowledgement of the consult note | 48h | party |
 | `Closed-Confirmed` | `Follow-up-Required` | Complete internal follow-up and resolve | 72h | us |
-| `Closed-Confirmed` | `Resolved` | No action required | null | nobody |
-| `Declined` | `Resolved` | No action required | null | nobody |
+| `Closed-Confirmed` | `Resolved` | No action required | none | nobody |
+| `Closed-Confirmed` | other | Confirm nothing is outstanding, then resolve | 24h | us |
+| `Declined` | `Resolved` | No action required | none | nobody |
+| any | unmapped | Review this referral and decide the next step | none (AC8) | us |
 | any | `Exception` | Review and resolve the exception | 8h | us |
 
 ```typescript
@@ -207,10 +294,26 @@ export interface NextActionState {
 
 export function resolveRule(state: ReferralState, workStatus: WorkStatus): NextActionRule;
 
-/** Called from every protocol and work status transition. Respects manual overrides. */
+/**
+ * Called from proposeForReferral() and applyWorkStatus() — the two funnels that
+ * cover every transition (finding 1). Respects manual overrides.
+ *
+ * Returns null rather than throwing for a missing workspace: it runs on protocol
+ * transition paths, and a protocol event must never fail because of internal
+ * bookkeeping.
+ */
 export async function recomputeNextAction(
-  workspaceId: number, enteredAt?: Date,
-): Promise<NextActionState>;
+  workspaceId: number, enteredAt?: Date, actor?: string,
+): Promise<NextActionState | null>;
+
+/** Read-only, for the workspace payload. Reports the RULE's action when nothing is stored. */
+export async function getNextActionState(workspaceId: number): Promise<NextActionState | null>;
+
+/** Clears a manual action AND a due-date override, restoring the rule. */
+export async function clearOverrides(workspaceId: number, actor: ActingUser): Promise<NextActionState | null>;
+
+/** Overdue workspaces, narrowed to a queue scope the CALLER resolved (queueService owns that). */
+export async function listOverdue(queueIds: number[] | 'all', now?: Date): Promise<OverdueItem[]>;
 
 export async function overrideDueDate(
   workspaceId: number, dueAt: Date, reason: string, actor: ActingUser,
@@ -239,9 +342,9 @@ export async function checkAndFlagOverdueWorkspaces(): Promise<number>;
 party is `local-only` (AC12), and resolved to a specific party by matching the protocol state to the
 party role that owes the response.
 
-Migration: `0017_add_next_action_fields.sql`.
+Migration: `0020_hot_tiger_shark.sql` (see *Migrations* above).
 Audit events: `workspace.next_action_changed`, `workspace.due_date_overridden`,
-`workspace.overdue`.
+`workspace.overdue`, all three added to PRD-25's `WorkspaceEvents` catalogue.
 
 ### API Design
 
@@ -306,15 +409,38 @@ The workspace payload (PRD-19) gains `nextAction`, `nextActionDueAt`, `awaitedBy
 
 ## Deliverables
 
-- Additive columns on `referral_workspaces` + migration `0017_add_next_action_fields.sql`
-- `config.workspace.nextActions` in `src/config.ts`
+- Six additive columns on `referral_workspaces` + migration `0020_hot_tiger_shark.sql`
+- `src/modules/workspace/nextActionRules.ts` — the rule table, deliberately not in `config.ts`
+- `config.workspace.overdueSweepIntervalMs` in `src/config.ts`
 - `src/modules/workspace/nextActionService.ts`
-- Workspace-level functions added to `src/modules/prd07/overdueChecker.ts`
-- Overdue sweep registered in `src/index.ts`
-- `recomputeNextAction()` called from every protocol and work status transition site
-- Routes listed above; header and queue-view indicators
-- `tests/unit/workspace/nextActionService.test.ts`,
-  extended `tests/unit/prd07/overdueChecker.test.ts`
+- Workspace-level functions added to `src/modules/prd07/overdueChecker.ts`, existing message-level
+  exports untouched (AC16)
+- `runOverdueSweep()` registered on an interval in `src/index.ts` — which is also the fix for PRD-07's
+  checker never having been connected to anything
+- `recomputeNextAction()` hooked into `proposeForReferral()` and `applyWorkStatus()`, the two funnels
+  that cover every transition
+- Three events added to PRD-25's `WorkspaceEvents` catalogue
+- Routes listed above; the next-action panel in `workspaceDetail.html` with relative wording computed
+  in the browser
+- `scripts/backfill-next-actions.ts` + `npm run backfill:next-actions`
+- `tests/unit/workspace/nextActionService.test.ts` — 50 tests, including the workspace-level overdue
+  behaviour and an AC16 guard that PRD-07's message behaviour is unchanged
+
+**Verified on real seeded data** (80 referrals, analytics seed, after `backfill:workspaces`):
+
+```
+computed 80, skipped 0     null next_action: 0        (AC1 holds on real data)
+already overdue: 10        null due date:    42       (terminal + no-appointment cases)
+awaited by:  nobody 49  |  us 16  |  party 15
+repeated run: rows byte-identical, 80 events before and after  (idempotent)
+```
+
+The 42 null due dates are the honest cases, not gaps: terminal states have no deadline by rule, and
+the appointment-relative rule declines to invent one when there is no appointment date.
+
+**Not built, and why:** a dedicated `/overdue` page. `GET /api/overdue` exists and is scoped, and the
+queue view already marks overdue rows and filters on them (PRD-20). A separate page would be a third
+place the same rows are listed, so it is left until something asks for it.
 
 ---
 
@@ -333,5 +459,15 @@ The workspace payload (PRD-19) gains `nextAction`, `nextActionDueAt`, `awaitedBy
 ## History
 
 **Created:** 2026-09-14  
-**Last Updated:** 2026-09-14  
-**Version:** 1.0
+**Last Updated:** 2026-09-16  
+**Version:** 1.1
+
+**v1.1 — refinement and implementation.** Eight findings recorded above, of which three changed the
+design: the rule table moved out of `config.ts` (a test mocking it had been asserting against a copy
+of itself), `dueInHours` gained an `'appointment'` case the draft had left as prose, and the
+transition hook collapsed from "every transition site" to the two funnels that already cover them.
+One real bug was found and fixed: the entry-moment fallback was `updatedAt`, which the recompute
+itself writes, so a backfill silently reset every deadline in the database. `awaitedByPartyId` was
+downgraded from a foreign key to a plain integer to avoid a second hand-edited table recreation, and
+`Scheduled` was deliberately exempted from the ack gate that `Closed` needs. AC15 was already
+satisfied by PRD-20.

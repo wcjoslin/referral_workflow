@@ -162,9 +162,40 @@ export const referralWorkspaces = sqliteTable(
     ownerUserId: integer('owner_user_id').references(() => users.id),
     queueId: integer('queue_id').references(() => queues.id),
 
-    // Next action. Columns here; the values are computed by PRD-26.
+    // ── Next action and due dates (PRD-18 reserved, PRD-26 populates) ───────
     nextAction: text('next_action'),
     nextActionDueAt: integer('next_action_due_at', { mode: 'timestamp' }),
+
+    // Actor when a person wrote the next action by hand; null when the rule
+    // table computed it. This is what makes "a manual next action survives a
+    // status change" (AC4) decidable — without it, a recompute cannot tell its
+    // own previous output from a coordinator's judgement.
+    nextActionSetBy: text('next_action_set_by'),
+
+    // A due date a person chose. Never recomputed away, which is the whole
+    // point: the next transition would otherwise silently discard it.
+    dueDateOverridden: integer('due_date_overridden', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    dueDateOverrideReason: text('due_date_override_reason'),
+
+    // When `workspace.overdue` was emitted for the CURRENT due date. Makes the
+    // sweep idempotent (AC14) — it fires once per due date, not once per sweep
+    // — and is cleared whenever the due date moves so a fresh breach notifies
+    // again.
+    overdueNotifiedAt: integer('overdue_notified_at', { mode: 'timestamp' }),
+
+    // Who owes the next move: 'us' | 'party' | 'nobody'. Stored rather than
+    // derived on read because the queue view sorts and filters on it, and
+    // because the derivation reads outbound ack state that changes
+    // independently of this row.
+    awaitedBy: text('awaited_by'),
+    // The party that owes it, when awaitedBy is 'party'. Named, not "external"
+    // (AC10). Plain integer, NOT a real FK — see the migration note: SQLite
+    // cannot add a constraint in place, and PRD-20's 0019 already demonstrated
+    // that recreating this table is a hand-edited migration. Not worth a second
+    // one for a nullable advisory pointer that partyService can revalidate.
+    awaitedByPartyId: integer('awaited_by_party_id'),
 
     // Exception condition. Status and column here; raised by PRD-28.
     exceptionReason: text('exception_reason'),

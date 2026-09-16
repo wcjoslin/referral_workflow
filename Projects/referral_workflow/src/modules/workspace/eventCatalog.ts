@@ -101,6 +101,10 @@ export const WorkspaceEvents = {
   ARTIFACT_NOT_TRANSMITTED: 'workspace.artifact_not_transmitted',
 
   QUEUE_CHANGED: 'workspace.queue_changed',
+
+  NEXT_ACTION_CHANGED: 'workspace.next_action_changed',
+  DUE_DATE_OVERRIDDEN: 'workspace.due_date_overridden',
+  OVERDUE: 'workspace.overdue',
 } as const;
 
 /**

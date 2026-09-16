@@ -141,6 +141,13 @@
       "when": 1789580423809,
       "tag": "0019_serious_loners",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1789582686660,
+      "tag": "0020_hot_tiger_shark",
+      "breakpoints": true
     }
   ]
 }

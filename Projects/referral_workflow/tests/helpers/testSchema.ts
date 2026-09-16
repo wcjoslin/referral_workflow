@@ -88,6 +88,13 @@ export const TEST_SCHEMA_DDL = `
     queue_id INTEGER,
     next_action TEXT,
     next_action_due_at INTEGER,
+    -- PRD-26
+    next_action_set_by TEXT,
+    due_date_overridden INTEGER NOT NULL DEFAULT 0,
+    due_date_override_reason TEXT,
+    overdue_notified_at INTEGER,
+    awaited_by TEXT,
+    awaited_by_party_id INTEGER,
     exception_reason TEXT,
     archived_at INTEGER,
     created_at INTEGER NOT NULL,

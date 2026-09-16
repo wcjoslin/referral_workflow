@@ -416,15 +416,22 @@ assumes a reachable host.
 
 ---
 
-### 26. **[[PRD-26 - Next Action & Due Dates|PRD-26: Next Action & Due Dates]]** 📋
+### 26. **[[PRD-26 - Next Action & Due Dates|PRD-26: Next Action & Due Dates]]** ✅
 **What to do next, by when, and who owes the move.**
 
-- Config-driven next action and due-date offset per (protocol state × work status)
-- "Awaited by us / a named party / nobody", derived from state and outbound ack status
-- Finally connects `prd07/overdueChecker.ts`, which nothing calls today, and generalizes it to workspaces
+- A rule table per (protocol state × work status), with a work-status layer that overrides both
+- Computed SYNCHRONOUSLY with each transition, hooked into the two funnels that cover all of them
+- "Awaited by us / a named party / nobody", derived from state and outbound ack status, downgrading
+  honestly for a `local-only` party or a party that no longer exists
+- Manual next action and due-date override, audited, and never recomputed away
+- Finally connects `prd07/overdueChecker.ts`, which nothing called, and generalizes it to workspaces
 - **Prerequisite:** PRD-18, PRD-24
 
-**Status:** 📋 Drafting
+**Status:** ✅ Complete (2026-09-16). Verified on 80 seeded referrals: every workspace carries an
+action, the backfill is byte-identical on a repeated run, and `workspace.overdue` fires once per due
+date rather than once per sweep. Found and fixed a real bug in the process — the due-date entry
+moment fell back to `updated_at`, which the recompute itself writes, so a backfill silently reset
+every deadline in the database while looking like the feature working.
 **Module:** `workspace/`
 
 ---
@@ -484,7 +491,7 @@ assumes a reachable host.
 | [[PRD-23 - Document Collection\|23]] | Document Collection | ✅ | Index over existing artifacts, delivery + access evidence | `workspace/` |
 | [[PRD-24 - Parties & Participants\|24]] | Parties & Participants | ✅ | Organizations + Direct address + protocol mode; internal roles | `workspace/` |
 | [[PRD-25 - Activity History & Audit\|25]] | Activity History & Audit | ✅ | Per-referral event reader, merged feed, gaps closed | `workspace/`, `analytics/` |
-| [[PRD-26 - Next Action & Due Dates\|26]] | Next Action & Due Dates | 📋 | Config-driven actions, awaited-by, overdue sweep | `workspace/` |
+| [[PRD-26 - Next Action & Due Dates\|26]] | Next Action & Due Dates | ✅ | Config-driven actions, awaited-by, overdue sweep | `workspace/` |
 | [[PRD-27 - Notifications\|27]] | Notifications | 📋 | Nine triggers, one funnel, guest allow list | `workspace/` |
 | [[PRD-28 - Correlation & Exception Queue\|28]] | Correlation & Exception Queue | 📋 | Idempotent intake, exceptions, manual reassociation | `workspace/`, `prd01/` |
 | [[PRD-29 - 360X Protocol Gateway\|29]] | 360X Protocol Gateway | ✅ | Context authoring, artifact rendering, record-then-transmit | `workspace/` |

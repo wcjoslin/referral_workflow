@@ -70,6 +70,15 @@ import {
   saveFilter,
 } from './modules/workspace/queueService';
 import {
+  NextActionTooLongError,
+  NextActionWorkspaceNotFoundError,
+  OverrideReasonRequiredError,
+  clearOverrides,
+  listOverdue,
+  overrideDueDate,
+  overrideNextAction,
+} from './modules/workspace/nextActionService';
+import {
   OwnerFilter,
   buildWorkspacePayload,
   listWorkspaceRows,
@@ -597,6 +606,134 @@ app.post('/api/workspaces/backfill', async (_req: Request, res: Response, next: 
   try {
     const result = await backfillWorkspaces();
     res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── PRD-26 next action and due dates ─────────────────────────────────────────
+
+/** AC7 — a due date a person chose, with a reason. 422 without one. */
+app.post('/api/workspaces/:id/due-date', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(400).json({ error: 'workspace id must be a positive integer' });
+      return;
+    }
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user', message: 'No users are seeded. Run: npm run seed' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as { dueAt?: unknown; reason?: unknown };
+    const dueAt = typeof body.dueAt === 'string' ? new Date(body.dueAt) : null;
+    if (dueAt === null || Number.isNaN(dueAt.getTime())) {
+      res.status(400).json({ error: 'dueAt must be an ISO 8601 timestamp' });
+      return;
+    }
+    const reason = typeof body.reason === 'string' ? body.reason : '';
+
+    try {
+      res.json({ ok: true, nextAction: await overrideDueDate(workspaceId, dueAt, reason, user) });
+    } catch (err) {
+      // 422 rather than 400: the request is well-formed, the reason is the
+      // business requirement it fails (AC7).
+      if (err instanceof OverrideReasonRequiredError) {
+        res.status(422).json({ error: err.message });
+        return;
+      }
+      if (err instanceof NextActionWorkspaceNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** AC4 — a coordinator's own instruction, which survives recomputation. */
+app.post('/api/workspaces/:id/next-action', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(400).json({ error: 'workspace id must be a positive integer' });
+      return;
+    }
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user', message: 'No users are seeded. Run: npm run seed' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as { nextAction?: unknown; clear?: unknown };
+
+    // `clear: true` restores the rule, so a coordinator who overrode by mistake
+    // is not stuck with it until the state happens to move.
+    if (body.clear === true) {
+      try {
+        res.json({ ok: true, nextAction: await clearOverrides(workspaceId, user) });
+      } catch (err) {
+        if (err instanceof NextActionWorkspaceNotFoundError) {
+          res.status(404).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+      return;
+    }
+
+    if (typeof body.nextAction !== 'string') {
+      res.status(400).json({ error: 'nextAction must be a string' });
+      return;
+    }
+
+    try {
+      res.json({
+        ok: true,
+        nextAction: await overrideNextAction(workspaceId, body.nextAction, user),
+      });
+    } catch (err) {
+      if (err instanceof NextActionTooLongError) {
+        res.status(422).json({ error: err.message });
+        return;
+      }
+      if (err instanceof NextActionWorkspaceNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof Error && err.name === 'NextActionEmptyError') {
+        res.status(422).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Everything overdue, SCOPED TO THE ACTING USER'S QUEUES.
+ *
+ * Scope is resolved by queueService — the one module that owns the predicate —
+ * rather than reimplemented here, where it could drift from the queue view and
+ * quietly widen. A user in no queue gets an empty list, not everything.
+ */
+app.get('/api/overdue', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await tryGetActingUser(req);
+    if (!user) {
+      res.status(409).json({ error: 'no-acting-user', message: 'No users are seeded. Run: npm run seed' });
+      return;
+    }
+    const { getVisibleQueueIds } = await import('./modules/workspace/queueService');
+    const scope = await getVisibleQueueIds(user);
+    const items = await listOverdue(scope);
+    res.json({ count: items.length, items });
   } catch (err) {
     next(err);
   }

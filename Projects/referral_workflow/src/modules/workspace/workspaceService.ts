@@ -21,6 +21,7 @@ import { db } from '../../db';
 import { referrals, referralWorkspaces } from '../../db/schema';
 import { emitEvent } from '../analytics/eventService';
 import { seedParties } from './partyService';
+import { recomputeNextAction } from './nextActionService';
 import { ReferralState } from '../../state/referralStateMachine';
 import {
   WorkStatus,
@@ -279,7 +280,18 @@ export async function createWorkspace(referralId: number): Promise<Workspace> {
     const { routeWorkspace } = await import('./queueService');
     routed = await routeWorkspace(row.id, 'system');
   } catch (err) {
-    console.error('[WorkspaceService] queue routing failed', err);
+    // "No queues are seeded yet" is an EXPECTED state, not a failure: unit
+    // suites that do not exercise queues hit it on every createWorkspace, and a
+    // stack trace per call is log noise that hides real errors. Recoverable by
+    // `npm run backfill:queues`, so it is reported once at warn level with no
+    // trace. Anything else is a genuine fault and keeps its stack.
+    if (err instanceof Error && err.name === 'NoDefaultQueueError') {
+      console.warn(
+        '[WorkspaceService] no queues seeded — workspace left unrouted. Run: npm run backfill:queues',
+      );
+    } else {
+      console.error('[WorkspaceService] queue routing failed', err);
+    }
   }
 
   return toWorkspace(routed === null ? row : { ...row, queueId: routed });
@@ -346,6 +358,21 @@ async function applyWorkStatus(
       ...(reason ? { reason } : {}),
     },
   }).catch((err) => console.error('[WorkspaceService]', err));
+
+  // PRD-26: the work status is half of the (state x work status) key the rule
+  // table is indexed by, so a change here changes the next action. Hooked at
+  // the single write path rather than at setWorkStatus(), so an APPLIED
+  // PROPOSAL recomputes too — those go through here without touching
+  // setWorkStatus at all.
+  //
+  // Tolerant of failure and not awaited into the return value: a next action is
+  // bookkeeping over the work status, and must never be the reason a status
+  // change fails.
+  try {
+    await recomputeNextAction(workspace.id, now, actor);
+  } catch (err) {
+    console.error('[WorkspaceService] next action recompute failed', err);
+  }
 
   return toWorkspace(row);
 }
@@ -475,6 +502,21 @@ export async function proposeForReferral(
     const workspace = await getWorkspaceByReferralId(referralId);
     if (!workspace) return;
     await proposeWorkStatus(workspace.id, protocolState, actor);
+
+    // PRD-26: recompute the next action and due date from the NEW protocol
+    // state. This is the single funnel for all ten protocol transition sites,
+    // so hooking here covers every one of them rather than asking each to
+    // remember.
+    //
+    // Runs even when the work status proposal was DECLINED, deliberately: the
+    // protocol state moved regardless, so the next action must follow it. Only
+    // recomputing on an applied proposal would leave a manually-held workspace
+    // showing an instruction for a state it has left.
+    //
+    // `new Date()` as the entry moment is exact here rather than approximate —
+    // this runs synchronously with the transition, so now IS when the state was
+    // entered.
+    await recomputeNextAction(workspace.id, new Date(), actor);
   } catch (err) {
     console.error(
       `[WorkspaceService] work status proposal failed for referral ${referralId}:`,

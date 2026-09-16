@@ -31,6 +31,8 @@
  */
 
 import { randomUUID } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Config is read at import time, so the port has to be set before src/server
 // loads. A high fixed port keeps failures readable; CI runs one job at a time.
@@ -91,6 +93,25 @@ async function post(
  * rendered client-side, so counting the one key that only appears in that array
  * is the honest way to assert a server-side filter from the page source.
  */
+/** DELETE with an acting-user cookie. Used by the membership and filter routes. */
+async function del(
+  pathname: string,
+  actingUserId?: number,
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  const res = await fetch(`${BASE}${pathname}`, {
+    method: 'DELETE',
+    headers: actingUserId === undefined ? {} : { cookie: `actingUserId=${actingUserId}` },
+  });
+  const text = await res.text();
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    parsed = { _unparseable: text.slice(0, 200) };
+  }
+  return { status: res.status, json: parsed };
+}
+
 /** Fetches with an arbitrary Cookie header — the guest session is not an actingUserId. */
 async function getRaw(pathname: string, cookie: string): Promise<{ status: number; body: string }> {
   const res = await fetch(`${BASE}${pathname}`, { headers: { cookie }, redirect: 'manual' });
@@ -1720,6 +1741,261 @@ async function main(): Promise<void> {
     'and the queue rows API',
     guestAtQueueApi.status === 403,
     `status ${guestAtQueueApi.status}`,
+  );
+
+  // ── PRD-26: next action and due dates ─────────────────────────────────────
+
+  // Every workspace must carry an action. The fixtures transitioned through the
+  // protocol above, so theirs were computed synchronously by those transitions.
+  const naPayload = JSON.parse(
+    (await get(`/api/workspaces/${wsWithout.id}`, granted.id)).body,
+  ) as {
+    workspace: Record<string, unknown>;
+  };
+  check(
+    'the workspace payload carries a next action',
+    typeof naPayload.workspace.nextAction === 'string' &&
+      (naPayload.workspace.nextAction as string).length > 0,
+    `got ${JSON.stringify(naPayload.workspace.nextAction)}`,
+  );
+  check(
+    'and an awaited-by indicator',
+    ['us', 'party', 'nobody'].includes(naPayload.workspace.awaitedBy as string),
+    `got ${JSON.stringify(naPayload.workspace.awaitedBy)}`,
+  );
+  check(
+    'and the override flags, defaulted honestly',
+    naPayload.workspace.dueDateOverridden === false && naPayload.workspace.overdue === false,
+    JSON.stringify({
+      overridden: naPayload.workspace.dueDateOverridden,
+      overdue: naPayload.workspace.overdue,
+    }),
+  );
+
+  // AC3: the DECLINED fixture is terminal with nothing outstanding, so it must
+  // say so explicitly rather than leaving a blank.
+  check(
+    'a terminal referral says no action required rather than nothing',
+    /No action required/i.test(String(naPayload.workspace.nextAction)),
+    `got ${JSON.stringify(naPayload.workspace.nextAction)}`,
+  );
+  check(
+    'and nobody is awaited on it',
+    naPayload.workspace.awaitedBy === 'nobody',
+    `got ${JSON.stringify(naPayload.workspace.awaitedBy)}`,
+  );
+
+  // AC6: the relative wording is computed in the BROWSER from the absolute
+  // timestamp, so a cached page cannot show a stale "due in 2 hours".
+  const naPage = await get(`/workspaces/${wsWith.id}`, granted.id);
+  check('the workspace page carries the next-action panel', naPage.body.includes('na-block'));
+  check(
+    'relative due wording is computed client-side, not rendered server-side',
+    naPage.body.includes('function relativeDue(') && naPage.body.includes('Date.now()'),
+  );
+  check(
+    'the panel states plainly that the offsets are not SLAs',
+    /no business-hours or holiday awareness/i.test(naPage.body),
+  );
+  check('the panel names who owes the move', naPage.body.includes('awaitedLabel'));
+
+  // AC4 — a coordinator's own action, and it survives a recompute.
+  const setAction = await post(
+    `/api/workspaces/${wsWith.id}/next-action`,
+    { nextAction: "Call Dr. Ofori's office about the echo report" },
+    granted.id,
+  );
+  check('a next action can be set by hand', setAction.status === 200, `status ${setAction.status}`);
+
+  const afterSet = JSON.parse((await get(`/api/workspaces/${wsWith.id}`, granted.id)).body) as {
+    workspace: Record<string, unknown>;
+  };
+  check(
+    'the manual action is stored',
+    afterSet.workspace.nextAction === "Call Dr. Ofori's office about the echo report",
+    `got ${JSON.stringify(afterSet.workspace.nextAction)}`,
+  );
+  check(
+    'and attributed to the actor WITHOUT leaking the encoded rule action',
+    afterSet.workspace.nextActionSetBy === `user:${granted.id}`,
+    `got ${JSON.stringify(afterSet.workspace.nextActionSetBy)}`,
+  );
+
+  check(
+    'an empty next action is refused with 422',
+    (await post(`/api/workspaces/${wsWith.id}/next-action`, { nextAction: '   ' }, granted.id))
+      .status === 422,
+  );
+  check(
+    'an over-long next action is refused with 422',
+    (await post(
+      `/api/workspaces/${wsWith.id}/next-action`,
+      { nextAction: 'x'.repeat(501) },
+      granted.id,
+    )).status === 422,
+  );
+
+  // AC7 — a due date override REQUIRES a reason, and 422 is the right answer:
+  // the request is well-formed, the business rule is what it fails.
+  check(
+    'a due-date override with no reason is refused with 422',
+    (await post(
+      `/api/workspaces/${wsWith.id}/due-date`,
+      { dueAt: '2026-09-30T17:00:00Z' },
+      granted.id,
+    )).status === 422,
+  );
+  check(
+    'a malformed dueAt is refused with 400',
+    (await post(
+      `/api/workspaces/${wsWith.id}/due-date`,
+      { dueAt: 'next Tuesday', reason: 'because' },
+      granted.id,
+    )).status === 400,
+  );
+
+  const overrode = await post(
+    `/api/workspaces/${wsWith.id}/due-date`,
+    { dueAt: '2026-09-30T17:00:00Z', reason: 'referring office closed until Friday' },
+    granted.id,
+  );
+  check('a due date can be overridden with a reason', overrode.status === 200, `status ${overrode.status}`);
+
+  const afterOverride = JSON.parse(
+    (await get(`/api/workspaces/${wsWith.id}`, granted.id)).body,
+  ) as { workspace: Record<string, unknown> };
+  check(
+    'the override is marked and its reason kept',
+    afterOverride.workspace.dueDateOverridden === true &&
+      afterOverride.workspace.dueDateOverrideReason === 'referring office closed until Friday',
+    JSON.stringify(afterOverride.workspace.dueDateOverrideReason),
+  );
+  check(
+    'and the due date is the one chosen',
+    String(afterOverride.workspace.nextActionDueAt).startsWith('2026-09-30T17:00:00'),
+    String(afterOverride.workspace.nextActionDueAt),
+  );
+
+  // Both overrides must survive a real transition. Driven through the routing
+  // route, which recomputes.
+  const rerouteAgain = await post(
+    `/api/referrals/${withCcda.id}/routing`,
+    { department: 'Cardiology' },
+    granted.id,
+  );
+  check('a transition after the overrides succeeds', rerouteAgain.status === 200);
+  const afterTransition = JSON.parse(
+    (await get(`/api/workspaces/${wsWith.id}`, granted.id)).body,
+  ) as { workspace: Record<string, unknown> };
+  check(
+    'the overridden due date survives a later transition (AC7)',
+    String(afterTransition.workspace.nextActionDueAt).startsWith('2026-09-30T17:00:00'),
+    String(afterTransition.workspace.nextActionDueAt),
+  );
+
+  // Reset restores the rule, so a mistaken override is not permanent.
+  const cleared = await post(
+    `/api/workspaces/${wsWith.id}/next-action`,
+    { clear: true },
+    granted.id,
+  );
+  check('overrides can be reset to the rule', cleared.status === 200, `status ${cleared.status}`);
+  const afterClear = JSON.parse((await get(`/api/workspaces/${wsWith.id}`, granted.id)).body) as {
+    workspace: Record<string, unknown>;
+  };
+  check(
+    'and the manual marks are gone',
+    afterClear.workspace.dueDateOverridden === false &&
+      afterClear.workspace.nextActionSetBy === null,
+    JSON.stringify({
+      overridden: afterClear.workspace.dueDateOverridden,
+      setBy: afterClear.workspace.nextActionSetBy,
+    }),
+  );
+  check(
+    'with the rule action restored',
+    afterClear.workspace.nextAction !== "Call Dr. Ofori's office about the echo report",
+    String(afterClear.workspace.nextAction),
+  );
+
+  // The activity feed must carry both PRD-26 event types.
+  const naFeed = await get(`/api/workspaces/${wsWith.id}/activity`, granted.id);
+  const naEntries = (JSON.parse(naFeed.body) as { entries: { eventType: string }[] }).entries;
+  for (const t of ['workspace.next_action_changed', 'workspace.due_date_overridden']) {
+    check(
+      `the activity feed carries ${t}`,
+      naEntries.some((e) => e.eventType === t),
+      'PRD-25 did not pick it up',
+    );
+  }
+
+  // GET /api/overdue, scoped exactly like the queue view.
+  const overdueGranted = await get('/api/overdue', granted.id);
+  check('GET /api/overdue returns 200', overdueGranted.status === 200, `status ${overdueGranted.status}`);
+  const overdueJson = JSON.parse(overdueGranted.body) as { count: number; items: unknown[] };
+  check(
+    'and its count matches its items',
+    overdueJson.count === overdueJson.items.length,
+    `${overdueJson.count} vs ${overdueJson.items.length}`,
+  );
+
+  // The scope check that matters: a user in no queue must get nothing, not
+  // everything. `ungranted` was added to the Cardiology queue above, so remove
+  // them again first.
+  await del(`/api/queues/cardiology/members/${ungranted.id}`, granted.id);
+  const overdueUngranted = await get('/api/overdue', ungranted.id);
+  const ungrantedJson = JSON.parse(overdueUngranted.body) as { count: number; items: unknown[] };
+  check(
+    'a user in no queue sees NO overdue items, not all of them',
+    overdueUngranted.status === 200 && ungrantedJson.count === 0,
+    `status ${overdueUngranted.status}, count ${ungrantedJson.count}`,
+  );
+
+  // The sweep is idempotent per due date (AC14), exercised through the real
+  // module rather than the route — there is no route for it, by design.
+  const { checkAndFlagOverdueWorkspaces, getOverdueWorkspaces } = await import(
+    '../src/modules/prd07/overdueChecker'
+  );
+  const farFuture = new Date(Date.now() + 365 * 24 * 3600 * 1000);
+  const firstSweep = await checkAndFlagOverdueWorkspaces(farFuture);
+  const secondSweep = await checkAndFlagOverdueWorkspaces(farFuture);
+  check(
+    'the overdue sweep emits for newly-overdue workspaces',
+    firstSweep > 0,
+    `emitted ${firstSweep}`,
+  );
+  check(
+    'and emits NOTHING on a second sweep for the same due dates (AC14)',
+    secondSweep === 0,
+    `second sweep emitted ${secondSweep}`,
+  );
+  check(
+    'while still listing them as overdue',
+    (await getOverdueWorkspaces(farFuture)).length >= firstSweep,
+  );
+
+  // AC16: the message-level behaviour PRD-07 shipped is untouched.
+  const { getOverdueMessages } = await import('../src/modules/prd07/overdueChecker');
+  check(
+    'getOverdueMessages() still works (AC16)',
+    Array.isArray(await getOverdueMessages()),
+  );
+
+  // AC13: registered on an interval, following the existing pattern.
+  const indexSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.ts'), 'utf-8');
+  check(
+    'the overdue sweep is registered on an interval in src/index.ts (AC13)',
+    /setInterval\([\s\S]*?runOverdueSweep\(\)/.test(indexSrc) &&
+      indexSrc.includes('config.workspace.overdueSweepIntervalMs'),
+    'PRD-07 wrote a checker nothing ever called; this is the fix for that too',
+  );
+
+  // Guests must never see a next action or an awaited-by indicator.
+  const guestAtOverdue = await getRaw('/api/overdue', 'guestSession=anything');
+  check(
+    'a guest cookie is refused at the overdue API',
+    guestAtOverdue.status === 403,
+    `status ${guestAtOverdue.status}`,
   );
 
   // ── Report ────────────────────────────────────────────────────────────────

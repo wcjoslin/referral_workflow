@@ -28,6 +28,8 @@ import { ActingUser, getUser } from './identityService';
 import { Party, PartyRole, ProtocolMode, getParties } from './partyService';
 import { Participant, ParticipantRole, getParticipants } from './participantService';
 import { getDepartments, getResources } from '../prd03/resourceCalendar';
+import { AwaitedBy, getNextActionState } from './nextActionService';
+import { queues } from '../../db/schema';
 import { ExtendedReferralData } from '../prd01/cdaParser';
 import { RoutingAssessment } from '../prd02/claudeService';
 
@@ -101,10 +103,21 @@ export interface WorkspacePayload {
     /** True when the owner has since been deactivated (PRD-21 AC7a). */
     ownerInactive: boolean;
     queueId: number | null;
-    /** Always null until PRD-20 adds the queues table — there is nothing to join. */
+    /** The queue's display name, joined since PRD-20 made queues a real entity. */
     queueName: string | null;
     nextAction: string | null;
     nextActionDueAt: string | null;
+    // ── PRD-26 ───────────────────────────────────────────────────────────────
+    /** The actor who wrote the action by hand, or null when the rule computed it. */
+    nextActionSetBy: string | null;
+    dueDateOverridden: boolean;
+    dueDateOverrideReason: string | null;
+    /** 'us' | 'party' | 'nobody' — who owes the next move. */
+    awaitedBy: AwaitedBy;
+    /** The organization that owes it, NAMED, never a generic "external". */
+    awaitedByPartyOrgName: string | null;
+    overdue: boolean;
+    overdueByHours: number | null;
     externalReferralId: string | null;
     exceptionReason: string | null;
     archivedAt: string | null;
@@ -167,6 +180,16 @@ export interface WorkspaceRowSummary {
   updatedAt: string;
 }
 
+/** One queue name, for the workspace header. */
+async function getQueueName(queueId: number): Promise<string | null> {
+  const [row] = await db
+    .select({ name: queues.name })
+    .from(queues)
+    .where(eq(queues.id, queueId))
+    .limit(1);
+  return row?.name ?? null;
+}
+
 function iso(value: Date | null): string | null {
   return value ? value.toISOString() : null;
 }
@@ -194,6 +217,16 @@ export async function buildWorkspacePayload(
 ): Promise<WorkspacePayload | null> {
   const workspace = await getWorkspace(workspaceId);
   if (!workspace) return null;
+
+  // PRD-26: read-only. buildWorkspacePayload() renders a page and must not
+  // write, so this reads the stored state rather than recomputing — the
+  // transition that caused it already did that synchronously.
+  const nextActionState = await getNextActionState(workspaceId);
+
+  // PRD-20: the queue's name. A workspace with no queue is unrouted rather than
+  // in a nameless queue, so null is meaningful here.
+  const queueName =
+    workspace.queueId === null ? null : ((await getQueueName(workspace.queueId)) ?? null);
 
   const [referral] = await db
     .select()
@@ -245,9 +278,16 @@ export async function buildWorkspacePayload(
       ownerDisplayName: owner?.displayName ?? null,
       ownerInactive: owner !== null && owner.active === false,
       queueId: workspace.queueId,
-      queueName: null,
-      nextAction: workspace.nextAction,
-      nextActionDueAt: iso(workspace.nextActionDueAt),
+      queueName,
+      nextAction: nextActionState?.nextAction ?? workspace.nextAction,
+      nextActionDueAt: iso(nextActionState?.nextActionDueAt ?? workspace.nextActionDueAt),
+      nextActionSetBy: nextActionState?.nextActionSetBy ?? null,
+      dueDateOverridden: nextActionState?.dueDateOverridden ?? false,
+      dueDateOverrideReason: nextActionState?.dueDateOverrideReason ?? null,
+      awaitedBy: nextActionState?.awaitedBy ?? 'us',
+      awaitedByPartyOrgName: nextActionState?.awaitedByPartyOrgName ?? null,
+      overdue: nextActionState?.overdue ?? false,
+      overdueByHours: nextActionState?.overdueByHours ?? null,
       externalReferralId: workspace.externalReferralId,
       exceptionReason: workspace.exceptionReason,
       archivedAt: iso(workspace.archivedAt),
