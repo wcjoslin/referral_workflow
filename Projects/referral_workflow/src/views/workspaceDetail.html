@@ -266,6 +266,41 @@
   .share-warn label { display: flex; gap: 7px; align-items: flex-start; margin-top: 8px; font-weight: 600; cursor: pointer; }
   .mention-flag { font-size: 0.74rem; color: #bd5800; margin-top: 6px; }
 
+  /* PRD-23. Delivery and access are two different facts and are laid out as
+     two, never merged into one "seen" indicator. */
+  .doc { border: 1px solid var(--color-border); border-radius: 8px; padding: 9px 11px; margin-bottom: 8px; }
+  .doc-patient { border-left: 4px dashed #997404; background: #fffbf0; }
+  .doc-top { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+  .doc-type { font-size: 0.87rem; font-weight: 600; }
+  .doc-meta { font-size: 0.72rem; color: var(--color-text-muted); margin-top: 4px; line-height: 1.5; }
+  .doc-src {
+    font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 2px 6px; border-radius: 4px; background: #e9ecef; color: #343a40; white-space: nowrap;
+  }
+  .doc-src-inbound  { background: #cff4fc; color: #055160; }
+  .doc-src-outbound { background: #d1e7dd; color: #0a3622; }
+  .doc-src-payer    { background: #e2d9f3; color: #3d0a91; }
+  .doc-src-upload   { background: #e7f1ff; color: #0c63e4; }
+  .doc-evidence { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 7px; }
+  .doc-fact { font-size: 0.72rem; line-height: 1.45; }
+  .doc-fact .k {
+    display: block; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--color-text-muted); font-weight: 700;
+  }
+  .doc-acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .doc-pre {
+    margin-top: 8px; padding: 8px; border: 1px solid var(--color-border); border-radius: 6px;
+    background: #f8f9fa; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem; line-height: 1.5; max-height: 320px; overflow: auto; white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .doc-frame { width: 100%; height: 420px; border: 1px solid var(--color-border); border-radius: 6px; margin-top: 8px; background: #fff; }
+  .doc-log { list-style: none; padding: 0; margin: 8px 0 0; font-size: 0.72rem; }
+  .doc-log li { padding: 4px 0; border-top: 1px solid var(--color-border); }
+  .doc-filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .doc-upload { border-top: 1px solid var(--color-border); margin-top: 12px; padding-top: 10px; }
+  .doc-note { font-size: 0.72rem; color: var(--color-text-muted); line-height: 1.5; margin-top: 6px; }
+
   .cols { display: grid; grid-template-columns: 1fr; gap: 16px; }
   .cols.with-viewer { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
   @media (max-width: 980px) { .cols.with-viewer { grid-template-columns: 1fr; } }
@@ -1940,6 +1975,281 @@
     }
   }
 
+  // ── Documents (PRD-23) ────────────────────────────────────────────────────
+
+  var documents = [];
+  var docFilter = { source: '', type: '' };
+  var openDoc = null;      // { id, mode: 'ccda' | 'text' | 'log', body }
+
+  var SRC_LABEL = {
+    'inbound-dsm': 'received',
+    'outbound-dsm': 'sent',
+    'generated': 'not sent',
+    'uploaded': 'uploaded',
+    'payer-outbound': 'to payer',
+    'payer-inbound': 'from payer',
+  };
+
+  function srcClass(source) {
+    if (source === 'inbound-dsm') return 'doc-src-inbound';
+    if (source === 'outbound-dsm') return 'doc-src-outbound';
+    if (source === 'uploaded') return 'doc-src-upload';
+    if (source === 'payer-outbound' || source === 'payer-inbound') return 'doc-src-payer';
+    return '';
+  }
+
+  function visibleDocs() {
+    return documents.filter(function (d) {
+      if (docFilter.source && d.source !== docFilter.source) return false;
+      if (docFilter.type && d.docType !== docFilter.type) return false;
+      return true;
+    });
+  }
+
+  function uniqueValues(key) {
+    var seen = {};
+    documents.forEach(function (d) { seen[d[key]] = true; });
+    return Object.keys(seen).sort();
+  }
+
+  function renderDocuments() {
+    var readOnly = !!P.workspace.archivedAt;
+    var shown = visibleDocs();
+
+    var filters = documents.length === 0 ? '' :
+      '<div class="doc-filters">' +
+        '<select class="ctl" id="docSrcFilter">' +
+          '<option value="">Every source</option>' +
+          uniqueValues('source').map(function (v) {
+            return '<option value="' + esc(v) + '"' + (docFilter.source === v ? ' selected' : '') +
+              '>' + esc(SRC_LABEL[v] || v) + '</option>';
+          }).join('') +
+        '</select>' +
+        '<select class="ctl" id="docTypeFilter">' +
+          '<option value="">Every type</option>' +
+          uniqueValues('docType').map(function (v) {
+            return '<option value="' + esc(v) + '"' + (docFilter.type === v ? ' selected' : '') +
+              '>' + esc(v) + '</option>';
+          }).join('') +
+        '</select>' +
+      '</div>';
+
+    var body;
+    if (documents.length === 0) {
+      body = '<div class="empty-note">No documents on this referral yet. If this workspace ' +
+        'predates the document index, run <code>npm run backfill:documents</code>.</div>';
+    } else if (shown.length === 0) {
+      body = '<div class="empty-note">No documents match those filters.</div>';
+    } else {
+      body = shown.map(renderDocument).join('');
+    }
+
+    var upload = readOnly
+      ? ''
+      : '<div class="doc-upload">' +
+          '<div class="subhead">Add a document</div>' +
+          '<div class="ctl-row">' +
+            '<input type="file" id="docFile" accept=".pdf,.jpg,.jpeg,.png,.xml">' +
+          '</div>' +
+          '<div class="ctl-row">' +
+            '<input class="ctl" id="docLabel" type="text" placeholder="What is it? e.g. Prior imaging report" style="min-width:200px;">' +
+            '<select class="ctl" id="docVis">' +
+              '<option value="Internal">Internal — my organization only</option>' +
+              '<option value="Shared">Shared — the other organization can read it</option>' +
+            '</select>' +
+            '<button class="btn btn-primary" id="docUpload">Upload</button>' +
+          '</div>' +
+          '<div class="doc-note">Uploading never sends anything. To send a document to the other ' +
+            'organization, attach 360X context to it from the assertions panel.</div>' +
+          '<div class="msg" id="docMsg"></div>' +
+        '</div>';
+
+    document.getElementById('wsDocuments').innerHTML =
+      '<h2>Documents</h2>' + filters + body + upload;
+
+    bindDocuments();
+  }
+
+  function renderDocument(d) {
+    var patient = d.scope === 'patient';
+    var opened = openDoc && openDoc.id === d.id;
+
+    var meta = [
+      d.senderOrgName || d.senderAddress || 'unknown sender',
+      fmtDateTime(d.receivedAt),
+      d.protocolRelationship || null,
+      d.originalFilename || null,
+    ].filter(function (x) { return !!x; }).map(esc).join(' · ');
+
+    // Two facts, side by side, never merged: a HISP delivery receipt is not
+    // evidence that a person read the document.
+    var delivery = d.deliveryStatus === null
+      ? (d.source === 'inbound-dsm' || d.source === 'payer-inbound'
+          ? 'n/a — we received this'
+          : 'n/a')
+      : esc(d.deliveryStatus) + (d.deliveredAt ? ' · ' + esc(fmtDateTime(d.deliveredAt)) : '');
+
+    var access = (d.accessCount.internal + d.accessCount.guest) === 0
+      ? 'nobody yet'
+      : esc(d.accessCount.internal) + ' internal, ' + esc(d.accessCount.guest) + ' guest' +
+        (d.lastAccessedAt ? ' · ' + esc(fmtDateTime(d.lastAccessedAt)) : '');
+
+    var acts = [];
+    if (d.renderAs === 'ccda') {
+      acts.push('<button class="btn doc-open" data-id="' + esc(d.id) + '" data-mode="ccda">' +
+        (opened && openDoc.mode === 'ccda' ? 'Close' : 'Open') + '</button>');
+    } else if (d.renderAs === 'text') {
+      acts.push('<button class="btn doc-open" data-id="' + esc(d.id) + '" data-mode="text">' +
+        (opened && openDoc.mode === 'text' ? 'Close' : 'Open') + '</button>');
+    }
+    acts.push('<a class="btn" href="/api/documents/' + esc(d.id) + '/content?download=1">Download</a>');
+    acts.push('<button class="btn doc-open" data-id="' + esc(d.id) + '" data-mode="log">' +
+      (opened && openDoc.mode === 'log' ? 'Hide access' : 'Who opened it') + '</button>');
+
+    var panel = '';
+    if (opened && openDoc.mode === 'ccda') {
+      panel = '<iframe class="doc-frame" src="/documents/' + esc(d.id) + '/ccda-frame" ' +
+        'title="Document viewer"></iframe>';
+    } else if (opened && openDoc.mode === 'text') {
+      panel = '<div class="doc-pre">' + esc(openDoc.body || 'Loading…') + '</div>';
+    } else if (opened && openDoc.mode === 'log') {
+      panel = (openDoc.log || []).length === 0
+        ? '<div class="doc-note">Nobody has opened this document.</div>'
+        : '<ul class="doc-log">' + openDoc.log.map(function (a) {
+            return '<li>' + esc(a.viewerDisplayName || 'unidentified') + ' — ' + esc(a.action) +
+              (a.reason ? ' (' + esc(a.reason) + ')' : '') +
+              ' · ' + esc(fmtDateTime(a.viewedAt)) + '</li>';
+          }).join('') + '</ul>';
+    }
+
+    return '<div class="doc' + (patient ? ' doc-patient' : '') + '">' +
+      '<div class="doc-top">' +
+        '<span class="doc-src ' + srcClass(d.source) + '">' + esc(SRC_LABEL[d.source] || d.source) + '</span>' +
+        '<span class="doc-type">' + esc(d.docType) + '</span>' +
+        (d.visibility === 'Shared'
+          ? '<span class="cmt-vis cmt-vis-shared">Shared</span>'
+          : '<span class="cmt-vis cmt-vis-internal">Internal</span>') +
+        (patient
+          ? '<span class="tag assumed" title="Filed against this patient, not this referral">patient-level</span>'
+          : '') +
+      '</div>' +
+      '<div class="doc-meta">' + meta + '</div>' +
+      '<div class="doc-evidence">' +
+        '<div class="doc-fact"><span class="k">Delivery</span>' + delivery + '</div>' +
+        '<div class="doc-fact"><span class="k">Opened by</span>' + access + '</div>' +
+      '</div>' +
+      '<div class="doc-acts">' + acts.join('') + '</div>' +
+      panel +
+    '</div>';
+  }
+
+  function docMsg(text, ok) {
+    var el = document.getElementById('docMsg');
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = ok ? '#0a7d4b' : 'var(--color-priority)';
+  }
+
+  function bindDocuments() {
+    var srcSel = document.getElementById('docSrcFilter');
+    if (srcSel) srcSel.addEventListener('change', function () {
+      docFilter.source = srcSel.value;
+      renderDocuments();
+    });
+    var typeSel = document.getElementById('docTypeFilter');
+    if (typeSel) typeSel.addEventListener('change', function () {
+      docFilter.type = typeSel.value;
+      renderDocuments();
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll('.doc-open'), function (b) {
+      b.addEventListener('click', function () {
+        toggleDocument(parseInt(b.getAttribute('data-id'), 10), b.getAttribute('data-mode'));
+      });
+    });
+
+    var up = document.getElementById('docUpload');
+    if (up) up.addEventListener('click', doUpload);
+  }
+
+  async function toggleDocument(documentId, mode) {
+    if (openDoc && openDoc.id === documentId && openDoc.mode === mode) {
+      openDoc = null;
+      renderDocuments();
+      return;
+    }
+    openDoc = { id: documentId, mode: mode };
+
+    if (mode === 'text') {
+      renderDocuments();
+      try {
+        const res = await fetch('/api/documents/' + documentId + '/content');
+        openDoc.body = res.ok ? await res.text() : 'This document could not be displayed.';
+      } catch (err) {
+        openDoc.body = 'This document could not be displayed.';
+        console.warn('[Workspace/Documents]', err);
+      }
+    } else if (mode === 'log') {
+      try {
+        const res = await fetch('/api/documents/' + documentId + '/access-log');
+        const data = await res.json();
+        openDoc.log = res.ok ? (data.access || []) : [];
+      } catch (err) {
+        openDoc.log = [];
+        console.warn('[Workspace/Documents]', err);
+      }
+    }
+    renderDocuments();
+    // Opening a document is itself an access event, so the counts just changed.
+    if (mode !== 'log') void reloadDocuments();
+  }
+
+  async function doUpload() {
+    var input = document.getElementById('docFile');
+    var label = document.getElementById('docLabel');
+    var vis = document.getElementById('docVis');
+    var file = input && input.files && input.files[0];
+    if (!file) { docMsg('Choose a file first.', false); return; }
+
+    try {
+      // The raw file as the body. encodeURIComponent on the header values
+      // because HTTP headers are latin-1 and a filename is not.
+      const res = await fetch('/api/workspaces/' + P.workspace.id + '/documents', {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+          'X-Document-Filename': encodeURIComponent(file.name),
+          'X-Document-Type': encodeURIComponent(label ? label.value : ''),
+          'X-Document-Visibility': vis ? vis.value : 'Internal',
+        },
+        body: file,
+      });
+      const data = await res.json();
+      if (!res.ok) { docMsg(data.error || 'Could not upload that.', false); return; }
+      if (input) input.value = '';
+      if (label) label.value = '';
+      await reloadDocuments();
+      docMsg('Uploaded. Nothing was sent to the other organization.', true);
+    } catch (err) {
+      docMsg('Network error.', false);
+      console.warn('[Workspace/Documents]', err);
+    }
+  }
+
+  async function reloadDocuments() {
+    try {
+      const res = await fetch('/api/workspaces/' + P.workspace.id + '/documents');
+      const data = await res.json();
+      documents = res.ok ? (data.documents || []) : [];
+    } catch (err) {
+      documents = [];
+      console.warn('[Workspace/Documents]', err);
+    }
+    // Whatever the reader has open survives the re-render: openDoc is module
+    // state, not markup, so it is re-applied rather than lost.
+    renderDocuments();
+  }
+
   function renderSlots() {
     if (!P.slots.owner) {
       renderSlot('wsOwner', 'Ownership', 'PRD-21',
@@ -1975,6 +2285,7 @@
   if (P.slots.owner) loadOwnerUsers();
   if (P.slots.participants) { renderParties(); loadRoster(); reloadParties(); }
   if (P.slots.conversation) { renderConversation(); loadConversation(); }
+  if (P.slots.documents) { renderDocuments(); void reloadDocuments(); }
   reloadAssertions();
   loadThread();
 })();

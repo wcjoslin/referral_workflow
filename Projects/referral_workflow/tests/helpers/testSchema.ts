@@ -21,6 +21,14 @@
  * decoration, so a test suite running against DDL without them would pass while
  * the real schema rejected the same write. `idx_comment_revisions_current` is
  * what makes "exactly one current revision per comment" a database invariant.
+ * PRD-23's `idx_workspace_documents_source` is the same kind of thing: it is
+ * what makes registration idempotent rather than a check-then-insert.
+ *
+ * ONE KNOWN DIVERGENCE, pre-existing and now more relevant: this DDL declares no
+ * FOREIGN KEY clauses, while better-sqlite3 enables `PRAGMA foreign_keys` by
+ * default, so the real database enforces them and these tests do not. A test can
+ * therefore insert a row referencing a parent that does not exist. Worth knowing
+ * when a fixture passes here and fails against a migrated database.
  *
  * `tests/unit/workspace/identityService.test.ts` and
  * `tests/unit/analytics/analyticsQueries.test.ts` still carry their own copies.
@@ -288,4 +296,85 @@ export const TEST_SCHEMA_DDL = `
     ON comment_mentions (workspace_id, acknowledged_at);
   CREATE INDEX idx_comment_mentions_user
     ON comment_mentions (mentioned_user_id, acknowledged_at);
+  CREATE TABLE attachment_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id INTEGER,
+    control_number TEXT NOT NULL UNIQUE,
+    claim_number TEXT,
+    payer_name TEXT NOT NULL,
+    payer_identifier TEXT NOT NULL,
+    subscriber_name TEXT NOT NULL,
+    subscriber_id TEXT,
+    subscriber_dob TEXT,
+    requested_loinc_codes TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'Received',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE attachment_responses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL,
+    loinc_code TEXT NOT NULL,
+    ccda_document_type TEXT NOT NULL,
+    ccda_xml TEXT,
+    fhir_data TEXT,
+    signed_by_name TEXT,
+    signed_by_npi TEXT,
+    signed_at INTEGER,
+    sent_at INTEGER,
+    x12_control_number TEXT
+  );
+  CREATE TABLE prior_auth_responses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL,
+    response_json TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    review_action TEXT,
+    auth_number TEXT,
+    denial_reason TEXT,
+    item_adjudications TEXT,
+    received_via TEXT NOT NULL,
+    received_at INTEGER NOT NULL
+  );
+  CREATE TABLE workspace_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id INTEGER NOT NULL,
+    content_source TEXT NOT NULL,
+    content_ref INTEGER,
+    upload_path TEXT,
+    content_type TEXT NOT NULL,
+    claimed_content_type TEXT,
+    doc_type TEXT NOT NULL,
+    loinc_code TEXT,
+    protocol_relationship TEXT,
+    source TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'referral',
+    sender_party_id INTEGER,
+    sender_address TEXT,
+    received_at INTEGER NOT NULL,
+    visibility TEXT NOT NULL DEFAULT 'Internal',
+    delivery_mode TEXT,
+    immutable INTEGER NOT NULL DEFAULT 1,
+    sha256 TEXT,
+    original_filename TEXT,
+    uploaded_by_user_id INTEGER,
+    uploaded_by_guest_id INTEGER,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_workspace_documents_workspace
+    ON workspace_documents (workspace_id, received_at);
+  CREATE UNIQUE INDEX idx_workspace_documents_source
+    ON workspace_documents (workspace_id, content_source, content_ref);
+  CREATE TABLE document_access_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    viewer_user_id INTEGER,
+    viewer_guest_id INTEGER,
+    action TEXT NOT NULL,
+    reason TEXT,
+    viewed_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_document_access_document
+    ON document_access_log (document_id, viewed_at);
 `

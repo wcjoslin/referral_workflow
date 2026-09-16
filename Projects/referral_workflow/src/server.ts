@@ -152,6 +152,24 @@ import {
   postComment,
 } from './modules/workspace/commentService';
 import {
+  DocumentAccessDeniedError,
+  DocumentContentUnavailableError,
+  DocumentNotFoundError,
+  DocumentWorkspaceNotFoundError,
+  GuestUploadVisibilityError,
+  UploadEmptyError,
+  UploadTooLargeError,
+  UploadTypeNotAllowedError,
+  assertGuestMayRead,
+  getAccessLog,
+  getDocument,
+  listDocuments,
+  listSharedDocuments,
+  recordAccess,
+  resolveContent,
+  uploadDocument,
+} from './modules/workspace/documentService';
+import {
   InvalidWorkStatusTransitionError,
   allowedTransitions,
   isValidState as isValidWorkStatus,
@@ -1533,6 +1551,404 @@ app.post('/api/guest/comments', async (req: Request, res: Response) => {
   } catch (err) {
     if (!sendCommentError(err, res)) {
       console.error('[Guest/Comment]', err);
+      res.status(500).json({ error: 'Something went wrong.' });
+    }
+  }
+});
+
+// ── Document collection (PRD-23) ─────────────────────────────────────────────
+
+function sendDocumentError(err: unknown, res: Response): boolean {
+  if (err instanceof DocumentNotFoundError || err instanceof DocumentWorkspaceNotFoundError) {
+    res.status(404).json({ error: err.message });
+    return true;
+  }
+  if (err instanceof DocumentAccessDeniedError) {
+    res.status(403).json({ error: err.message });
+    return true;
+  }
+  // 410 rather than 404: the index entry is real and the content behind it has
+  // gone. A reader should be told the document WAS here, not that it never was.
+  if (err instanceof DocumentContentUnavailableError) {
+    res.status(410).json({ error: err.message });
+    return true;
+  }
+  if (err instanceof UploadTooLargeError) {
+    res.status(413).json({ error: err.message });
+    return true;
+  }
+  if (
+    err instanceof UploadEmptyError ||
+    err instanceof UploadTypeNotAllowedError ||
+    err instanceof GuestUploadVisibilityError
+  ) {
+    res.status(400).json({ error: err.message });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * The upload body.
+ *
+ * `express.raw` rather than a multipart parser: no such dependency exists in
+ * this project, it is mounted per route so the size cap touches nothing else,
+ * and a Buffer is what lets the service detect the real type from magic bytes
+ * instead of trusting the client's declared one.
+ *
+ * `type: () => true` accepts any content type on purpose — the declared type is
+ * not the gate. The allow-list is applied to the BYTES, in the service.
+ */
+const rawUploadBody = express.raw({
+  type: () => true,
+  limit: config.workspace.maxUploadBytes,
+});
+
+/**
+ * Wraps the raw parser so its own failure answers in this route's vocabulary.
+ * Without this the body-parser's error skips the handler entirely and surfaces
+ * from the global error handler as a generic 500.
+ */
+function uploadBody(req: Request, res: Response, next: NextFunction): void {
+  rawUploadBody(req, res, (err?: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const status = (err as { status?: number }).status;
+    if (status === 413) {
+      res.status(413).json({
+        error:
+          'That file is larger than the upload limit of ' +
+          `${Math.round(config.workspace.maxUploadBytes / 1024 / 1024)} MB.`,
+      });
+      return;
+    }
+    res.status(400).json({ error: 'Could not read that upload.' });
+  });
+}
+
+/** Header values are latin-1, so the client percent-encodes the filename. */
+function decodeHeader(value: string | string[] | undefined): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string' || !raw) return '';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    // A malformed percent sequence is the client's problem, not a 500. Fall back
+    // to the literal so the upload still lands with a usable name.
+    return raw;
+  }
+}
+
+function parseDocumentId(req: Request): number | null {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const parsed = parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+/** RFC 5987, so a non-ASCII filename survives Content-Disposition. */
+function contentDisposition(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+app.get('/api/workspaces/:id/documents', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const workspaceId = parseWorkspaceId(req);
+    if (workspaceId === null) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    res.json({ documents: await listDocuments(workspaceId) });
+  } catch (err) {
+    if (!sendDocumentError(err, res)) next(err);
+  }
+});
+
+/**
+ * One content endpoint for every indexed document. The guest cookie cannot
+ * reach it — the middleware above refuses anything outside /guest and
+ * /api/guest — so a guest uses /api/guest/documents/:id/content instead.
+ */
+app.get('/api/documents/:id/content', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const documentId = parseDocumentId(req);
+    if (documentId === null) {
+      res.status(404).json({ error: 'Document not found' });
+      return;
+    }
+    const download = req.query.download === '1';
+    const user = await tryGetActingUser(req);
+
+    // Existence first, so the access record has a document to hang off — its
+    // foreign key is real.
+    await getDocument(documentId);
+
+    // THEN the record, BEFORE any attempt that can fail. The smoke check caught
+    // this the other way round: resolving first meant a document whose content
+    // had vanished answered 410 and left no evidence that anybody had tried to
+    // read it, which is the one case an auditor most wants to see.
+    await recordAccess(
+      documentId,
+      user ? { userId: user.id } : {},
+      download ? 'download' : 'view',
+    );
+
+    const content = await resolveContent(documentId);
+
+    res.setHeader('Content-Type', content.contentType);
+    if (download) res.setHeader('Content-Disposition', contentDisposition(content.filename));
+    res.send(content.body);
+  } catch (err) {
+    if (!sendDocumentError(err, res)) next(err);
+  }
+});
+
+/**
+ * The document-keyed viewer frame. The referral-keyed pair
+ * (`/referrals/:id/ccda-frame` and `/referrals/:id/ccda.xml`) is untouched: the
+ * review page depends on it, and breaking it for tidiness would be a regression
+ * for no user benefit.
+ */
+app.get('/documents/:id/ccda-frame', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const documentId = parseDocumentId(req);
+    if (documentId === null) {
+      res.status(404).send('Not found');
+      return;
+    }
+    const document = await getDocument(documentId);
+    if (document.renderAs !== 'ccda') {
+      res.status(404).send('That document is not a clinical document.');
+      return;
+    }
+
+    const templatePath = path.join(__dirname, 'views', 'ccdaFrame.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    res.setHeader('Content-Type', 'text/html');
+    res.send(
+      template.replace(
+        '/*__CCDA_FRAME_DATA__*/',
+        `window.__CCDA_FRAME__ = ${embedJson({ url: `/api/documents/${documentId}/content` })};`,
+      ),
+    );
+  } catch (err) {
+    if (!sendDocumentError(err, res)) next(err);
+  }
+});
+
+app.post(
+  '/api/workspaces/:id/documents',
+  uploadBody,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const workspaceId = parseWorkspaceId(req);
+      if (workspaceId === null) {
+        res.status(404).json({ error: 'Workspace not found' });
+        return;
+      }
+      const user = await tryGetActingUser(req);
+      if (!user) {
+        res.status(401).json({ error: 'No acting user. Seed users before uploading.' });
+        return;
+      }
+
+      const declared = req.headers['x-document-visibility'];
+      const visibilityHeader = Array.isArray(declared) ? declared[0] : declared;
+      if (
+        visibilityHeader !== undefined &&
+        (typeof visibilityHeader !== 'string' || !isCommentVisibility(visibilityHeader))
+      ) {
+        res.status(400).json({ error: 'X-Document-Visibility must be "Internal" or "Shared".' });
+        return;
+      }
+
+      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      const document = await uploadDocument({
+        workspaceId,
+        body,
+        claimedContentType: req.headers['content-type'] ?? null,
+        originalFilename: decodeHeader(req.headers['x-document-filename']),
+        docType: decodeHeader(req.headers['x-document-type']) || undefined,
+        visibility: visibilityHeader,
+        uploader: { kind: 'user', user },
+      });
+
+      res.json({
+        success: true,
+        documentId: document.id,
+        detectedContentType: document.contentType,
+        // Always false. The field exists so the guarantee is in the response
+        // rather than only in a comment: uploading never transmits, and sending
+        // is a separate explicit assertion (PRD-29).
+        transmitted: false,
+        document,
+      });
+    } catch (err) {
+      if (!sendDocumentError(err, res)) next(err);
+    }
+  },
+);
+
+app.get('/api/documents/:id/access-log', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const documentId = parseDocumentId(req);
+    if (documentId === null) {
+      res.status(404).json({ error: 'Document not found' });
+      return;
+    }
+    res.json({ access: await getAccessLog(documentId) });
+  } catch (err) {
+    if (!sendDocumentError(err, res)) next(err);
+  }
+});
+
+app.post('/api/workspaces/documents/backfill', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { backfillDocuments } = await import('./modules/workspace/documentService');
+    res.json({ success: true, ...(await backfillDocuments()) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Guest document access (PRD-23 × PRD-30) ──────────────────────────────────
+
+app.get('/api/guest/documents', async (req: Request, res: Response) => {
+  let guest: GuestContext;
+  try {
+    guest = await requireGuest(req);
+  } catch (err) {
+    sendGuestDenied(err, req, res, true);
+    return;
+  }
+  try {
+    res.json({ documents: await listSharedDocuments(guest.workspaceId, guest.guestId) });
+  } catch (err) {
+    if (!sendDocumentError(err, res)) {
+      console.error('[Guest/Documents]', err);
+      res.status(500).json({ error: 'Something went wrong.' });
+    }
+  }
+});
+
+/**
+ * A guest fetching content. `assertGuestMayRead()` applies BOTH gates —
+ * visibility and scope — and records the refusal itself, so this route cannot
+ * check one and forget the other.
+ */
+app.get('/api/guest/documents/:id/content', async (req: Request, res: Response) => {
+  let guest: GuestContext;
+  try {
+    guest = await requireGuest(req);
+  } catch (err) {
+    sendGuestDenied(err, req, res, true);
+    return;
+  }
+  try {
+    const documentId = parseDocumentId(req);
+    if (documentId === null) {
+      res.status(404).json({ error: 'Document not found' });
+      return;
+    }
+    // Establishes existence and both gates, and records a refusal itself.
+    await assertGuestMayRead(documentId, guest);
+
+    const download = req.query.download === '1';
+    // Before the attempt, for the same reason as the internal route.
+    await recordAccess(documentId, { guestId: guest.guestId }, download ? 'download' : 'view');
+    const content = await resolveContent(documentId);
+
+    res.setHeader('Content-Type', content.contentType);
+    if (download) res.setHeader('Content-Disposition', contentDisposition(content.filename));
+    res.send(content.body);
+  } catch (err) {
+    if (!sendDocumentError(err, res)) {
+      console.error('[Guest/Documents]', err);
+      res.status(500).json({ error: 'Something went wrong.' });
+    }
+  }
+});
+
+/** The guest's own viewer frame, allowed by the middleware because of its path. */
+app.get('/guest/documents/:id/ccda-frame', async (req: Request, res: Response) => {
+  let guest: GuestContext;
+  try {
+    guest = await requireGuest(req);
+  } catch (err) {
+    sendGuestDenied(err, req, res, false);
+    return;
+  }
+  try {
+    const documentId = parseDocumentId(req);
+    if (documentId === null) {
+      res.status(404).send('Not found');
+      return;
+    }
+    const document = await assertGuestMayRead(documentId, guest);
+    if (document.renderAs !== 'ccda') {
+      res.status(404).send('That document is not a clinical document.');
+      return;
+    }
+
+    const templatePath = path.join(__dirname, 'views', 'ccdaFrame.html');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    res.setHeader('Content-Type', 'text/html');
+    res.send(
+      template.replace(
+        '/*__CCDA_FRAME_DATA__*/',
+        `window.__CCDA_FRAME__ = ${embedJson({
+          url: `/api/guest/documents/${documentId}/content`,
+        })};`,
+      ),
+    );
+  } catch (err) {
+    if (!sendDocumentError(err, res)) {
+      console.error('[Guest/Documents]', err);
+      res.status(500).send('Something went wrong.');
+    }
+  }
+});
+
+app.post('/api/guest/documents', uploadBody, async (req: Request, res: Response) => {
+  let guest: GuestContext;
+  try {
+    guest = await requireGuest(req);
+  } catch (err) {
+    sendGuestDenied(err, req, res, true);
+    return;
+  }
+  try {
+    // Refused, never coerced, exactly as the guest comment route does.
+    const declared = req.headers['x-document-visibility'];
+    const visibilityHeader = Array.isArray(declared) ? declared[0] : declared;
+    if (visibilityHeader !== undefined && visibilityHeader !== 'Shared') {
+      res.status(400).json({
+        error: 'A document uploaded from outside your organization is always shared.',
+      });
+      return;
+    }
+
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const document = await uploadDocument({
+      workspaceId: guest.workspaceId,
+      body,
+      claimedContentType: req.headers['content-type'] ?? null,
+      originalFilename: decodeHeader(req.headers['x-document-filename']),
+      docType: decodeHeader(req.headers['x-document-type']) || undefined,
+      uploader: { kind: 'guest', guest },
+    });
+
+    res.json({
+      success: true,
+      documentId: document.id,
+      detectedContentType: document.contentType,
+      transmitted: false,
+    });
+  } catch (err) {
+    if (!sendDocumentError(err, res)) {
+      console.error('[Guest/Documents]', err);
       res.status(500).json({ error: 'Something went wrong.' });
     }
   }

@@ -53,17 +53,35 @@ export async function recordThreadMessage(input: ThreadMessageInput): Promise<vo
     createdAt: new Date(),
   }).returning();
 
+  // TWO PIECES OF BOOKKEEPING HANG OFF THIS ONE FUNNEL: PRD-24 files the
+  // sender's Direct address, and PRD-23 indexes the message as a document.
+  // Neither belongs in the eleven services that call this function, and neither
+  // may fail the thread write that triggered it — losing the audit record of a
+  // message because we could not file its sender address, or index it, would be
+  // a strictly worse outcome. So both are fire-and-forget.
+  //
+  // CHAINED RATHER THAN PARALLEL, and that ordering is load-bearing:
+  // registerThreadDocument() attributes the document by resolving the sender
+  // through findPartyByDirectAddress(), so running it after the observation
+  // means a party learned from THIS message is already on file. In parallel the
+  // first message from a new departmental address would index with no sender
+  // party.
+  //
   // Only INBOUND senders teach us anything: an outbound sender address is our
   // own, which we already hold as the receiving party's intake address.
-  //
-  // Deliberately fire-and-forget. Party bookkeeping must never fail the thread
-  // write that triggered it — losing the audit record of a message because we
-  // could not file its sender address would be a strictly worse outcome.
-  if (input.direction === 'inbound' && input.senderAddress) {
-    void observeSenderAddress(input.referralId, input.senderAddress, row.id).catch((err) =>
-      console.error('[ThreadService] party address observation failed', err),
-    );
-  }
+  void (async (): Promise<void> => {
+    if (input.direction === 'inbound' && input.senderAddress) {
+      await observeSenderAddress(input.referralId, input.senderAddress, row.id).catch((err) =>
+        console.error('[ThreadService] party address observation failed', err),
+      );
+    }
+    // Imported lazily because documentService reaches partyService, which calls
+    // back into this module. threadService and partyService already form a
+    // tolerated CommonJS cycle; deepening it statically is how that stops being
+    // tolerable.
+    const { registerThreadDocument } = await import('../workspace/documentService');
+    await registerThreadDocument(row.id);
+  })().catch((err) => console.error('[ThreadService] document registration failed', err));
 }
 
 /** Resolves the referral's workspace, then files the address against its party. */

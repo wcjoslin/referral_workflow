@@ -61,6 +61,17 @@ export const config = {
       optionalEnv('SENDER_IDENTITY_MODE', 'organization') === 'individual'
         ? 'individual'
         : 'organization',
+
+    // PRD-23. Uploaded documents are the only content this system stores itself
+    // rather than indexing in place, so they need somewhere to live. Defaults
+    // to a directory beside claims-inbox/ and claims-outbox/, matching what this
+    // project already does — and GITIGNORED, because uploads are PHI and a
+    // directory inside a checkout is one `git add -A` away from being
+    // committed. A deployment should point this outside the checkout entirely.
+    uploadDir: optionalEnv('WORKSPACE_UPLOAD_DIR', './workspace-uploads'),
+    // 20 MB. Enforced by express.raw() as the body arrives, so an oversized
+    // upload is refused before it is buffered rather than after.
+    maxUploadBytes: parseInt(optionalEnv('WORKSPACE_MAX_UPLOAD_BYTES', String(20 * 1024 * 1024)), 10),
   },
   gemini: {
     apiKey: optionalEnv('GEMINI_API_KEY', ''),

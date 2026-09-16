@@ -111,6 +111,27 @@
   }
   .gc-msg { font-size: 0.78rem; min-height: 1em; }
   .gc-warn { font-size: 0.76rem; color: var(--muted); line-height: 1.55; margin-top: 8px; }
+
+  /* PRD-23. No visibility marker and no delivery evidence here: everything a
+     guest can see is shared by definition, and delivery receipts are internal
+     operational detail about our own HISP. */
+  .gd { border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; margin-bottom: 8px; }
+  .gd-top { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+  .gd-type { font-size: 0.87rem; font-weight: 600; }
+  .gd-meta { font-size: 0.72rem; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+  .gd-acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .gd-btn {
+    font: inherit; font-size: 0.78rem; padding: 5px 11px; border-radius: 6px; cursor: pointer;
+    background: var(--card); border: 1px solid var(--border); color: inherit; text-decoration: none;
+    display: inline-block;
+  }
+  .gd-frame { width: 100%; height: 400px; border: 1px solid var(--border); border-radius: 6px; margin-top: 8px; background: #fff; }
+  .gd-pre {
+    margin-top: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 6px;
+    background: #f8f9fa; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem; line-height: 1.5; max-height: 300px; overflow: auto; white-space: pre-wrap;
+    word-break: break-word;
+  }
 </style>
 </head>
 <body>
@@ -123,6 +144,7 @@
   <div class="card" id="gHeader"></div>
   <div class="card" id="gTimeline"></div>
   <div class="card" id="gConversation"></div>
+  <div class="card" id="gDocuments"></div>
   <div class="card" id="gCollab"></div>
   <div class="foot" id="gFoot"></div>
 </div>
@@ -273,10 +295,142 @@
 
   renderConversation();
 
-  // PRD-23 and the assertion surface are what remain unbuilt here. The
-  // conversation above is no longer part of that list.
-  var hasCollab = (P.sharedDocuments || []).length > 0 ||
-                  (P.availableAssertions || []).length > 0;
+  // ── Documents (PRD-23) ────────────────────────────────────────────────────
+  //
+  // Everything here came through listSharedDocuments(), which filters on BOTH
+  // visibility and scope in SQL. An internal document is not hidden from this
+  // page and neither is a patient-level payer document; neither was ever sent
+  // to it.
+
+  var documents = P.sharedDocuments || [];
+  var openDocId = null;
+  var openDocMode = null;
+  var openDocBody = '';
+
+  function renderDocuments() {
+    var list = documents.length === 0
+      ? '<div class="soon">No documents have been shared with you yet.</div>'
+      : documents.map(function (d) {
+          var open = openDocId === d.id;
+          var acts = [];
+          if (d.renderAs === 'ccda' || d.renderAs === 'text') {
+            acts.push('<button class="gd-btn gd-open" data-id="' + esc(d.id) + '" data-mode="' +
+              esc(d.renderAs) + '">' + (open ? 'Close' : 'Open') + '</button>');
+          }
+          acts.push('<a class="gd-btn" href="/api/guest/documents/' + esc(d.id) +
+            '/content?download=1">Download</a>');
+
+          var panel = '';
+          if (open && openDocMode === 'ccda') {
+            panel = '<iframe class="gd-frame" src="/guest/documents/' + esc(d.id) +
+              '/ccda-frame" title="Document viewer"></iframe>';
+          } else if (open && openDocMode === 'text') {
+            panel = '<div class="gd-pre">' + esc(openDocBody || 'Loading\u2026') + '</div>';
+          }
+
+          return '<div class="gd">' +
+            '<div class="gd-top">' +
+              '<span class="gd-type">' + esc(d.docType) + '</span>' +
+              (d.own ? '<span class="gd-meta">you sent this</span>' : '') +
+            '</div>' +
+            '<div class="gd-meta">' +
+              [d.senderOrgName, fmtDateTime(d.receivedAt), d.originalFilename]
+                .filter(function (x) { return !!x; }).map(esc).join(' \u00b7 ') +
+            '</div>' +
+            '<div class="gd-acts">' + acts.join('') + '</div>' +
+            panel +
+          '</div>';
+        }).join('');
+
+    document.getElementById('gDocuments').innerHTML =
+      '<h2>Documents</h2>' + list +
+      '<div class="gc-form">' +
+        '<div class="gc-row">' +
+          '<input type="file" id="gdFile" accept=".pdf,.jpg,.jpeg,.png,.xml">' +
+          '<button class="gc-btn" id="gdUpload">Send a document</button>' +
+          '<span class="gc-msg" id="gdMsg"></span>' +
+        '</div>' +
+        '<div class="gc-warn">PDF, JPEG, PNG and XML up to 20 MB. Anything you add here is ' +
+          'visible to the organization that shared this referral with you.</div>' +
+      '</div>';
+
+    bindDocuments();
+  }
+
+  function gdMsg(text, ok) {
+    var el = document.getElementById('gdMsg');
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = ok ? '#0a7d4b' : '#b02a37';
+  }
+
+  function bindDocuments() {
+    Array.prototype.forEach.call(document.querySelectorAll('.gd-open'), function (b) {
+      b.addEventListener('click', function () {
+        void toggleDoc(parseInt(b.getAttribute('data-id'), 10), b.getAttribute('data-mode'));
+      });
+    });
+    var up = document.getElementById('gdUpload');
+    if (up) up.addEventListener('click', sendDocument);
+  }
+
+  async function toggleDoc(id, mode) {
+    if (openDocId === id && openDocMode === mode) {
+      openDocId = null;
+      openDocMode = null;
+      renderDocuments();
+      return;
+    }
+    openDocId = id;
+    openDocMode = mode;
+    openDocBody = '';
+    renderDocuments();
+    if (mode === 'text') {
+      try {
+        const res = await fetch('/api/guest/documents/' + id + '/content');
+        openDocBody = res.ok ? await res.text() : 'This document could not be displayed.';
+      } catch (err) {
+        openDocBody = 'This document could not be displayed.';
+        console.warn('[Guest/Documents]', err);
+      }
+      renderDocuments();
+    }
+  }
+
+  async function sendDocument() {
+    var input = document.getElementById('gdFile');
+    var file = input && input.files && input.files[0];
+    if (!file) { gdMsg('Choose a file first.', false); return; }
+    try {
+      // No visibility header: a guest's document is always shared, and the API
+      // refuses a supplied value rather than coercing one.
+      const res = await fetch('/api/guest/documents', {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+          'X-Document-Filename': encodeURIComponent(file.name),
+        },
+        body: file,
+      });
+      const data = await res.json();
+      if (!res.ok) { gdMsg(data.error || 'Could not send that.', false); return; }
+      if (input) input.value = '';
+      const reload = await fetch('/api/guest/documents');
+      const fresh = await reload.json();
+      documents = reload.ok ? (fresh.documents || []) : documents;
+      renderDocuments();
+      gdMsg('Sent.', true);
+    } catch (err) {
+      gdMsg('Network error.', false);
+      console.warn('[Guest/Documents]', err);
+    }
+  }
+
+  renderDocuments();
+
+  // The assertion surface is what remains unbuilt here. Messages and documents
+  // are no longer part of that list.
+  var hasCollab = (P.availableAssertions || []).length > 0;
 
   document.getElementById('gCollab').innerHTML =
     '<h2>Your organization</h2>' +
@@ -288,9 +442,9 @@
       esc(MODE_TEXT[P.party.protocolMode] || P.party.protocolMode) +
     '</div>' +
     (hasCollab ? '' :
-      '<div class="soon" style="margin-top:12px;">Shared documents and responding to ' +
-      'this referral from here are not switched on yet. Messages above and the progress ' +
-      'of the referral are live.</div>');
+      '<div class="soon" style="margin-top:12px;">Responding to this referral from here is ' +
+      'not switched on yet. Messages, documents and the progress of the referral are ' +
+      'live.</div>');
 
   document.getElementById('gFoot').innerHTML =
     'This page shows a single referral shared with your organization. It contains no ' +

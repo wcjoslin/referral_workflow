@@ -10,3 +10,5 @@ coverage/
 Devault/.obsidian/
 claims-inbox/failed/
 claims-inbox/processed/
+# PRD-23 uploaded documents — PHI, never committed
+workspace-uploads/

@@ -298,7 +298,7 @@ The logical order for PRD development:
 - Every guest action and every guest document view audited
 - **Prerequisite:** PRD-24
 
-**Status:** ◐ Phase 2a shipped (2026-09-15, v1.2). PRD-29 filled the assertions and PRD-22 the shared comments; Phase 2b is now down to shared documents (PRD-23).
+**Status:** ✅ Complete (2026-09-16). PRD-29 filled the assertions, PRD-22 the shared comments and PRD-23 the shared documents, so Phase 2b is done. The authentication gap recorded against it is PRD-20's to close.
 **Module:** `workspace/`
 
 ---
@@ -341,13 +341,20 @@ The logical order for PRD development:
 ### 23. **[[PRD-23 - Document Collection|PRD-23: Referral Document Collection]]** 📋
 **Everything clinical on a referral in one list** — as an index over content that already exists, not a second copy.
 
-- `workspace_documents` referencing `raw_ccda_xml`, `referral_messages`, `attachment_responses`, uploads
-- Type, source, sender, received date, protocol relationship, visibility
+- `workspace_documents` indexing six content sources: protocol messages, the legacy referral C-CDA,
+  claims attachment responses, prior-auth bundles, payer decisions, and uploads
+- Type, source, sender, received date, protocol relationship, **scope**, visibility
+- Visibility is derived from direction: what already crossed the wire to a party is `Shared`
+- `scope` records that a claims attachment is patient-level, because `attachment_requests` links to
+  patients and not to referrals — and patient-scoped documents are hidden from guests
+  unconditionally, independent of visibility
+- Registration is ONE hook in `recordThreadMessage()`, the funnel eleven services already call
 - Delivery evidence and human access evidence kept as two distinct facts
-- Upload never transmits; sending requires attaching 360X context
+- Upload by raw request body with magic-byte type detection, no multipart dependency; upload never
+  transmits, and sending requires attaching 360X context
 - **Prerequisite:** PRD-19, PRD-24
 
-**Status:** 📋 Drafting
+**Status:** ✅ Implemented (2026-09-16, v1.2)
 **Module:** `workspace/`
 
 ---
@@ -446,7 +453,7 @@ The logical order for PRD development:
 | [[PRD-20 - Shared Queues & Queue View\|20]] | Shared Queues & Queue View | 📋 | Queue entity, membership scope, four-tab queue view | `workspace/`, `views/` |
 | [[PRD-21 - Ownership & Assignment\|21]] | Ownership & Assignment | ✅ | Claim, assign, release, My work, audited | `workspace/` |
 | [[PRD-22 - Referral Conversation\|22]] | Referral Conversation | ✅ | One thread, Internal/Shared visibility, versioned | `workspace/` |
-| [[PRD-23 - Document Collection\|23]] | Document Collection | 📋 | Index over existing artifacts, delivery + access evidence | `workspace/` |
+| [[PRD-23 - Document Collection\|23]] | Document Collection | ✅ | Index over existing artifacts, delivery + access evidence | `workspace/` |
 | [[PRD-24 - Parties & Participants\|24]] | Parties & Participants | ✅ | Organizations + Direct address + protocol mode; internal roles | `workspace/` |
 | [[PRD-25 - Activity History & Audit\|25]] | Activity History & Audit | 📋 | Per-referral event reader, merged feed, gaps closed | `workspace/`, `analytics/` |
 | [[PRD-26 - Next Action & Due Dates\|26]] | Next Action & Due Dates | 📋 | Config-driven actions, awaited-by, overdue sweep | `workspace/` |

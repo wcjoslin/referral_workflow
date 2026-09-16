@@ -45,6 +45,7 @@ import { CookieCarrier, readCookie } from './identityService';
 import { PartyRole, ProtocolMode } from './partyService';
 // Type-only: a value import would close the cycle described above.
 import type { GuestSharedComment } from './commentService';
+import type { GuestSharedDocument } from './documentService';
 
 /** Read by the guard only. HttpOnly, unlike the acting-user cookie. */
 export const GUEST_SESSION_COOKIE = 'guestSession';
@@ -212,10 +213,12 @@ export interface GuestWorkspacePayload {
    */
   sharedComments: GuestSharedComment[];
   /**
-   * PRD-23 still fills this one. Present-but-empty, so a consumer written
-   * against Phase 2a does not break when it arrives — the shape is the contract.
+   * FILLED BY PRD-23. Shared, REFERRAL-SCOPED documents only — two independent
+   * gates, both applied in SQL. A patient-scoped claims attachment is withheld
+   * whatever its visibility says, because it concerns a different episode of
+   * care and one toggled flag must not be enough to disclose it.
    */
-  sharedDocuments: never[];
+  sharedDocuments: GuestSharedDocument[];
   /**
    * FILLED BY PRD-29, which is what unblocked PRD-30's third deferred item.
    * Derived from the assertion catalog for this guest's party role and the
@@ -319,6 +322,11 @@ export async function buildGuestPayload(
   const { listSharedComments } = await import('./commentService');
   const sharedComments = await listSharedComments(guest.workspaceId, guest.guestId);
 
+  // Lazily for the same reason: documentService reaches commentService, which
+  // imports this module.
+  const { listSharedDocuments } = await import('./documentService');
+  const sharedDocuments = await listSharedDocuments(guest.workspaceId, guest.guestId);
+
   return {
     workspace: {
       referralState: state,
@@ -339,7 +347,7 @@ export async function buildGuestPayload(
       expiresAt: guest.expiresAt.toISOString(),
     },
     sharedComments,
-    sharedDocuments: [],
+    sharedDocuments,
     availableAssertions: available.available,
   };
 }
