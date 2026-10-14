@@ -54,9 +54,13 @@ export const config = {
   // PRD-30. `publicBaseUrl` exists because an invitation link has to be
   // absolute and nothing else here knows the app's external address; the
   // localhost default is correct for the demo and wrong for a deployment,
-  // which is the point of making it explicit.
+  // which is the point of making it explicit. On Render the platform supplies
+  // RENDER_EXTERNAL_URL, which is the right answer there without any setup.
   workspace: {
-    publicBaseUrl: optionalEnv('PUBLIC_BASE_URL', `http://localhost:${optionalEnv('PORT', '3000')}`),
+    publicBaseUrl: optionalEnv(
+      'PUBLIC_BASE_URL',
+      optionalEnv('RENDER_EXTERNAL_URL', `http://localhost:${optionalEnv('PORT', '3000')}`),
+    ),
     guestInvitationExpiryHours: parseInt(optionalEnv('GUEST_INVITATION_EXPIRY_HOURS', '336'), 10),
     /**
      * Shows the raw guest invitation link in the inviter's own browser after

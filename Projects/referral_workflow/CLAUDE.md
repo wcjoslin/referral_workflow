@@ -288,20 +288,29 @@ overdue items and a populated notification bell. `/walkthrough` path H tours the
 3. Visit `localhost:3000` to see the UI
 4. Mock scripts will auto-execute on defined triggers (or trigger manually from UI)
 
-## Deploying (Railway)
+## Deploying
 
 The app is a long-running Express server with SQLite on disk, an IMAP poller and timers, so it needs
-an always-on host. **It does not work on Vercel** (serverless: no persistent process or filesystem).
+a host that runs a process. **It does not work on Vercel** (serverless: no persistent process or
+filesystem).
 
-Railway service settings: root directory `Projects/referral_workflow`, a volume mounted at `/data`,
-and `DATABASE_URL=/data/referral.db`. `railway.json` builds with `npm ci && npm run build` and starts
-with `npm run start:railway`, which migrates, seeds the full demo **only if the database has no
-referrals** (`scripts/seed-if-empty.ts`), then starts the server. Seeding happens at start, not build,
-because the volume is not mounted during the build.
+Every host starts it with `npm run start:hosted`: migrate, seed the full demo **only if the database
+has no referrals** (`scripts/seed-if-empty.ts`), then start the server. Seeding happens at start, not
+build, because a persistent volume is never mounted during a build.
 
-Set `PUBLIC_BASE_URL=https://${{RAILWAY_PUBLIC_DOMAIN}}` so guest invitation links are absolute.
 For a demo-only deploy, the IMAP/SMTP variables can be placeholders such as `imap.invalid`: the UI
-works fully, nothing is sent, and the inbox poller only logs connection errors.
+works fully, nothing is sent, and the inbox poller and MDN sender only log connection errors.
+
+**Render (free, the current deploy):** `render.yaml` at the repository root is a Blueprint that
+sets everything, including the placeholders. The free plan has no persistent disk and sleeps after
+15 idle minutes, so the database is wiped on every sleep, restart and deploy and re-seeded on the next
+start — a self-resetting demo. A cold start is the platform wake-up plus about a minute to migrate
+and seed. `TS_NODE_TRANSPILE_ONLY=true` keeps memory inside the 512 MB instance (measured locally:
+~280 MB peak while seeding, ~340 MB serving). Guest links use Render's `RENDER_EXTERNAL_URL`.
+
+**Railway (paid):** root directory `Projects/referral_workflow`, a volume at `/data`,
+`DATABASE_URL=/data/referral.db`, and `PUBLIC_BASE_URL=https://${{RAILWAY_PUBLIC_DOMAIN}}`.
+`railway.json` holds the build and start commands. Data persists across deploys.
 
 ## Git Workflow
 

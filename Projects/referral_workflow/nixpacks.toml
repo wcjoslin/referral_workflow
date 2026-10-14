@@ -7,4 +7,4 @@ cmds = [
 # Migrations and the one-time demo seed run at START, not here: the database
 # lives on a Railway volume, which is not mounted during the build.
 [start]
-cmd = "npm run start:railway"
+cmd = "npm run start:hosted"
