@@ -535,8 +535,11 @@ async function main(): Promise<void> {
     'slots.participants was not true — the page would render the coming-soon card',
   );
   check(
-    'the panel explains protocol mode in plain language rather than echoing the enum',
-    reDetail.body.includes('speaks 360X') && reDetail.body.includes('nothing is transmitted'),
+    'the panel never asks anyone to declare a 360X capability',
+    !reDetail.body.includes('Set mode') &&
+      !reDetail.body.includes('party-mode') &&
+      !reDetail.body.includes('MODE_LABEL'),
+    'a protocol-mode control is back on the party card',
   );
   check(
     'the panel says roles are not access control yet',

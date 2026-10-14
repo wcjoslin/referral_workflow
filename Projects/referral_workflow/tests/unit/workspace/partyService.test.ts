@@ -440,6 +440,29 @@ describe('updateParty()', () => {
     expect(updated.addresses.map((a) => a.address)).toContain('new@lakeside.direct');
   });
 
+  it('derives the protocol mode from the address, with nothing declared', async () => {
+    const { workspaceId, referralId } = await makeWorkspace('');
+    await seedParties(workspaceId, referralId);
+    const initiating = (await getParties(workspaceId)).find((p) => p.partyRole === 'initiating')!;
+    expect(initiating.protocolMode).toBe('local-only');
+
+    const reachable = await updateParty(initiating.id, { directAddress: 'new@lakeside.direct' }, 'user:2');
+    expect(reachable.protocolMode).toBe('workspace-mediated');
+
+    const unreachable = await updateParty(initiating.id, { directAddress: '' }, 'user:2');
+    expect(unreachable.protocolMode).toBe('local-only');
+  });
+
+  it('leaves the mode alone when an unrelated field changes', async () => {
+    const { workspaceId, referralId } = await makeWorkspace();
+    await seedParties(workspaceId, referralId);
+    const initiating = (await getParties(workspaceId)).find((p) => p.partyRole === 'initiating')!;
+    await setProtocolMode(initiating.id, 'native-360x', 'user:4');
+
+    const updated = await updateParty(initiating.id, { contactName: 'E. Chen' }, 'user:2');
+    expect(updated.protocolMode).toBe('native-360x');
+  });
+
   it('refuses an address already claimed by the other party on this workspace', async () => {
     const { workspaceId, referralId } = await makeWorkspace();
     await seedParties(workspaceId, referralId);
