@@ -2,9 +2,9 @@
 cmds = [
   "npm ci",
   "npm run build",
-  "node dist/db/migrate.js",
-  "npx ts-node -r ./scripts/node-polyfill.js scripts/seed-demo.ts || true"
 ]
 
+# Migrations and the one-time demo seed run at START, not here: the database
+# lives on a Railway volume, which is not mounted during the build.
 [start]
-cmd = "node -r ./scripts/node-polyfill.js dist/index.js"
+cmd = "npm run start:hosted"

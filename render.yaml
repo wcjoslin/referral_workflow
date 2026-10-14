@@ -1,0 +1,48 @@
+# Render Blueprint — a free, self-resetting demo of Projects/referral_workflow.
+#
+# The free plan has no persistent disk and sleeps after 15 idle minutes, so the
+# SQLite database is wiped on every sleep, restart and deploy. That is fine for
+# a demo: `start:hosted` migrates and re-seeds the full demo whenever the
+# database is empty, so every wake-up starts from the same 106 referrals.
+#
+# Mail settings are placeholders: nothing is sent or received, and the inbox
+# poller only logs connection errors.
+
+services:
+  - type: web
+    name: referral-workflow
+    runtime: node
+    plan: free
+    rootDir: Projects/referral_workflow
+    # --include=dev: the type-check in `npm run build` needs the @types packages.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start:hosted
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # The free instance has 512 MB. Skipping ts-node's type-check at start
+      # keeps memory well under that; `npm run build` already type-checks.
+      - key: TS_NODE_TRANSPILE_ONLY
+        value: "true"
+      - key: DATABASE_URL
+        value: ./referral.db
+      - key: RECEIVING_DIRECT_ADDRESS
+        value: receiving@specialist.direct
+      - key: IMAP_HOST
+        value: imap.invalid
+      - key: IMAP_PORT
+        value: "993"
+      - key: IMAP_USER
+        value: demo
+      - key: IMAP_PASSWORD
+        value: demo
+      - key: SMTP_HOST
+        value: smtp.invalid
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        value: demo
+      - key: SMTP_PASSWORD
+        value: demo

@@ -2,12 +2,16 @@
   "name": "referral-workflow",
   "version": "0.1.0",
   "description": "360X Closed Loop Referral PoC",
+  "engines": {
+    "node": "22.x"
+  },
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "prestart": "ts-node src/db/migrate.ts",
     "start": "ts-node -r ./scripts/node-polyfill.js src/index.ts",
     "dev": "ts-node -r ./scripts/node-polyfill.js src/index.ts",
+    "start:hosted": "npm run db:migrate && ts-node -r ./scripts/node-polyfill.js scripts/seed-if-empty.ts && ts-node -r ./scripts/node-polyfill.js src/index.ts",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
