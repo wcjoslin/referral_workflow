@@ -24,6 +24,8 @@ export interface OutboundMail {
   text: string;
   html?: string;
   from?: string;
+  attachments?: { filename: string; content: string; contentType: string }[];
+  headers?: Record<string, string>;
 }
 
 export function buildTransport(): nodemailer.Transporter {
@@ -43,6 +45,8 @@ export async function sendMail(mail: OutboundMail): Promise<boolean> {
       subject: mail.subject,
       text: mail.text,
       ...(mail.html ? { html: mail.html } : {}),
+      ...(mail.attachments ? { attachments: mail.attachments } : {}),
+      ...(mail.headers ? { headers: mail.headers } : {}),
     });
     return true;
   } catch (err) {

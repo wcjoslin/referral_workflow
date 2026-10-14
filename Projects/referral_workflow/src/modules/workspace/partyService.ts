@@ -466,6 +466,9 @@ async function seedIntakeAddress(
  * rather than `native-360x`: assuming the other side speaks 360X before any
  * exchange has proved it would show a capability we have not observed. PRD-29
  * promotes it via markCapabilityVerified().
+ *
+ * This is the ONLY way a mode is chosen in the product: no surface asks a user
+ * to declare one, and `updateParty()` re-derives it when the address changes.
  */
 function resolveInitialMode(address: string): ProtocolMode {
   return address === '' ? 'local-only' : 'workspace-mediated';
@@ -499,6 +502,18 @@ export async function updateParty(
     }
   }
 
+  // The mode follows the address; nobody declares it. Clearing the address
+  // leaves nothing to transmit to, and adding one to a `local-only` party makes
+  // it reachable. A party that already had an address keeps whatever it has.
+  const derivedMode: ProtocolMode | undefined =
+    directAddress === undefined
+      ? undefined
+      : directAddress === ''
+        ? 'local-only'
+        : current.protocolMode === 'local-only'
+          ? resolveInitialMode(directAddress)
+          : undefined;
+
   const now = new Date();
   await db
     .update(workspaceParties)
@@ -506,6 +521,7 @@ export async function updateParty(
       // A name a person typed is verified by definition — somebody asserted it.
       ...(orgName !== undefined ? { orgName, orgNameVerified: orgName !== '' } : {}),
       ...(directAddress !== undefined ? { directAddress: directAddress || null } : {}),
+      ...(derivedMode !== undefined ? { protocolMode: derivedMode } : {}),
       ...(contactName !== undefined ? { contactName: contactName || null } : {}),
       updatedAt: now,
     })

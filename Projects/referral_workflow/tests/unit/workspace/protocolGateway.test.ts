@@ -532,6 +532,70 @@ describe('submitAssertion() rendering', () => {
     expect(await db.select().from(referralMessages)).toHaveLength(1);
   });
 
+  it('delivers a structured artifact as a readable note with the artifact attached', async () => {
+    const f = await makeWorkspace(ReferralState.ACKNOWLEDGED);
+    await db
+      .update(referralWorkspaces)
+      .set({ externalReferralId: 'REF-360X-77' })
+      .where(eq(referralWorkspaces.id, f.workspaceId));
+
+    await submitAssertion({
+      workspaceId: f.workspaceId,
+      assertionKey: key(),
+      assertionType: 'accept',
+      partyId: f.receivingPartyId,
+      actor: `user:${userId}`,
+    });
+    await flush();
+
+    const [msg] = await db.select().from(referralMessages);
+    const mail = sendMailMock.mock.calls[0][0] as {
+      subject: string;
+      text: string;
+      attachments: { filename: string; content: string; contentType: string }[];
+      headers: Record<string, string>;
+    };
+
+    // A receiver with no 360X software reads this and sees nothing odd.
+    expect(mail.subject).toBe(`Referral Response — Referral #${f.referralId}`);
+    expect(mail.text).toContain('Referral accepted');
+    expect(mail.text).not.toContain('MSH|');
+    // A receiver WITH it gets the artifact and the identifiers, unasked.
+    expect(mail.attachments).toHaveLength(1);
+    expect(mail.attachments[0].content).toBe(msg.contentHl7);
+    expect(mail.attachments[0].contentType).toBe('application/hl7-v2');
+    expect(mail.headers).toEqual({
+      'X-360X-Message-Type': 'RRI',
+      'X-360X-Message-Control-Id': msg.messageControlId,
+      'X-360X-Referral-Id': 'REF-360X-77',
+    });
+  });
+
+  it('delivers a plain update as its own text, still carrying 360X headers', async () => {
+    const f = await makeWorkspace(ReferralState.ACCEPTED);
+
+    await submitAssertion({
+      workspaceId: f.workspaceId,
+      assertionKey: key(),
+      assertionType: 'interim-update',
+      partyId: f.receivingPartyId,
+      actor: `user:${userId}`,
+      context: { note: 'Awaiting the echo report' },
+    });
+    await flush();
+
+    const mail = sendMailMock.mock.calls[0][0] as {
+      text: string;
+      attachments?: unknown[];
+      headers: Record<string, string>;
+    };
+    expect(mail.text).toBe('Awaiting the echo report');
+    expect(mail.attachments).toBeUndefined();
+    expect(mail.headers['X-360X-Message-Type']).toBe('InterimUpdate');
+    // No external id on this referral, so the header is omitted, not blank.
+    expect(mail.headers).not.toHaveProperty('X-360X-Referral-Id');
+  });
+
   it('stores the artifact BEFORE attempting delivery, so a failure loses nothing', async () => {
     sendMailMock.mockResolvedValue(false);
     const f = await makeWorkspace(ReferralState.ACKNOWLEDGED);

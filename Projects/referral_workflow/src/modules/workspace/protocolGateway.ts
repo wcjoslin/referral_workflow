@@ -59,7 +59,7 @@ import { buildConsultNoteCcda } from '../prd04/ccdaBuilder';
 import { buildMdnReport } from '../prd01/mdnService';
 import { buildAck } from '../prd06/ackBuilder';
 import { recordThreadMessage } from '../messaging/threadService';
-import { sendMail } from '../messaging/mailer';
+import { OutboundMail, sendMail } from '../messaging/mailer';
 import { proposeForReferral } from './workspaceService';
 import {
   ASSERTION_CATALOG,
@@ -276,7 +276,7 @@ async function renderArtifact(
         messageType: 'RRI',
         summary:
           type === 'accept'
-            ? 'Referral accepted via workspace assertion'
+            ? 'Referral accepted'
             : `Referral ${type === 'decline' ? 'declined' : 'held for information'}: ${reason}`,
         contentHl7: buildRri({
           messageControlId,
@@ -323,7 +323,7 @@ async function renderArtifact(
     case 'ccda': {
       return {
         messageType: 'ConsultNote',
-        summary: 'Consult note returned via workspace assertion',
+        summary: 'Consult note returned',
         contentXml: buildConsultNoteCcda({
           patient: {
             firstName: patient?.firstName ?? '',
@@ -351,7 +351,7 @@ async function renderArtifact(
     case 'mdn': {
       return {
         messageType: 'MDN',
-        summary: 'Receipt confirmed via workspace assertion',
+        summary: 'Receipt confirmed',
         contentBody: buildMdnReport(referral.sourceMessageId),
         messageControlId,
       };
@@ -375,7 +375,7 @@ async function renderArtifact(
 
       return {
         messageType: 'ACK',
-        summary: 'Outcome acknowledged via workspace assertion — loop closed',
+        summary: 'Outcome acknowledged — loop closed',
         contentHl7: buildAck({
           messageControlId,
           acknowledgedControlId: lastOutbound?.messageControlId ?? messageControlId,
@@ -599,6 +599,90 @@ export async function submitAssertion(req: AssertionRequest): Promise<AssertionR
   return { ...toResult(assertion), idempotentReplay: false };
 }
 
+/** Plain-language subjects, in the wording the pre-workspace senders already use. */
+const DELIVERY_SUBJECT: Record<string, string> = {
+  RRI: 'Referral Response',
+  SIU: 'Appointment Scheduled',
+  ConsultNote: 'Consultation Note',
+  MDN: 'Referral Received',
+  ACK: 'Consultation Note Acknowledged',
+  NoShowNotification: 'No-Show Notification',
+  InfoReply: 'Information Supplied',
+  Cancellation: 'Referral Cancelled',
+  InterimUpdate: 'Interim Update',
+};
+
+type MessageRow = typeof referralMessages.$inferSelect;
+
+function artifactAttachment(
+  message: MessageRow,
+  referralId: number,
+): NonNullable<OutboundMail['attachments']>[number] | null {
+  const controlId = message.messageControlId ?? '';
+  if (message.contentHl7) {
+    return {
+      filename: `${message.messageType.toLowerCase()}-${controlId}.hl7`,
+      content: message.contentHl7,
+      contentType: 'application/hl7-v2',
+    };
+  }
+  if (message.contentXml) {
+    return {
+      filename: `consult-note-${referralId}.xml`,
+      content: message.contentXml,
+      contentType: 'application/xml',
+    };
+  }
+  // An MDN's stored body IS the machine-readable report, not a note.
+  if (message.messageType === 'MDN' && message.contentBody) {
+    return {
+      filename: `mdn-${controlId}.txt`,
+      content: message.contentBody,
+      contentType: 'message/disposition-notification',
+    };
+  }
+  return null;
+}
+
+/**
+ * The email a stored artifact is delivered as.
+ *
+ * 360X context rides along SILENTLY. The body is a note a person can read; the
+ * structured artifact is an attachment and the identifiers are headers. A
+ * receiver whose software understands 360X processes the attachment, and one
+ * whose software does not just reads the note — nothing about the message
+ * depends on which of the two they are, which is why nobody has to declare it.
+ *
+ * The `X-360X-*` headers are this application's convention, not part of the
+ * 360X specification: they let a receiver route a message without opening the
+ * attachment, and the attachment still carries everything the protocol needs.
+ */
+export function buildDeliveryMail(
+  message: MessageRow,
+  referralId: number,
+  externalReferralId: string | null,
+): Pick<OutboundMail, 'subject' | 'text' | 'attachments' | 'headers'> {
+  const attachment = artifactAttachment(message, referralId);
+
+  // An unstructured update IS its text. A structured one is described by the
+  // summary written when it was rendered, never by the artifact itself.
+  const note = attachment ? message.summary : (message.contentBody ?? message.summary);
+
+  return {
+    subject: `${DELIVERY_SUBJECT[message.messageType] ?? 'Referral Update'} — Referral #${referralId}`,
+    text: attachment
+      ? `${note}\n\nA machine-readable copy of this update is attached. ` +
+        'No action is needed if your system does not process it.'
+      : note,
+    ...(attachment ? { attachments: [attachment] } : {}),
+    headers: {
+      'X-360X-Message-Type': message.messageType,
+      'X-360X-Message-Control-Id': message.messageControlId ?? '',
+      ...(externalReferralId ? { 'X-360X-Referral-Id': externalReferralId } : {}),
+    },
+  };
+}
+
 /**
  * Sends a stored artifact and records the outcome.
  *
@@ -621,12 +705,19 @@ async function deliver(assertionId: number): Promise<void> {
     .limit(1);
   if (!message) return;
 
-  const body = message.contentHl7 ?? message.contentXml ?? message.contentBody ?? '';
+  const [workspace] = await db
+    .select({
+      referralId: referralWorkspaces.referralId,
+      externalReferralId: referralWorkspaces.externalReferralId,
+    })
+    .from(referralWorkspaces)
+    .where(eq(referralWorkspaces.id, assertion.workspaceId))
+    .limit(1);
+
   const delivered = await sendMail({
     to: assertion.sentToAddress,
     from: assertion.sentFromAddress ?? config.receiving.directAddress,
-    subject: `360X ${message.messageType} — referral ${assertion.workspaceId}`,
-    text: body,
+    ...buildDeliveryMail(message, workspace?.referralId ?? 0, workspace?.externalReferralId ?? null),
   });
 
   const now = new Date();
@@ -638,12 +729,6 @@ async function deliver(assertionId: number): Promise<void> {
       deliveryError: delivered ? null : 'SMTP delivery failed',
     })
     .where(eq(workspaceAssertions.id, assertionId));
-
-  const [workspace] = await db
-    .select({ referralId: referralWorkspaces.referralId })
-    .from(referralWorkspaces)
-    .where(eq(referralWorkspaces.id, assertion.workspaceId))
-    .limit(1);
 
   void emitEvent({
     eventType: delivered ? 'workspace.artifact_transmitted' : 'workspace.artifact_delivery_failed',

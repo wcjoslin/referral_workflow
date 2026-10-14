@@ -232,7 +232,6 @@
   .tag.verified { background: #d1e7dd; color: #0a3622; }
   .tag.assumed { background: #e9ecef; color: #495057; }
   .party-addr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: var(--color-text-muted); margin-top: 4px; word-break: break-all; }
-  .party-mode { font-size: 0.78rem; margin-top: 6px; line-height: 1.5; }
   .party-extra { font-size: 0.74rem; color: var(--color-text-muted); margin-top: 6px; line-height: 1.5; }
   .plist { list-style: none; padding: 0; margin: 4px 0 0; }
   .plist li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--color-border); flex-wrap: wrap; }
@@ -1378,24 +1377,6 @@
 
   // ── Parties & participants (PRD-24) ───────────────────────────────────────
 
-  /**
-   * Plain-language protocol mode (AC5). Deliberately describes CONSEQUENCE
-   * rather than restating the enum: "native-360x" tells a coordinator nothing,
-   * "artifacts go straight to their system" tells them what will happen when
-   * they act.
-   */
-  var MODE_TEXT = {
-    'native-360x': 'Their own system speaks 360X \u2014 artifacts are delivered straight to it.',
-    'workspace-mediated': 'They have a Direct address but no 360X system, so they work inside this workspace and we render conformant artifacts to that address.',
-    'local-only': 'No Direct address on file, so updates stay local \u2014 artifacts are still generated and stored, but nothing is transmitted.'
-  };
-
-  var MODE_LABEL = {
-    'native-360x': 'Speaks 360X',
-    'workspace-mediated': 'Works in this workspace',
-    'local-only': 'Local only'
-  };
-
   /** Active users for the add-participant picker. */
   var rosterUsers = [];
 
@@ -1411,41 +1392,23 @@
       ? '<div class="empty-note">No parties recorded. This workspace was created before ' +
         'parties existed \u2014 run <code>npm run backfill:parties</code>.</div>'
       : parties.map(function (p) {
-          var verified = p.capabilityVerifiedAt
-            ? '<span class="tag verified" title="Confirmed by a real exchange">verified</span>'
-            : '<span class="tag assumed" title="Not yet confirmed by an actual exchange">assumed</span>';
-
           // Only addresses BEYOND the canonical intake are worth listing; the
           // intake address is already shown on its own line above.
           var extra = (p.addresses || []).filter(function (a) {
             return !p.directAddress || a.address.toLowerCase() !== p.directAddress.toLowerCase();
           });
 
-          var modeCtl = readOnly ? '' :
-            '<div class="ctl-row">' +
-              '<select class="ctl party-mode-sel" data-party="' + esc(p.id) + '">' +
-                Object.keys(MODE_LABEL).map(function (m) {
-                  return '<option value="' + esc(m) + '"' + (p.protocolMode === m ? ' selected' : '') + '>' +
-                    esc(MODE_LABEL[m]) + '</option>';
-                }).join('') +
-              '</select>' +
-              '<button class="btn party-mode-btn" data-party="' + esc(p.id) + '">Set mode</button>' +
-            '</div>';
-
           return '<div class="party">' +
             '<div class="party-top">' +
               '<span class="party-role ' + esc(p.partyRole) + '">' + esc(p.partyRole) + '</span>' +
               '<span class="party-name">' + esc(p.orgName) + '</span>' +
               (p.orgNameVerified ? '' : '<span class="tag" title="Derived from the address domain, not confirmed">unverified name</span>') +
-              verified +
             '</div>' +
             '<div class="party-addr">' + (p.directAddress ? esc(p.directAddress) : 'no Direct address') + '</div>' +
-            '<div class="party-mode">' + esc(MODE_TEXT[p.protocolMode] || p.protocolMode) + '</div>' +
             (extra.length === 0 ? '' :
               '<div class="party-extra">Also seen using: ' +
               extra.map(function (a) { return esc(a.address); }).join(', ') + '</div>') +
             (p.contactName ? '<div class="party-extra">Contact: ' + esc(p.contactName) + '</div>' : '') +
-            modeCtl +
             renderInviteBlock(p) +
           '</div>';
         }).join('');
@@ -1500,13 +1463,6 @@
 
     if (readOnly) return;
 
-    Array.prototype.forEach.call(document.querySelectorAll('.party-mode-btn'), function (btn) {
-      btn.addEventListener('click', function () {
-        var id = btn.getAttribute('data-party');
-        var sel = document.querySelector('.party-mode-sel[data-party="' + id + '"]');
-        if (sel) setMode(id, sel.value);
-      });
-    });
 
     bindInviteControls();
 
@@ -1561,22 +1517,6 @@
     warn.appendChild(a);
 
     el.appendChild(warn);
-  }
-
-  async function setMode(partyId, mode) {
-    try {
-      var res = await fetch('/api/workspaces/' + ws.id + '/parties/' + partyId + '/protocol-mode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ protocolMode: mode })
-      });
-      var json = await res.json();
-      if (!res.ok) { pMsg(json.error || 'Could not set the mode.', false); return; }
-      await reloadParties();
-      pMsg('Protocol mode updated.', true);
-    } catch (err) {
-      pMsg('Could not set the mode: ' + err.message, false);
-    }
   }
 
   async function addPerson(userId, role) {

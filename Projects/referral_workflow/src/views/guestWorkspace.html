@@ -180,12 +180,6 @@
     '</div>';
   }
 
-  var MODE_TEXT = {
-    'native-360x': 'Your system exchanges 360X messages directly.',
-    'workspace-mediated': 'You are working inside this shared referral; we render your actions into conformant 360X artifacts.',
-    'local-only': 'No Direct address is on file for your organization, so updates are recorded here but not transmitted.'
-  };
-
   document.title = 'Referral — ' + (P.workspace.patientName || 'shared with you');
   document.getElementById('gTitle').textContent =
     'Referral for ' + P.workspace.patientName;
@@ -477,9 +471,10 @@
       field('Acting for', esc(P.party.orgName)) +
       field('Role on this referral', esc(P.party.partyRole)) +
     '</div>' +
-    '<div class="soon" style="margin-top:12px;">' +
-      esc(MODE_TEXT[P.party.protocolMode] || P.party.protocolMode) +
-    '</div>' +
+    // A delivery fact, not a capability: with no address nothing reaches them.
+    (P.party.protocolMode !== 'local-only' ? '' :
+      '<div class="soon" style="margin-top:12px;">No Direct address is on file for your ' +
+      'organization, so updates are recorded here but not transmitted.</div>') +
     (hasCollab ? '' :
       '<div class="soon" style="margin-top:12px;">Responding to this referral from here is ' +
       'not switched on yet. Messages, documents and the progress of the referral are ' +
