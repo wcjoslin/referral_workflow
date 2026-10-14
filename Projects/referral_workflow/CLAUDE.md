@@ -288,6 +288,21 @@ overdue items and a populated notification bell. `/walkthrough` path H tours the
 3. Visit `localhost:3000` to see the UI
 4. Mock scripts will auto-execute on defined triggers (or trigger manually from UI)
 
+## Deploying (Railway)
+
+The app is a long-running Express server with SQLite on disk, an IMAP poller and timers, so it needs
+an always-on host. **It does not work on Vercel** (serverless: no persistent process or filesystem).
+
+Railway service settings: root directory `Projects/referral_workflow`, a volume mounted at `/data`,
+and `DATABASE_URL=/data/referral.db`. `railway.json` builds with `npm ci && npm run build` and starts
+with `npm run start:railway`, which migrates, seeds the full demo **only if the database has no
+referrals** (`scripts/seed-if-empty.ts`), then starts the server. Seeding happens at start, not build,
+because the volume is not mounted during the build.
+
+Set `PUBLIC_BASE_URL=https://${{RAILWAY_PUBLIC_DOMAIN}}` so guest invitation links are absolute.
+For a demo-only deploy, the IMAP/SMTP variables can be placeholders such as `imap.invalid`: the UI
+works fully, nothing is sent, and the inbox poller only logs connection errors.
+
 ## Git Workflow
 
 **Branch per feature/PRD** — every feature or PRD implementation must be done on a dedicated branch, never directly on `main`.
