@@ -360,9 +360,39 @@
   .act-transition { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.7rem; }
 
   .cols { display: grid; grid-template-columns: 1fr; gap: 16px; }
-  .cols.with-viewer { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
-  @media (max-width: 980px) { .cols.with-viewer { grid-template-columns: 1fr; } }
-  .viewer-col { position: sticky; top: 76px; align-self: start; }
+  /* Equal columns, balanced per referral by layoutColumns(). Not sticky: the
+     documents list can be taller than the screen. */
+  .cols.with-side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 980px) { .cols.with-side { grid-template-columns: 1fr; } }
+
+  /* ── At-a-glance strip in the header ─────────────────────────────────────── */
+  .glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px;
+            margin-top: 12px; }
+  .glance-box { border: 1px solid var(--color-border); border-radius: 8px; padding: 12px 14px;
+                background: #fbfcfd; min-width: 0; }
+  .glance-box .field { margin-bottom: 8px; }
+  .glance-box .field:last-child { margin-bottom: 0; }
+  .glance-title { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+                  color: var(--color-text); margin: 0 0 10px; }
+  .glance-journey { margin-top: 18px; }
+  /* The journey stepper, sized for the banner. */
+  .glance-journey .tl-step { min-width: 64px; }
+  .glance-journey .tl-dot { width: 22px; height: 22px; border-width: 2px; font-size: 0.62rem; }
+  .glance-journey .tl-connector { top: 11px; height: 2px; }
+  .glance-journey .tl-label { font-size: 0.66rem; margin-top: 4px; }
+  .more-chip { cursor: pointer; border-style: dashed; }
+
+  /* ── Collapsible audit sections (Exchanged Messages, Activity History) ───── */
+  details.fold > summary { list-style: none; cursor: pointer; }
+  details.fold > summary::-webkit-details-marker { display: none; }
+  details.fold > summary h2 { margin: 0; }
+  details.fold > summary h2::before { content: '\25B8'; font-size: 0.8rem; color: var(--color-text-muted);
+                                       transition: transform 0.15s; display: inline-block; }
+  details.fold[open] > summary h2::before { transform: rotate(90deg); }
+  details.fold[open] > summary { margin-bottom: 14px; }
+  /* A direct link scrolls the section to the top, which the sticky nav covers. */
+  #wsActivity, #wsThread { scroll-margin-top: 84px; }
+  .fold-hint { font-size: 0.72rem; font-weight: 400; color: var(--color-text-muted); margin-left: auto; }
 
   /* ── Protocol timeline, ported from the review page ─────────────────────── */
   .tl { display: flex; align-items: flex-start; overflow-x: auto; padding: 4px 0 2px; }
@@ -446,7 +476,6 @@
     padding: 1px 5px;
     margin-left: auto;
   }
-  #ccdaContainer { width: 100%; height: 720px; border: none; display: block; background: #fff; }
 </style>
 
 <!--__NAV__-->
@@ -455,41 +484,33 @@
   <div id="wsBanners"></div>
   <div class="card" id="wsHeader"></div>
 
-  <div class="cols" id="wsCols">
-    <div>
-      <div class="card" id="wsTimeline"></div>
-      <!--
-        Ownership lives in the MAIN column, high up, because it is an action
-        about the work rather than reference material — and because when a
-        referral has no C-CDA the layout collapses to one column and the side
-        column stacks after everything in this one. PRD-19 originally put this
-        slot in the side column; filling it in PRD-21 showed the consequence:
-        the claim and release controls sat a thousand pixels down, beneath three
-        empty placeholder panels.
-      -->
+  <!--
+    The protocol journey, routing and clinical summary live IN the header
+    (#wsHeader) rather than as cards: they are what a person needs on arrival.
+    The embedded C-CDA viewer was removed; the clinical disposition screen the
+    header links to is where the full document is read.
+  -->
+  <!--
+    Two equal columns. The cards start in the split below, the one that came
+    out most even across the seeded referral states, and layoutColumns() then
+    rebalances once for this referral after the cards have loaded. On narrow
+    screens they stack in CARD_ORDER: actions and the people involved first,
+    the collapsed audit sections last. Ownership and parties stay high in that
+    order on purpose: they were once buried under placeholders and an
+    unbounded message list (PRD-21, PRD-24 AC1).
+  -->
+  <div class="cols with-side" id="wsCols">
+    <div id="wsMain">
       <div class="card" id="wsAssertions"></div>
       <div class="card" id="wsOwner"></div>
-      <!--
-        Parties & participants also sits in the MAIN column, but for a different
-        reason than ownership above. Ownership moved because it is the primary
-        ACTION and was buried. This panel is mostly reference material, which
-        would normally justify the side column — except AC1's whole story is
-        "see who I am dealing with WITHOUT opening the raw message", and in the
-        single-column collapse the side column stacks after the message thread,
-        which can run to any length. Reference material you are meant to see on
-        arrival cannot live below an unbounded list.
-      -->
       <div class="card" id="wsParticipants"></div>
-      <div class="card" id="wsConversation"></div>
       <div class="card" id="wsThread"></div>
       <div class="card" id="wsActivity"></div>
     </div>
-    <div class="viewer-col" id="wsSide">
-      <div class="card" id="wsRouting"></div>
-      <div class="card" id="wsClinical"></div>
+    <div id="wsSide">
+      <div class="card" id="wsConversation"></div>
       <div class="card" id="wsDocuments"></div>
       <div class="card" id="wsPriorAuth"></div>
-      <div class="card" id="wsCcdaPanel"></div>
     </div>
   </div>
 </div>
@@ -802,6 +823,20 @@
         '</div>' +
       '</div>' +
 
+      // At a glance: where the referral is in the protocol, where it is routed,
+      // and the clinical picture — the three things a person needs on arrival.
+      '<div class="glance-box glance-journey">' +
+        '<div class="glance-title">360X protocol journey</div>' + journeySteps() +
+      '</div>' +
+      '<div class="glance">' +
+        '<div class="glance-box">' +
+          '<div class="glance-title">Routing</div>' + routingSummary() +
+        '</div>' +
+        '<div class="glance-box">' +
+          '<div class="glance-title">Clinical summary</div>' + clinicalSummary() +
+        '</div>' +
+      '</div>' +
+
       exceptionPanel() +
       nextActionBlock() +
 
@@ -812,7 +847,6 @@
 
       '<div class="hdr-grid">' +
         field('Initiating organization', ref.referrerAddress) +
-        field('Receiving department', ref.routingDepartment) +
         field('Owner', ws.ownerDisplayName, 'Unassigned') +
         field('Queue', ws.queueName, 'Unassigned') +
         field('360X referral id', ws.externalReferralId) +
@@ -825,6 +859,19 @@
       var rb = document.getElementById('btnResync');
       if (rb) rb.addEventListener('click', resync);
     }
+    // "+N more" chips in the clinical summary reveal the rest in place.
+    Array.prototype.forEach.call(document.querySelectorAll('#wsHeader .more-chip'), function (chip) {
+      function reveal() {
+        Array.prototype.forEach.call(chip.parentNode.querySelectorAll('.chip[hidden]'), function (c) {
+          c.hidden = false;
+        });
+        chip.parentNode.removeChild(chip);
+      }
+      chip.addEventListener('click', reveal);
+      chip.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); reveal(); }
+      });
+    });
     wireNextAction();
   }
 
@@ -880,9 +927,9 @@
     showMsg((r.json && r.json.error) || 'Failed to resync.', false);
   }
 
-  // ── Protocol timeline (AC9) ───────────────────────────────────────────────
+  // ── Protocol timeline (AC9), now drawn in the header's glance strip ───────
 
-  function renderTimeline() {
+  function journeySteps() {
     // The branch a referral actually took, not a single canonical path — the
     // review page's journey timeline makes the same distinction.
     var base = ['Received', 'Acknowledged'];
@@ -917,11 +964,8 @@
       '</div>';
     }).join('');
 
-    document.getElementById('wsTimeline').innerHTML =
-      '<h2>360X Protocol Journey</h2><div class="tl">' + steps + '</div>' +
-      '<div class="status-explain" style="max-width:none;margin-top:10px;">' +
-        'The externally authoritative lifecycle. Work status is tracked separately and ' +
-        'does not appear here.</div>';
+    return '<div class="tl" title="The externally authoritative lifecycle. Work status is tracked ' +
+      'separately and does not appear here.">' + steps + '</div>';
   }
 
   // ── Message thread (AC10) — same endpoints, unchanged ─────────────────────
@@ -939,9 +983,15 @@
 
   async function loadThread() {
     var host = document.getElementById('wsThread');
-    host.innerHTML = '<h2>Exchanged Messages <span class="thread-count" id="threadCount"></span></h2>' +
+    // Collapsed by default: this is the audit record of every exchange, not
+    // something needed on arrival. The count stays visible when closed, and a
+    // link to #wsThread opens it.
+    host.innerHTML = '<details class="fold"' + (location.hash === '#wsThread' ? ' open' : '') + '>' +
+      '<summary><h2>Exchanged Messages <span class="thread-count" id="threadCount"></span>' +
+        '<span class="fold-hint">audit record</span></h2></summary>' +
       '<div id="threadLoading" class="thread-no-content">Loading…</div>' +
-      '<div class="thread-container" id="threadContainer" style="display:none;"></div>';
+      '<div class="thread-container" id="threadContainer" style="display:none;"></div>' +
+      '</details>';
 
     var container = document.getElementById('threadContainer');
     var loading = document.getElementById('threadLoading');
@@ -1028,9 +1078,9 @@
     }
   }
 
-  // ── Routing, clinical, prior auth ─────────────────────────────────────────
+  // ── Routing and clinical summaries (header glance strip), prior auth ──────
 
-  function renderRouting() {
+  function routingSummary() {
     var equip = (ref.routingEquipment || []).length
       ? '<div class="chips">' + ref.routingEquipment.map(function (id) {
           var match = (P.resources || []).filter(function (r) { return r.id === id; })[0];
@@ -1038,44 +1088,47 @@
         }).join('') + '</div>'
       : '<span class="value empty">None assigned</span>';
 
-    document.getElementById('wsRouting').innerHTML =
-      '<h2>Routing</h2>' +
-      field('Department', ref.routingDepartment) +
+    // The appointment is folded into one line: in the banner, "when and where"
+    // reads better than three separate labelled fields.
+    var appt = [ref.appointmentDate ? fmtDate(ref.appointmentDate) : '', ref.appointmentLocation,
+      ref.scheduledProvider].filter(Boolean).join(' · ');
+
+    return field('Department', ref.routingDepartment) +
       '<div class="field"><span class="label">Equipment &amp; resources</span>' + equip + '</div>' +
-      (ref.appointmentDate ? field('Appointment', fmtDate(ref.appointmentDate)) : '') +
-      (ref.appointmentLocation ? field('Location', ref.appointmentLocation) : '') +
-      (ref.scheduledProvider ? field('Provider', ref.scheduledProvider) : '') +
+      (appt ? field('Appointment', appt) : '') +
       (P.assessment && P.assessment.suggestedDepartment
-        ? '<div class="field"><span class="label">AI suggestion</span><span class="value">' +
-          esc(P.assessment.suggestedDepartment) + '</span></div>'
+        ? field('AI suggestion', P.assessment.suggestedDepartment)
         : '');
   }
 
-  function clinicalList(arr) {
+  /** Chips, the first `limit` shown and the rest behind a "+N more" chip. */
+  function clinicalList(arr, limit) {
     if (!Array.isArray(arr) || arr.length === 0) {
       return '<span class="value empty">None recorded</span>';
     }
-    return '<div class="chips">' + arr.slice(0, 12).map(function (item) {
+    var max = limit || 4;
+    return '<div class="chips">' + arr.map(function (item, i) {
       var name = typeof item === 'string' ? item
         : (item && (item.name || item.display || item.description)) || JSON.stringify(item);
-      return '<span class="chip">' + esc(name) + '</span>';
-    }).join('') + (arr.length > 12 ? '<span class="chip">+' + (arr.length - 12) + ' more</span>' : '') +
+      return '<span class="chip"' + (i >= max ? ' hidden' : '') + '>' + esc(name) + '</span>';
+    }).join('') +
+    (arr.length > max
+      ? '<span class="chip more-chip" role="button" tabindex="0">+' + (arr.length - max) + ' more</span>'
+      : '') +
     '</div>';
   }
 
-  function renderClinical() {
+  function clinicalSummary() {
     var cd = P.clinicalData;
-    if (!cd) {
-      document.getElementById('wsClinical').innerHTML =
-        '<h2>Clinical Data</h2><span class="value empty">No structured clinical data on file.</span>';
-      return;
-    }
-    document.getElementById('wsClinical').innerHTML =
-      '<h2>Clinical Data</h2>' +
-      '<div class="field"><span class="label">Problems</span>' + clinicalList(cd.problems) + '</div>' +
+    if (!cd) return '<span class="value empty">No structured clinical data on file.</span>';
+    // Results are often empty on a referral, so they appear only when present.
+    var hasResults = Array.isArray(cd.results) && cd.results.length > 0;
+    return '<div class="field"><span class="label">Problems</span>' + clinicalList(cd.problems) + '</div>' +
       '<div class="field"><span class="label">Medications</span>' + clinicalList(cd.medications) + '</div>' +
       '<div class="field"><span class="label">Allergies</span>' + clinicalList(cd.allergies) + '</div>' +
-      '<div class="field"><span class="label">Results</span>' + clinicalList(cd.results) + '</div>';
+      (hasResults
+        ? '<div class="field"><span class="label">Results</span>' + clinicalList(cd.results) + '</div>'
+        : '');
   }
 
   function renderPriorAuth() {
@@ -1089,24 +1142,6 @@
               esc(r.state) + ' · ' + esc(fmtDay(r.createdAt) || '') + '</span></li>';
         }).join('') + '</ul>';
     document.getElementById('wsPriorAuth').innerHTML = '<h2>Prior Authorization</h2>' + body;
-  }
-
-  // ── C-CDA pane (AC11) ─────────────────────────────────────────────────────
-
-  function renderCcda() {
-    var panel = document.getElementById('wsCcdaPanel');
-    if (!ref.hasCcda) {
-      // AC11: no empty pane. The panel is removed and the grid stays one column.
-      panel.parentNode.removeChild(panel);
-      return;
-    }
-    document.getElementById('wsCols').classList.add('with-viewer');
-    // Sialia is loaded inside the frame, not here \u2014 it needs Bootstrap's CSS,
-    // which would restyle this whole page. The iframe is the CSS boundary.
-    panel.innerHTML =
-      '<h2>Referral Document (C-CDA)</h2>' +
-      '<iframe id="ccdaContainer" title="Referral C-CDA document" src="' +
-        '/referrals/' + encodeURIComponent(ref.id) + '/ccda-frame"></iframe>';
   }
 
   // ── Reserved panels (AC12, AC13) ──────────────────────────────────────────
@@ -2460,6 +2495,9 @@
 
   var activity = { entries: [], counts: {}, total: 0 };
   var actKind = '';
+  // Opened by default only when a link targets it (the walkthrough links to
+  // #wsActivity); otherwise it starts collapsed.
+  var actOpen = location.hash === '#wsActivity';
 
   var KIND_LABEL = {
     '': 'Everything',
@@ -2492,8 +2530,18 @@
         '</div>'
       : activity.entries.map(renderActivityEntry).join('');
 
+    // Collapsed by default, like the message thread: it is the audit trail.
+    // Re-rendered on every tab click and reload, so whether it is open is kept
+    // in `actOpen` rather than lost with the old markup.
     document.getElementById('wsActivity').innerHTML =
-      '<h2>Activity History</h2><div class="act-tabs">' + tabs + '</div>' + body;
+      '<details class="fold" id="actFold"' + (actOpen ? ' open' : '') + '>' +
+        '<summary><h2>Activity History <span class="thread-count">(' + esc(activity.total) + ')</span>' +
+          '<span class="fold-hint">audit record</span></h2></summary>' +
+        '<div class="act-tabs">' + tabs + '</div>' + body +
+      '</details>';
+    document.getElementById('actFold').addEventListener('toggle', function (e) {
+      actOpen = e.target.open;
+    });
 
     Array.prototype.forEach.call(document.querySelectorAll('.act-tab'), function (b) {
       b.addEventListener('click', function () {
@@ -2564,20 +2612,79 @@
   document.title = 'Workspace #' + ws.id + ' — ' +
     (P.patient.lastName || 'Referral ' + ref.id);
 
+  // ── Two balanced columns ──────────────────────────────────────────────────
+  //
+  // Card heights swing with the referral: an Acknowledged referral has a tall
+  // 360X Actions card, a closed one a long Documents list. No fixed split kept
+  // the columns even — measured across the seeded states, the best left them
+  // ~240px apart on average and ~600px at worst. So the split is chosen per
+  // page, ONCE, after the cards have loaded: of every arrangement that keeps
+  // 360X Actions top-left, the one with the most even columns. Each column
+  // keeps the order below, so a card's position stays predictable.
+  //
+  // Once only, deliberately: rebalancing when a section is opened or a comment
+  // posted would move cards out from under the cursor.
+  var CARD_ORDER = ['wsAssertions', 'wsOwner', 'wsParticipants', 'wsConversation',
+    'wsDocuments', 'wsPriorAuth', 'wsThread', 'wsActivity'];
+  var twoColumns = window.matchMedia('(min-width: 981px)');
+
+  function layoutColumns() {
+    var cols = document.getElementById('wsCols');
+    var left = document.getElementById('wsMain');
+    var right = document.getElementById('wsSide');
+    var cards = CARD_ORDER.map(function (id) { return document.getElementById(id); }).filter(Boolean);
+
+    // One column on narrow screens: everything in reading order.
+    if (!twoColumns.matches) {
+      cards.forEach(function (c) { left.appendChild(c); });
+      return;
+    }
+
+    // Columns are equal width, so a card's height is the same in either.
+    var gap = 16;
+    var heights = cards.map(function (c) { return c.getBoundingClientRect().height + gap; });
+    var best = null;
+    var bestDiff = Infinity;
+    // The two collapsed audit sections stay together, at the foot of one column,
+    // rather than one under each — split, they read as stray rows.
+    var thread = cards.indexOf(document.getElementById('wsThread'));
+    var activityIdx = cards.indexOf(document.getElementById('wsActivity'));
+    // Bit i set = card i goes right. Card 0 (360X Actions) always stays left.
+    for (var mask = 0; mask < (1 << cards.length); mask += 2) {
+      if (thread >= 0 && activityIdx >= 0 &&
+          ((mask >> thread) & 1) !== ((mask >> activityIdx) & 1)) continue;
+      var l = 0;
+      var r = 0;
+      for (var i = 0; i < cards.length; i++) {
+        if (mask & (1 << i)) r += heights[i]; else l += heights[i];
+      }
+      var diff = Math.abs(l - r);
+      if (diff < bestDiff) { bestDiff = diff; best = mask; }
+    }
+    cards.forEach(function (c, i) { ((best & (1 << i)) ? right : left).appendChild(c); });
+    cols.dataset.balanced = String(Math.round(bestDiff));
+  }
+
   renderBanners();
   renderHeader();
-  renderTimeline();
-  renderRouting();
-  renderClinical();
   renderPriorAuth();
-  renderCcda();
   renderSlots();
-  if (P.slots.owner) loadOwnerUsers();
-  if (P.slots.participants) { renderParties(); loadRoster(); reloadParties(); }
-  if (P.slots.conversation) { renderConversation(); loadConversation(); }
-  if (P.slots.documents) { renderDocuments(); void reloadDocuments(); }
-  if (P.slots.activity) { renderActivity(); void reloadActivity(); }
-  reloadAssertions();
-  loadThread();
+  var loads = [reloadAssertions(), loadThread()];
+  if (P.slots.owner) loads.push(loadOwnerUsers());
+  if (P.slots.participants) { renderParties(); loads.push(loadRoster(), reloadParties()); }
+  if (P.slots.conversation) { renderConversation(); loads.push(loadConversation()); }
+  if (P.slots.documents) { renderDocuments(); loads.push(reloadDocuments()); }
+  if (P.slots.activity) { renderActivity(); loads.push(reloadActivity()); }
+
+  // allSettled: one failed fetch must not leave the page unbalanced.
+  Promise.allSettled(loads).then(function () {
+    layoutColumns();
+    // A link to #wsActivity or #wsThread opens that section; the browser's own
+    // jump happens before the cards load and move, so scroll once they have.
+    var target = location.hash && document.getElementById(location.hash.slice(1));
+    if (target) target.scrollIntoView({ block: 'start' });
+  });
+  // Crossing the breakpoint (a resized window, a rotated tablet) re-flows once.
+  twoColumns.addEventListener('change', layoutColumns);
 })();
 </script>
