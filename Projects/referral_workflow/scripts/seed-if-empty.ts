@@ -12,7 +12,9 @@
 
 import Database from 'better-sqlite3';
 import { spawnSync } from 'child_process';
+import * as path from 'path';
 import { config } from '../src/config';
+import { PROJECT_ROOT } from '../src/paths';
 
 function referralCount(): number {
   const sqlite = new Database(config.database.url);
@@ -29,7 +31,17 @@ if (existing > 0) {
   console.log(`[SeedIfEmpty] ${existing} referrals already present — not seeding.`);
 } else {
   console.log('[SeedIfEmpty] Empty database — seeding the full demo.');
-  const result = spawnSync('npm', ['run', 'seed:full-demo'], { stdio: 'inherit', shell: true });
+  // Compiled (dist/scripts/seed-if-empty.js): run the compiled seed beside it
+  // with plain node, so a cold start never compiles TypeScript. From source
+  // under ts-node: the npm script, as before.
+  const compiled = __filename.endsWith('.js');
+  const result = compiled
+    ? spawnSync(
+        process.execPath,
+        ['-r', path.join(PROJECT_ROOT, 'scripts', 'node-polyfill.js'), path.join(__dirname, 'seed-full-demo.js')],
+        { stdio: 'inherit' },
+      )
+    : spawnSync('npm', ['run', 'seed:full-demo'], { stdio: 'inherit', shell: true });
   if (result.status !== 0) {
     console.error('[SeedIfEmpty] Seeding failed; starting anyway with what is there.');
   }

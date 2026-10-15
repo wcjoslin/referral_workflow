@@ -15,7 +15,9 @@ services:
     runtime: node
     plan: free
     rootDir: Projects/referral_workflow
-    # --include=dev: the type-check in `npm run build` needs the @types packages.
+    # --include=dev: the compile in `npm run build` needs the @types packages.
+    # `start:hosted` then runs the compiled JavaScript in dist/, so a cold start
+    # does not compile TypeScript.
     buildCommand: npm ci --include=dev && npm run build
     startCommand: npm run start:hosted
     healthCheckPath: /health
@@ -23,10 +25,6 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
-      # The free instance has 512 MB. Skipping ts-node's type-check at start
-      # keeps memory well under that; `npm run build` already type-checks.
-      - key: TS_NODE_TRANSPILE_ONLY
-        value: "true"
       - key: DATABASE_URL
         value: ./referral.db
       - key: RECEIVING_DIRECT_ADDRESS

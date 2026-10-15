@@ -28,6 +28,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from './db';
+import { FIXTURES_DIR, NODE_MODULES_DIR, VIEWS_DIR } from './paths';
 import { referrals, patients, outboundMessages, attachmentRequests, attachmentResponses, priorAuthRequests, referralMessages, referralWorkspaces, queues } from './db/schema';
 import { accept, decline, ReferralNotFoundError as DispositionNotFoundError } from './modules/prd02/dispositionService';
 import { getCachedAssessment } from './modules/prd02/referralService';
@@ -317,7 +318,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 // ── Vendor static assets (for @kno2/ccdaview on demo pages) ──────────────────
-const nodeModulesDir = path.join(__dirname, '..', 'node_modules');
+const nodeModulesDir = NODE_MODULES_DIR;
 app.use('/static/ccdaview', express.static(path.join(nodeModulesDir, '@kno2', 'ccdaview', 'dist')));
 app.use('/static/bootstrap', express.static(path.join(nodeModulesDir, 'bootstrap', 'dist')));
 app.use('/static/jquery',    express.static(path.join(nodeModulesDir, 'jquery', 'dist')));
@@ -725,7 +726,7 @@ app.get('/', async (req: Request, res: Response, next: NextFunction) => {
         };
       }),
     );
-    const templatePath = path.join(__dirname, 'views', 'dashboard.html');
+    const templatePath = path.join(VIEWS_DIR, 'dashboard.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__DASHBOARD_DATA__*/',
@@ -1145,7 +1146,7 @@ app.get('/exceptions', async (req: Request, res: Response, next: NextFunction) =
     const scope = await getVisibleQueueIds(user);
     const exceptions = await listExceptions({ queueIds: scope });
 
-    const templatePath = path.join(__dirname, 'views', 'exceptionQueue.html');
+    const templatePath = path.join(VIEWS_DIR, 'exceptionQueue.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__EXCEPTION_QUEUE__*/',
@@ -1351,7 +1352,7 @@ app.get('/queues', async (req: Request, res: Response, next: NextFunction) => {
     if (!user) return;
 
     const queues = await listQueues(user);
-    const templatePath = path.join(__dirname, 'views', 'queueList.html');
+    const templatePath = path.join(VIEWS_DIR, 'queueList.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__QUEUE_LIST__*/',
@@ -1392,7 +1393,7 @@ app.get('/queues/:slug', async (req: Request, res: Response, next: NextFunction)
       throw err;
     }
 
-    const templatePath = path.join(__dirname, 'views', 'queueView.html');
+    const templatePath = path.join(VIEWS_DIR, 'queueView.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__QUEUE_VIEW__*/',
@@ -1643,7 +1644,7 @@ app.get('/workspaces', async (req: Request, res: Response, next: NextFunction) =
     const ownerFilterUnavailable = ownerParam === 'me' && !actor;
 
     const rows = await listWorkspaceRows(owner);
-    const templatePath = path.join(__dirname, 'views', 'workspaceIndex.html');
+    const templatePath = path.join(VIEWS_DIR, 'workspaceIndex.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__WORKSPACE_ROWS__*/',
@@ -1681,7 +1682,7 @@ app.get('/workspaces/:id', async (req: Request, res: Response, next: NextFunctio
       return;
     }
 
-    const templatePath = path.join(__dirname, 'views', 'workspaceDetail.html');
+    const templatePath = path.join(VIEWS_DIR, 'workspaceDetail.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__WORKSPACE_DATA__*/',
@@ -2768,7 +2769,7 @@ app.get('/documents/:id/ccda-frame', async (req: Request, res: Response, next: N
       return;
     }
 
-    const templatePath = path.join(__dirname, 'views', 'ccdaFrame.html');
+    const templatePath = path.join(VIEWS_DIR, 'ccdaFrame.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     res.setHeader('Content-Type', 'text/html');
     res.send(
@@ -2936,7 +2937,7 @@ app.get('/guest/documents/:id/ccda-frame', async (req: Request, res: Response) =
       return;
     }
 
-    const templatePath = path.join(__dirname, 'views', 'ccdaFrame.html');
+    const templatePath = path.join(VIEWS_DIR, 'ccdaFrame.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     res.setHeader('Content-Type', 'text/html');
     res.send(
@@ -3198,7 +3199,7 @@ app.get('/guest/workspace', async (req: Request, res: Response) => {
       res.send(guestNoticePage('Referral unavailable', 'This referral is no longer available.'));
       return;
     }
-    const templatePath = path.join(__dirname, 'views', 'guestWorkspace.html');
+    const templatePath = path.join(VIEWS_DIR, 'guestWorkspace.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     // No injectNav(): the internal nav links to surfaces a guest cannot reach.
     res.setHeader('Content-Type', 'text/html');
@@ -3381,7 +3382,7 @@ app.get('/referrals/:id/ccda-frame', async (req: Request, res: Response, next: N
       return;
     }
 
-    const templatePath = path.join(__dirname, 'views', 'ccdaFrame.html');
+    const templatePath = path.join(VIEWS_DIR, 'ccdaFrame.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     // No injectNav() — this renders inside an iframe, not as a page.
     res.setHeader('Content-Type', 'text/html');
@@ -3479,7 +3480,7 @@ app.post('/api/acting-user', async (req: Request, res: Response, next: NextFunct
 // Workflow Overview page
 app.get('/overview', (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const templatePath = path.join(__dirname, 'views', 'workflowOverview.html');
+    const templatePath = path.join(VIEWS_DIR, 'workflowOverview.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(template));
@@ -3541,7 +3542,7 @@ app.get('/referrals/:id/review', async (req: Request, res: Response, next: NextF
       .where(eq(priorAuthRequests.referralId, referralId))
       .orderBy(desc(priorAuthRequests.createdAt));
 
-    const templatePath = path.join(__dirname, 'views', 'referralReview.html');
+    const templatePath = path.join(VIEWS_DIR, 'referralReview.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
 
     const pageData = {
@@ -3881,7 +3882,7 @@ app.get('/scheduler/queue', async (_req: Request, res: Response, next: NextFunct
       }),
     );
 
-    const templatePath = path.join(__dirname, 'views', 'schedulerQueue.html');
+    const templatePath = path.join(VIEWS_DIR, 'schedulerQueue.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__QUEUE_DATA__*/',
@@ -3912,7 +3913,7 @@ app.get('/referrals/:id/schedule', async (req: Request, res: Response, next: Nex
 
     const [patient] = await db.select().from(patients).where(eq(patients.id, referral.patientId));
 
-    const templatePath = path.join(__dirname, 'views', 'scheduleAppointment.html');
+    const templatePath = path.join(VIEWS_DIR, 'scheduleAppointment.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__SCHEDULE_DATA__*/',
@@ -3996,7 +3997,7 @@ app.get('/referrals/:id/encounter', async (req: Request, res: Response, next: Ne
 
     const [patient] = await db.select().from(patients).where(eq(patients.id, referral.patientId));
 
-    const templatePath = path.join(__dirname, 'views', 'encounterAction.html');
+    const templatePath = path.join(VIEWS_DIR, 'encounterAction.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__ENCOUNTER_DATA__*/',
@@ -4141,7 +4142,7 @@ app.get('/referrals/:id/consult-note', async (req: Request, res: Response, next:
 
     const [patient] = await db.select().from(patients).where(eq(patients.id, referral.patientId));
 
-    const templatePath = path.join(__dirname, 'views', 'consultNoteAction.html');
+    const templatePath = path.join(VIEWS_DIR, 'consultNoteAction.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__CONSULT_DATA__*/',
@@ -4285,7 +4286,7 @@ app.get('/messages', async (_req: Request, res: Response, next: NextFunction) =>
   try {
     const messages = await db.select().from(outboundMessages);
 
-    const templatePath = path.join(__dirname, 'views', 'messageHistory.html');
+    const templatePath = path.join(VIEWS_DIR, 'messageHistory.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__HISTORY_DATA__*/',
@@ -4320,7 +4321,7 @@ app.get('/rules/admin', async (_req: Request, res: Response, next: NextFunction)
       }),
     );
 
-    const templatePath = path.join(__dirname, 'views', 'rulesAdmin.html');
+    const templatePath = path.join(VIEWS_DIR, 'rulesAdmin.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__RULES_DATA__*/',
@@ -4336,7 +4337,7 @@ app.get('/rules/admin', async (_req: Request, res: Response, next: NextFunction)
 // Rule creation form
 app.get('/rules/create', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const templatePath = path.join(__dirname, 'views', 'ruleCreate.html');
+    const templatePath = path.join(VIEWS_DIR, 'ruleCreate.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(template));
@@ -4414,7 +4415,7 @@ app.get('/rules/:name', async (req: Request, res: Response, next: NextFunction) 
     const assets = loadSkillAssets(skill);
     const references = loadSkillReferences(skill);
 
-    const templatePath = path.join(__dirname, 'views', 'ruleEdit.html');
+    const templatePath = path.join(VIEWS_DIR, 'ruleEdit.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__EDIT_DATA__*/',
@@ -4550,7 +4551,7 @@ app.get('/rules/:name/history', async (req: Request, res: Response, next: NextFu
       .where(eq(skillExecutions.skillName, nameParam))
       .orderBy(desc(skillExecutions.executedAt));
 
-    const templatePath = path.join(__dirname, 'views', 'ruleHistory.html');
+    const templatePath = path.join(VIEWS_DIR, 'ruleHistory.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__HISTORY_DATA__*/',
@@ -4675,7 +4676,7 @@ app.post('/referrals/:id/override', async (req: Request, res: Response, next: Ne
 
 app.get('/demo', (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const templatePath = path.join(__dirname, 'views', 'demoLauncher.html');
+    const templatePath = path.join(VIEWS_DIR, 'demoLauncher.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(template));
@@ -4716,7 +4717,7 @@ app.get('/demo/fixture/:scenario', (req: Request, res: Response) => {
   const VALID_SCENARIOS = ['full-workflow', 'incomplete-info', 'fhir-enriched', 'payer-rejection', 'no-show', 'consult', 'prior-auth'];
   const scenario = Array.isArray(req.params.scenario) ? req.params.scenario[0] : req.params.scenario;
   if (!VALID_SCENARIOS.includes(scenario)) { res.status(404).end(); return; }
-  const fixturePath = path.join(__dirname, '..', 'tests', 'fixtures', `demo-${scenario}.xml`);
+  const fixturePath = path.join(FIXTURES_DIR, `demo-${scenario}.xml`);
   try {
     const xml = fs.readFileSync(fixturePath, 'utf-8');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -4774,7 +4775,7 @@ app.get('/claims', async (_req: Request, res: Response, next: NextFunction) => {
         };
       }),
     );
-    const templatePath = path.join(__dirname, 'views', 'claimsQueue.html');
+    const templatePath = path.join(VIEWS_DIR, 'claimsQueue.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__CLAIMS_DATA__*/',
@@ -4807,7 +4808,7 @@ app.get('/claims/:id', async (req: Request, res: Response, next: NextFunction) =
       .from(attachmentResponses)
       .where(eq(attachmentResponses.requestId, requestId));
 
-    const templatePath = path.join(__dirname, 'views', 'claimsRequestDetail.html');
+    const templatePath = path.join(VIEWS_DIR, 'claimsRequestDetail.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__CLAIMS_DETAIL__*/',
@@ -4876,7 +4877,7 @@ app.get('/prior-auth', async (_req: Request, res: Response, next: NextFunction) 
         return { ...item, latestAuthNumber: latestResp?.authNumber ?? undefined };
       }),
     );
-    const templatePath = path.join(__dirname, 'views', 'priorAuthQueue.html');
+    const templatePath = path.join(VIEWS_DIR, 'priorAuthQueue.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__PA_QUEUE_DATA__*/',
@@ -4902,7 +4903,7 @@ app.get('/prior-auth/new', async (req: Request, res: Response, next: NextFunctio
       }
     }
 
-    const templatePath = path.join(__dirname, 'views', 'priorAuthForm.html');
+    const templatePath = path.join(VIEWS_DIR, 'priorAuthForm.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__PA_FORM_DATA__*/',
@@ -4980,7 +4981,7 @@ app.get('/prior-auth/:id', async (req: Request, res: Response, next: NextFunctio
 
     const detail = await getPriorAuthDetail(requestId);
 
-    const templatePath = path.join(__dirname, 'views', 'priorAuthDetail.html');
+    const templatePath = path.join(VIEWS_DIR, 'priorAuthDetail.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     const html = template.replace(
       '/*__PA_DETAIL_DATA__*/',
@@ -5038,7 +5039,7 @@ app.post('/prior-auth/webhook', async (req: Request, res: Response, next: NextFu
 
 // ── Demo Walkthrough helpers ─────────────────────────────────────────────────
 // Load sample C-CDA fixture once at startup for walkthrough Path A
-const WALKTHROUGH_CCDA_PATH = path.resolve(__dirname, '..', 'tests', 'fixtures', 'demo-full-workflow.xml');
+const WALKTHROUGH_CCDA_PATH = path.join(FIXTURES_DIR, 'demo-full-workflow.xml');
 const WALKTHROUGH_CCDA_XML: string | null = (() => {
   try { return fs.readFileSync(WALKTHROUGH_CCDA_PATH, 'utf-8'); } catch { return null; }
 })();
@@ -5107,7 +5108,7 @@ async function walkthroughUpsertReferral(
 
 app.get('/walkthrough', (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const templatePath = path.join(__dirname, 'views', 'demoWalkthrough.html');
+    const templatePath = path.join(VIEWS_DIR, 'demoWalkthrough.html');
     const template = fs.readFileSync(templatePath, 'utf-8');
     res.setHeader('Content-Type', 'text/html');
     res.send(injectNav(template));
@@ -5373,7 +5374,7 @@ app.get('/analytics', (_req: Request, res: Response, next: NextFunction) => {
     const eventCount = getEventCount();
     const filterOptions = getFilterOptions();
 
-    const template = fs.readFileSync(path.join(__dirname, 'views', 'analytics.html'), 'utf-8');
+    const template = fs.readFileSync(path.join(VIEWS_DIR, 'analytics.html'), 'utf-8');
     const html = template.replace(
       '/*__ANALYTICS_DATA__*/',
       `window.__ANALYTICS_DATA__ = ${embedJson({

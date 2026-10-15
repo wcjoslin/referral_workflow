@@ -22,6 +22,7 @@ import { processInboundMessage } from '../src/modules/prd01/messageProcessor';
 import { ingestReferral } from '../src/modules/prd02/referralService';
 import { emitEvent } from '../src/modules/analytics/eventService';
 import { db } from '../src/db';
+import { FIXTURES_DIR } from '../src/paths';
 import {
   outboundMessages,
   patients,
@@ -48,7 +49,7 @@ import { proposeForReferral } from '../src/modules/workspace/workspaceService';
 import { applyPatientIdentity, identityForIndex, type DemoPatientIdentity } from './demo-patients';
 import { seedCollaboration } from './demo-collaboration';
 
-const FIXTURES_DIR = path.resolve(__dirname, '../tests/fixtures');
+
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

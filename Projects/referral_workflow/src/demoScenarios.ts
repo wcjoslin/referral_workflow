@@ -23,10 +23,11 @@ import { sendInfoRequest } from './modules/prd09/infoRequestService';
 import { evaluateSkills } from './modules/prd09/skillEvaluator';
 import { executeSkillAction } from './modules/prd09/skillActions';
 import { db } from './db';
+import { FIXTURES_DIR } from './paths';
 import { referrals } from './db/schema';
 import { ReferralState } from './state/referralStateMachine';
 
-const FIXTURES_DIR = path.resolve(__dirname, '../tests/fixtures');
+
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 

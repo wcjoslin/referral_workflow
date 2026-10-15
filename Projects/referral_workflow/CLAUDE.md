@@ -294,9 +294,15 @@ The app is a long-running Express server with SQLite on disk, an IMAP poller and
 a host that runs a process. **It does not work on Vercel** (serverless: no persistent process or
 filesystem).
 
-Every host starts it with `npm run start:hosted`: migrate, seed the full demo **only if the database
-has no referrals** (`scripts/seed-if-empty.ts`), then start the server. Seeding happens at start, not
-build, because a persistent volume is never mounted during a build.
+Every host builds with `npm run build` and starts with `npm run start:hosted`: migrate, seed the full
+demo **only if the database has no referrals** (`scripts/seed-if-empty.ts`), then start the server.
+Seeding happens at start, not build, because a persistent volume is never mounted during a build.
+
+`start:hosted` runs the **compiled** JavaScript, so it needs `npm run build` first. The build
+(`tsconfig.build.json`) compiles `src/` plus the demo-seed scripts into `dist/src/` and `dist/scripts/`.
+Views and test fixtures are not compiled: `src/paths.ts` resolves them, and `node_modules`, from the
+project root, so the same code works from `src/` under ts-node and from `dist/`. Use it for any new
+file path rather than `path.join(__dirname, '..')`, which means different directories in the two.
 
 For a demo-only deploy, the IMAP/SMTP variables can be placeholders such as `imap.invalid`, with
 `OUTBOUND_MAIL=off`: the UI works fully, workspace actions are recorded as "not sent — mail off" rather
@@ -305,9 +311,10 @@ than as failed deliveries, and the inbox poller and MDN sender only log connecti
 **Render (free, the current deploy):** `render.yaml` at the repository root is a Blueprint that
 sets everything, including the placeholders. The free plan has no persistent disk and sleeps after
 15 idle minutes, so the database is wiped on every sleep, restart and deploy and re-seeded on the next
-start — a self-resetting demo. A cold start is the platform wake-up plus about a minute to migrate
-and seed. `TS_NODE_TRANSPILE_ONLY=true` keeps memory inside the 512 MB instance (measured locally:
-~280 MB peak while seeding, ~340 MB serving). Guest links use Render's `RENDER_EXTERNAL_URL`.
+start — a self-resetting demo. A cold start is the platform wake-up, plus about 50 seconds of seeding
+(real work, not compilation), plus a few seconds for the server. Running compiled code keeps memory
+well inside the 512 MB instance (measured locally: ~180 MB peak while seeding, ~165 MB serving, against
+~414 MB under ts-node). Guest links use Render's `RENDER_EXTERNAL_URL`.
 
 **Railway (paid):** root directory `Projects/referral_workflow`, a volume at `/data`,
 `DATABASE_URL=/data/referral.db`, and `PUBLIC_BASE_URL=https://${{RAILWAY_PUBLIC_DOMAIN}}`.
