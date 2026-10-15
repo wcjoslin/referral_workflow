@@ -19,6 +19,7 @@
   dashboard's /api/referrals/:id/preview.
 -->
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Queue</title>
 <style>
   :root {
@@ -187,8 +188,12 @@
 
   var WORK_STATUSES = ['Triage','In-Progress','Waiting-External','Waiting-Internal',
                        'Follow-up-Required','Exception','Resolved'];
-  var REFERRAL_STATES = ['Received','Acknowledged','Pending-Information','Declined','Scheduled',
-                         'No-Show','Encounter-Complete','Consult-Requested','Closed','Closed-Confirmed'];
+  // Must match ReferralState in src/state/referralStateMachine.ts exactly: the
+  // server filters on the literal value, so a name that is not a real state
+  // matches nothing and the filter is silently dropped. 'Encounter-Complete' and
+  // 'Consult-Requested' were listed here and never existed.
+  var REFERRAL_STATES = ['Received','Acknowledged','Pending-Information','Accepted','Declined',
+                         'Scheduled','No-Show','Encounter','Consult','Closed','Closed-Confirmed'];
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {

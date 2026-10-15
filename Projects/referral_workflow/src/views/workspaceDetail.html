@@ -11,6 +11,7 @@
   reserved slot without touching the rest of the page.
 -->
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Workspace</title>
 <style>
   :root {
@@ -1259,18 +1260,23 @@
     var history = assertions.length === 0 ? '' :
       '<div class="subhead">Artifacts sent from here</div>' +
       '<ul class="hist">' + assertions.map(function (a) {
+        // Recorded with an address to go to, but not sent: this deployment has
+        // outbound mail turned off. Retrying cannot help, so no "Send now".
+        var mailOff = a.deliveryMode === 'local-only' && !!a.sentToAddress;
         var cls = a.deliveryStatus === 'Failed' ? 'del-failed'
           : (a.deliveryMode === 'local-only' ? 'del-local' : 'del-transmitted');
-        var label = a.deliveryMode === 'local-only' ? 'recorded, not sent' : a.deliveryStatus.toLowerCase();
+        var label = mailOff ? 'not sent — mail off'
+          : (a.deliveryMode === 'local-only' ? 'recorded, not sent' : a.deliveryStatus.toLowerCase());
         return '<li>' +
           '<span style="font-weight:600;">' + esc(a.assertionType) + '</span>' +
-          '<span class="tag ' + cls + '">' + esc(label) + '</span>' +
+          '<span class="tag ' + cls + '"' + (a.deliveryError ? ' title="' + esc(a.deliveryError) + '"' : '') + '>' +
+            esc(label) + '</span>' +
           (a.toState ? '<span class="p-meta">' + esc(a.fromState) + ' \u2192 ' + esc(a.toState) + '</span>' : '') +
           '<span class="p-spacer"></span>' +
           '<span class="p-meta">' + esc(new Date(a.createdAt).toLocaleString()) + '</span>' +
           // AC11: transmitting a previously local-only artifact is an explicit
           // action, so it needs an explicit button.
-          (!readOnly && (a.deliveryMode === 'local-only' || a.deliveryStatus === 'Failed')
+          (!readOnly && !mailOff && (a.deliveryMode === 'local-only' || a.deliveryStatus === 'Failed')
             ? '<button class="btn" data-transmit="' + esc(a.assertionId) + '">Send now</button>' : '') +
         '</li>';
       }).join('') + '</ul>';
@@ -1341,9 +1347,11 @@
       var json = await res.json();
       if (!res.ok) { asrtMsg(json.error || 'Could not send that.', false); return; }
       await reloadAssertions();
-      asrtMsg(json.deliveryMode === 'local-only'
-        ? 'Recorded. The other organization has no Direct address on file, so nothing was transmitted.'
-        : 'Sent as a conformant 360X artifact.', true);
+      asrtMsg(json.deliveryMode !== 'local-only'
+        ? 'Sent as a conformant 360X artifact.'
+        : (json.sentToAddress
+          ? 'Recorded. Outbound mail is turned off on this deployment, so nothing was sent.'
+          : 'Recorded. The other organization has no Direct address on file, so nothing was transmitted.'), true);
     } catch (err) {
       asrtMsg('Could not send that: ' + err.message, false);
     }

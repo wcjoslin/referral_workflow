@@ -55,6 +55,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../../src/db';
 import { config } from '../../../src/config';
 import {
+  outboundMessages,
   partyAddresses,
   patients,
   referralMessages,
@@ -115,6 +116,7 @@ beforeEach(async () => {
   await db.delete(workspaceAssertions);
   await db.delete(partyAddresses);
   await db.delete(workspaceParties);
+  await db.delete(outboundMessages);
   await db.delete(referralMessages);
   await db.delete(workflowEvents);
   await db.delete(referralWorkspaces);
@@ -716,6 +718,113 @@ describe('a counterparty with no Direct address', () => {
 });
 
 // ── Idempotency ───────────────────────────────────────────────────────────────
+
+// ── outbound mail off, and ACK tracking ───────────────────────────────────────
+
+describe('with outbound mail turned off', () => {
+  const smtp = config.smtp as typeof config.smtp & { outboundDisabled?: boolean };
+  beforeEach(() => {
+    smtp.outboundDisabled = true;
+  });
+  afterEach(() => {
+    smtp.outboundDisabled = false;
+  });
+
+  it('records the artifact as not sent, keeping the address it would have gone to', async () => {
+    const f = await makeWorkspace(ReferralState.ACKNOWLEDGED);
+
+    const result = await submitAssertion({
+      workspaceId: f.workspaceId,
+      assertionKey: key(),
+      assertionType: 'accept',
+      partyId: f.receivingPartyId,
+      actor: `user:${userId}`,
+    });
+    await flush();
+
+    expect(result.deliveryMode).toBe('local-only');
+    expect(result.deliveryStatus).toBe('Not-Transmitted');
+    expect(result.sentToAddress).toBe('referrals@lakeside.direct');
+    expect(sendMailMock).not.toHaveBeenCalled();
+    // The protocol still moved and the artifact is still on record.
+    expect(await stateOf(f.referralId)).toBe(ReferralState.ACCEPTED);
+    expect(await db.select().from(referralMessages)).toHaveLength(1);
+
+    const [assertion] = await db.select().from(workspaceAssertions);
+    expect(assertion.deliveryError).toBe('Outbound mail is turned off on this deployment');
+    // Nothing went out, so nothing is waiting on an ACK.
+    expect(await db.select().from(outboundMessages)).toHaveLength(0);
+  });
+
+  it('makes "send now" a no-op rather than a failed attempt', async () => {
+    const f = await makeWorkspace(ReferralState.ACKNOWLEDGED);
+    const submitted = await submitAssertion({
+      workspaceId: f.workspaceId,
+      assertionKey: key(),
+      assertionType: 'accept',
+      partyId: f.receivingPartyId,
+      actor: `user:${userId}`,
+    });
+
+    const result = await transmitPending(submitted.assertionId, `user:${userId}`);
+    expect(result.deliveryStatus).toBe('Not-Transmitted');
+    expect(sendMailMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('ACK tracking for artifacts sent from the workspace', () => {
+  it('tracks a delivered RRI so the Messages page and the ACK matcher can see it', async () => {
+    const f = await makeWorkspace(ReferralState.ACKNOWLEDGED);
+
+    await submitAssertion({
+      workspaceId: f.workspaceId,
+      assertionKey: key(),
+      assertionType: 'accept',
+      partyId: f.receivingPartyId,
+      actor: `user:${userId}`,
+    });
+    await flush();
+
+    const [msg] = await db.select().from(referralMessages);
+    const tracked = await db.select().from(outboundMessages);
+    expect(tracked).toHaveLength(1);
+    expect(tracked[0].messageType).toBe('RRI');
+    expect(tracked[0].messageControlId).toBe(msg.messageControlId);
+    expect(tracked[0].status).toBe('Pending');
+  });
+
+  it('does not track a delivery that failed', async () => {
+    sendMailMock.mockResolvedValue(false);
+    const f = await makeWorkspace(ReferralState.ACKNOWLEDGED);
+
+    await submitAssertion({
+      workspaceId: f.workspaceId,
+      assertionKey: key(),
+      assertionType: 'accept',
+      partyId: f.receivingPartyId,
+      actor: `user:${userId}`,
+    });
+    await flush();
+
+    expect(await db.select().from(outboundMessages)).toHaveLength(0);
+  });
+
+  it('does not track a plain update, which the referrer does not ACK', async () => {
+    const f = await makeWorkspace(ReferralState.ACCEPTED);
+
+    await submitAssertion({
+      workspaceId: f.workspaceId,
+      assertionKey: key(),
+      assertionType: 'interim-update',
+      partyId: f.receivingPartyId,
+      actor: `user:${userId}`,
+      context: { note: 'Awaiting the echo report' },
+    });
+    await flush();
+
+    expect(await db.select().from(outboundMessages)).toHaveLength(0);
+  });
+});
 
 describe('idempotency', () => {
   it('emits ONE artifact for a replayed assertion key', async () => {
