@@ -5,7 +5,8 @@
 # a demo: `start:hosted` migrates and re-seeds the full demo whenever the
 # database is empty, so every wake-up starts from the same 106 referrals.
 #
-# Mail settings are placeholders: nothing is sent or received, and the inbox
+# Mail settings are placeholders and OUTBOUND_MAIL=off: nothing is sent or
+# received, workspace actions show as "not sent — mail off", and the inbox
 # poller only logs connection errors.
 
 services:
@@ -46,3 +47,7 @@ services:
         value: demo
       - key: SMTP_PASSWORD
         value: demo
+      # Record workspace actions as not sent instead of failing against the
+      # placeholder SMTP host above.
+      - key: OUTBOUND_MAIL
+        value: "off"

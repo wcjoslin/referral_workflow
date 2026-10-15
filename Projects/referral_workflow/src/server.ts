@@ -346,8 +346,16 @@ const NAV_HTML = `<style>
   --color-badge-declined-text: #58151c;
   --color-priority: #dc3545;
 }
+/* Narrow screens: the nav wraps onto extra rows instead of running off the
+   right edge, and stops being sticky so three rows of it do not cover the page. */
+.app-nav { flex-wrap: wrap; row-gap: 8px; }
+.app-nav a { white-space: nowrap; }
+@media (max-width: 700px) {
+  .app-nav { position: static !important; padding: 10px 16px !important; gap: 8px 14px !important; }
+  #notifPanel { width: min(380px, 90vw) !important; }
+}
 </style>
-<nav style="background:var(--color-nav-bg);padding:12px 24px;display:flex;gap:24px;align-items:center;position:sticky;top:0;z-index:100;box-shadow:0 2px 4px rgba(0,0,0,0.4);">
+<nav class="app-nav" style="background:var(--color-nav-bg);padding:12px 24px;display:flex;gap:24px;align-items:center;position:sticky;top:0;z-index:100;box-shadow:0 2px 4px rgba(0,0,0,0.4);">
   <span style="color:#fff;font-weight:700;font-size:0.95rem;letter-spacing:0.02em;">360X Referral</span>
   <a href="/" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;margin-left:8px;">Home</a>
   <a href="/queues" style="color:#adb5bd;text-decoration:none;font-size:0.88rem;">Queues</a>

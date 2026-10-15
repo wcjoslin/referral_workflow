@@ -16,12 +16,25 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { eq, sql } from 'drizzle-orm';
 import { processInboundMessage } from '../src/modules/prd01/messageProcessor';
 import { ingestReferral } from '../src/modules/prd02/referralService';
 import { emitEvent } from '../src/modules/analytics/eventService';
 import { db } from '../src/db';
-import { referralWorkspaces, referrals, priorAuthRequests, priorAuthResponses } from '../src/db/schema';
+import {
+  outboundMessages,
+  patients,
+  priorAuthRequests,
+  priorAuthResponses,
+  referralWorkspaces,
+  referrals,
+} from '../src/db/schema';
+import { config } from '../src/config';
+import { recordThreadMessage } from '../src/modules/messaging/threadService';
+import { buildRri } from '../src/modules/prd02/rriBuilder';
+import { buildSiu } from '../src/modules/prd03/siuBuilder';
+import { buildConsultNoteCcda } from '../src/modules/prd04/ccdaBuilder';
 import { ReferralState } from '../src/state/referralStateMachine';
 import { PriorAuthState } from '../src/state/priorAuthStateMachine';
 import { PROVIDER_NAMES, seedUsers } from '../src/modules/workspace/userRoster';
@@ -320,6 +333,118 @@ async function setDepartment(referralId: number, dept: string): Promise<void> {
     .where(eq(referrals.id, referralId));
 }
 
+type OutboundType = 'RRI' | 'SIU' | 'ConsultNote';
+
+/**
+ * Records the outbound message a real transition would have sent, in BOTH
+ * places the app reads: `outbound_messages` (the Messages page and PRD-07 ACK
+ * tracking) and the referral thread (the workspace and review pages).
+ *
+ * The transitions here move `referrals.state` directly to avoid SMTP and
+ * Gemini, which used to leave every seeded referral with no outbound history:
+ * an empty Messages page, and threads holding only the inbound referral.
+ * Nothing is sent from here.
+ *
+ * `acknowledged` is whether the referrer would have ACKed by the referral's
+ * resting state. A Scheduled referral's appointment notice stays Pending, so
+ * the older ones surface as overdue on the Messages page.
+ *
+ * No InfoRequest is seeded for Pending-Information referrals on purpose:
+ * `pendingInfoChecker` auto-declines a referral whose backdated InfoRequest is
+ * past its timeout, which would quietly rewrite the demo an hour after start.
+ */
+async function seedOutbound(
+  referralId: number,
+  type: OutboundType,
+  opts: { acknowledged: boolean; transition: string; declineReason?: string; dept?: string },
+): Promise<void> {
+  const [row] = await db
+    .select({ referral: referrals, patient: patients })
+    .from(referrals)
+    .innerJoin(patients, eq(patients.id, referrals.patientId))
+    .where(eq(referrals.id, referralId))
+    .limit(1);
+  if (!row) return;
+  const { referral, patient } = row;
+
+  const messageControlId = randomUUID();
+  const sender = config.receiving.directAddress;
+  const to = referral.referrerAddress;
+
+  let summary: string;
+  const content: { contentHl7?: string; contentXml?: string } = {};
+  if (type === 'RRI') {
+    summary = opts.declineReason ? `Referral declined: ${opts.declineReason}` : 'Referral accepted';
+    content.contentHl7 = buildRri({
+      messageControlId,
+      sourceMessageId: referral.sourceMessageId,
+      referrerAddress: to,
+      sendingFacility: sender,
+      acceptCode: opts.declineReason ? 'AR' : 'AA',
+      ...(opts.declineReason ? { declineReason: opts.declineReason } : {}),
+    });
+  } else if (type === 'SIU') {
+    const when = referral.appointmentDate ?? '';
+    summary = `Appointment confirmed for ${when.slice(0, 10)} at ${referral.appointmentLocation ?? ''}`;
+    content.contentHl7 = buildSiu({
+      messageControlId,
+      appointmentId: String(referralId),
+      startDatetime: when.replace(/[-T:]/g, '').slice(0, 14),
+      durationMinutes: 60,
+      appointmentType: `${opts.dept ?? referral.routingDepartment ?? 'Specialty'} Consult`,
+      locationName: referral.appointmentLocation ?? '',
+      scheduledProvider: referral.scheduledProvider ?? '',
+      patientId: String(patient.id),
+      patientFirstName: patient.firstName,
+      patientLastName: patient.lastName,
+      patientDob: (patient.dateOfBirth ?? '').replace(/-/g, ''),
+      referrerAddress: to,
+      sendingFacility: sender,
+    });
+  } else {
+    summary = 'Consult note returned to the referring provider';
+    content.contentXml = buildConsultNoteCcda({
+      patient: {
+        firstName: patient.firstName,
+        lastName: patient.lastName,
+        dateOfBirth: patient.dateOfBirth ?? '',
+      },
+      referral: { reasonForReferral: referral.reasonForReferral ?? '', referrerAddress: to },
+      sections: {
+        chiefComplaint: referral.reasonForReferral ?? '',
+        historyOfPresentIllness: '',
+        physicalExam: '',
+        assessment: CONSULT_NOTES[opts.dept ?? ''] ?? 'Consultation complete.',
+        plan: 'Follow up with the referring provider.',
+      },
+      documentId: messageControlId,
+      effectiveTime: new Date(),
+    });
+  }
+
+  const now = new Date();
+  await db.insert(outboundMessages).values({
+    referralId,
+    messageControlId,
+    messageType: type,
+    status: opts.acknowledged ? 'Acknowledged' : 'Pending',
+    sentAt: now,
+    acknowledgedAt: opts.acknowledged ? now : null,
+  });
+  await recordThreadMessage({
+    referralId,
+    direction: 'outbound',
+    messageType: type,
+    summary,
+    senderAddress: sender,
+    recipientAddress: to,
+    ...content,
+    messageControlId,
+    ackStatus: opts.acknowledged ? 'Acknowledged' : 'Pending',
+    relatedStateTransition: opts.transition,
+  });
+}
+
 async function acceptReferral(referralId: number, clinicianId: string): Promise<void> {
   await db
     .update(referrals)
@@ -334,6 +459,7 @@ async function acceptReferral(referralId: number, clinicianId: string): Promise<
     actor: `clinician:${clinicianId}`,
     metadata: { clinicianId },
   });
+  await seedOutbound(referralId, 'RRI', { acknowledged: true, transition: 'Acknowledged->Accepted' });
 }
 
 async function declineReferral(referralId: number, clinicianId: string, reason: string): Promise<void> {
@@ -350,6 +476,11 @@ async function declineReferral(referralId: number, clinicianId: string, reason: 
     actor: `clinician:${clinicianId}`,
     metadata: { clinicianId, declineReason: reason },
   });
+  await seedOutbound(referralId, 'RRI', {
+    acknowledged: true,
+    transition: 'Acknowledged->Declined',
+    declineReason: reason,
+  });
 }
 
 async function scheduleReferral(
@@ -357,6 +488,7 @@ async function scheduleReferral(
   clinicianId: string,
   dept: string,
   apptDaysFromNow: number,
+  acknowledged = true,
 ): Promise<void> {
   const apptDate =
     new Date(Date.now() + apptDaysFromNow * 86_400_000).toISOString().slice(0, 10) + 'T09:00:00';
@@ -382,6 +514,7 @@ async function scheduleReferral(
     actor: 'system',
     metadata: { appointmentDate: apptDate, locationName: location, scheduledProvider: providerName },
   });
+  await seedOutbound(referralId, 'SIU', { acknowledged, transition: 'Accepted->Scheduled', dept });
 }
 
 async function encounterReferral(referralId: number): Promise<void> {
@@ -415,6 +548,7 @@ async function closeReferral(referralId: number, dept: string): Promise<void> {
     actor: 'system',
     metadata: { consultNote: CONSULT_NOTES[dept] ?? 'Consultation complete.' },
   });
+  await seedOutbound(referralId, 'ConsultNote', { acknowledged: true, transition: 'Encounter->Closed', dept });
 
   // Closed → Closed-Confirmed
   await db
@@ -578,6 +712,20 @@ async function spreadTimestamps(referralId: number, targetDate: Date): Promise<v
     )
   `);
 
+  // The thread and the outbound tracking rows share it too, so a referral
+  // received in July does not show a message thread dated today.
+  await db.run(sql`
+    UPDATE referral_messages
+    SET created_at = created_at - ${deltaSeconds}
+    WHERE referral_id = ${referralId}
+  `);
+  await db.run(sql`
+    UPDATE outbound_messages
+    SET sent_at = sent_at - ${deltaSeconds},
+        acknowledged_at = CASE WHEN acknowledged_at IS NULL THEN NULL ELSE acknowledged_at - ${deltaSeconds} END
+    WHERE referral_id = ${referralId}
+  `);
+
   // The workspace shares the referral's timeline.
   //
   // WHY THIS MATTERS BEYOND TIDINESS. `recomputeNextAction()` derives the due
@@ -694,7 +842,8 @@ async function runScenario(scenario: Scenario): Promise<number> {
     }
     case 'Scheduled': {
       await acceptReferral(referralId, scenario.clinicianId);
-      await scheduleReferral(referralId, scenario.clinicianId, scenario.dept, 7); // future appointment
+      // Awaiting the referrer's ACK, so older ones show as overdue on /messages.
+      await scheduleReferral(referralId, scenario.clinicianId, scenario.dept, 7, false); // future appointment
       if (scenario.pa) {
         await insertPriorAuth(referralId, patientId, scenario.dept, scenario.pa);
       }

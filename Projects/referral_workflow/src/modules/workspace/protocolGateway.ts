@@ -42,6 +42,7 @@ import { randomUUID } from 'crypto';
 import { and, asc, eq } from 'drizzle-orm';
 import { db } from '../../db';
 import {
+  outboundMessages,
   patients,
   referralMessages,
   referralWorkspaces,
@@ -487,8 +488,18 @@ export async function submitAssertion(req: AssertionRequest): Promise<AssertionR
     req.context ?? {},
   );
 
-  const deliveryMode: DeliveryMode = recipient.address ? 'transmitted' : 'local-only';
-  const deliveryStatus: DeliveryStatus = recipient.address ? 'Pending' : 'Not-Transmitted';
+  // With outbound mail off (a demo deployment) an artifact with somewhere to
+  // go is still recorded as not transmitted, exactly as if there were no
+  // address — but `sentToAddress` keeps the address it WOULD have gone to, and
+  // `deliveryError` says why, so the surface can tell the two cases apart.
+  const mailOff = config.smtp.outboundDisabled === true;
+  const transmit = recipient.address !== null && !mailOff;
+  const deliveryMode: DeliveryMode = transmit ? 'transmitted' : 'local-only';
+  const deliveryStatus: DeliveryStatus = transmit ? 'Pending' : 'Not-Transmitted';
+  const notSentReason =
+    recipient.address && mailOff
+      ? 'Outbound mail is turned off on this deployment'
+      : 'The counterparty has no Direct address on file';
   const now = new Date();
 
   // STORE BEFORE ANYTHING ELSE MOVES. The thread row is where the bytes live,
@@ -534,6 +545,7 @@ export async function submitAssertion(req: AssertionRequest): Promise<AssertionR
       sentFromAddress: senderAddress,
       addressMatchedOn: recipient.matchedOn,
       deliveryStatus,
+      ...(transmit ? {} : { deliveryError: notSentReason }),
       createdAt: now,
     })
     .returning();
@@ -587,7 +599,7 @@ export async function submitAssertion(req: AssertionRequest): Promise<AssertionR
       metadata: {
         workspaceId: req.workspaceId,
         assertionId: assertion.id,
-        reason: 'The counterparty has no Direct address on file',
+        reason: notSentReason,
       },
     }).catch((err) => console.error('[ProtocolGateway]', err));
   } else {
@@ -598,6 +610,9 @@ export async function submitAssertion(req: AssertionRequest): Promise<AssertionR
 
   return { ...toResult(assertion), idempotentReplay: false };
 }
+
+/** The artifact types the referrer ACKs, so the ones PRD-07 tracks. */
+const ACK_TRACKED_TYPES = ['RRI', 'SIU', 'ConsultNote'];
 
 /** Plain-language subjects, in the wording the pre-workspace senders already use. */
 const DELIVERY_SUBJECT: Record<string, string> = {
@@ -743,6 +758,23 @@ async function deliver(assertionId: number): Promise<void> {
     },
   }).catch((err) => console.error('[ProtocolGateway]', err));
 
+  // PRD-07 ACK tracking, which the Messages page reads. The pre-workspace
+  // senders each insert this row themselves; artifacts sent from the workspace
+  // never did, so they were invisible there and an ACK for one matched nothing.
+  // Only the message types the referrer ACKs, and only once actually sent.
+  if (delivered && ACK_TRACKED_TYPES.includes(message.messageType) && message.messageControlId) {
+    await db
+      .insert(outboundMessages)
+      .values({
+        referralId: message.referralId,
+        messageControlId: message.messageControlId,
+        messageType: message.messageType,
+        status: 'Pending',
+        sentAt: now,
+      })
+      .onConflictDoNothing();
+  }
+
   // AC12: a real exchange is what turns an assumed capability into a verified
   // one. Only on success, and only for the party we actually reached.
   if (delivered) {
@@ -788,7 +820,8 @@ export async function transmitPending(assertionId: number, actor: string): Promi
     (p) => p.id !== assertion.assertedByPartyId && p.partyRole !== 'other',
   );
   const recipient = await resolveRecipient(assertion.workspaceId, counterparty ?? null);
-  if (!recipient.address) return toResult(assertion);
+  // Mail off: nothing to send through, so "send now" leaves it as it was.
+  if (!recipient.address || config.smtp.outboundDisabled === true) return toResult(assertion);
 
   await db
     .update(workspaceAssertions)

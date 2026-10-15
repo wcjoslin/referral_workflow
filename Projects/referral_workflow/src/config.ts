@@ -39,6 +39,11 @@ export const config = {
     port: parseInt(optionalEnv('SMTP_PORT', '587'), 10),
     user: requireEnv('SMTP_USER'),
     password: requireEnv('SMTP_PASSWORD'),
+    // OUTBOUND_MAIL=off: a demo deployment with placeholder SMTP settings. The
+    // workspace gateway records each artifact as not sent rather than trying
+    // to deliver it and showing every action as a failed delivery. Named as a
+    // DISABLE flag so an absent setting means mail is on.
+    outboundDisabled: optionalEnv('OUTBOUND_MAIL', 'on').toLowerCase() === 'off',
   },
   receiving: {
     directAddress: requireEnv('RECEIVING_DIRECT_ADDRESS'),
