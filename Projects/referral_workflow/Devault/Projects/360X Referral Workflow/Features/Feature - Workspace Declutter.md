@@ -53,6 +53,11 @@ clinical disposition screen the workspace already links to.
 - **AC4:** Activity History stays open across its filter tabs and reloads once a person opens it.
 - **AC5:** The Referral Document (C-CDA) panel is removed. Documents and Prior Authorization sit in a
   right-hand column on wide screens and stack below on narrow ones.
+- **AC6:** The explanations under 360X Status, Work Status and Next action are ⓘ tips beside their
+  labels, shown on hover, tap or keyboard focus, and never wider than the window.
+- **AC7:** The work-status picker and the next-action and due-date overrides are hidden behind
+  "Change" and "Edit". "Follow protocol again" and "Reset to rule" stay visible whenever there is a
+  manual hold or an override to undo.
 
 ---
 
