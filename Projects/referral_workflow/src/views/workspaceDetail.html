@@ -115,6 +115,34 @@
   .status-block { min-width: 190px; }
   .status-explain { font-size: 0.72rem; color: var(--color-text-muted); margin-top: 5px; max-width: 260px; line-height: 1.45; }
 
+  /* ⓘ tips: explanations a person needs once, shown on hover, tap or focus
+     instead of printed on every visit. */
+  .info-tip { position: relative; display: inline-flex; align-items: center; justify-content: center;
+              width: 15px; height: 15px; margin-left: 5px; border-radius: 50%; cursor: help;
+              font-size: 0.62rem; font-weight: 700; font-style: normal; text-transform: none;
+              letter-spacing: 0; color: var(--color-text-muted); border: 1px solid var(--color-border);
+              background: #fff; vertical-align: middle; }
+  .info-tip:hover, .info-tip:focus { color: var(--color-brand); border-color: var(--color-brand); outline: none; }
+  .info-tip::after { content: attr(data-tip); position: absolute; top: calc(100% + 6px); left: -6px; z-index: 50;
+                     width: max-content; max-width: min(280px, 78vw); padding: 8px 10px; border-radius: 6px;
+                     background: #212529; color: #fff; font-size: 0.74rem; font-weight: 400; line-height: 1.45;
+                     white-space: normal; box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+                     pointer-events: none;
+                     /* display, not visibility: a hidden-but-laid-out tip still
+                        widens the page and gives it a sideways scrollbar. */
+                     display: none; }
+  .info-tip:hover::after, .info-tip:focus::after { display: block; }
+  /* Set by script when the tip is near the right edge: open leftward instead. */
+  .info-tip.tip-flip::after { left: auto; right: -6px; }
+  .label .info-tip { margin-top: -2px; }
+
+  /* "Change" / "Edit": reveals controls that are rarely needed. */
+  .link-btn { background: none; border: none; padding: 0 2px; margin-left: 8px; cursor: pointer;
+              font-size: 0.74rem; font-weight: 600; color: var(--color-brand); text-decoration: underline;
+              text-underline-offset: 2px; }
+  .link-btn:hover { color: var(--color-brand-hover); }
+  .edit-panel[hidden] { display: none; }
+
   /* PRD-28 — the exception panel. */
   .exc-panel { margin-top: 18px; padding: 14px 16px; border-radius: 8px; background: #fff5f5;
                border-left: 3px solid #dc3545; }
@@ -669,6 +697,47 @@
     return '<span class="await await-us">Awaiting us</span>';
   }
 
+  /** An ⓘ that shows `text` on hover, tap or keyboard focus. */
+  function tip(text) {
+    return '<span class="info-tip" tabindex="0" role="note" aria-label="' + esc(text) + '" ' +
+      'data-tip="' + esc(text) + '">i</span>';
+  }
+
+  // A tip opens rightward unless that would run past the window's right edge.
+  // Decided on each hover or focus, since the page reflows with the window.
+  function placeTip(e) {
+    var el = e.target && e.target.closest && e.target.closest('.info-tip');
+    if (!el) return;
+    var room = document.documentElement.clientWidth - el.getBoundingClientRect().left;
+    el.classList.toggle('tip-flip', room < 300);
+  }
+  document.addEventListener('mouseover', placeTip);
+  document.addEventListener('focusin', placeTip);
+
+  /** A "Change"/"Edit" button that shows or hides the element with `targetId`. */
+  function revealBtn(label, targetId) {
+    return '<button type="button" class="link-btn" data-reveal="' + esc(targetId) + '" ' +
+      'aria-expanded="false" aria-controls="' + esc(targetId) + '">' + esc(label) + '</button>';
+  }
+
+  function wireReveals(root) {
+    Array.prototype.forEach.call(root.querySelectorAll('[data-reveal]'), function (btn) {
+      btn.addEventListener('click', function () {
+        var panel = document.getElementById(btn.getAttribute('data-reveal'));
+        if (!panel) return;
+        panel.hidden = !panel.hidden;
+        btn.setAttribute('aria-expanded', String(!panel.hidden));
+        btn.textContent = panel.hidden ? btn.getAttribute('data-label') : 'Done';
+        // Opening puts the cursor in the first field, ready to type.
+        if (!panel.hidden) {
+          var first = panel.querySelector('input, select, textarea');
+          if (first) first.focus();
+        }
+      });
+      btn.setAttribute('data-label', btn.textContent);
+    });
+  }
+
   function nextActionBlock() {
     // Declared HERE, not read from an enclosing scope. `renderHeader()` has its
     // own `var readOnly`, and this function is its sibling rather than nested
@@ -695,30 +764,40 @@
             '">DUE DATE OVERRIDDEN</span>'
         : '');
 
+    // The overrides are rarely used, so they sit behind "Edit". "Reset to rule"
+    // stays visible whenever there is an override to undo: it is the way back.
+    var hasOverride = !!(ws.nextActionSetBy || ws.dueDateOverridden);
     var controls = readOnly ? '' :
-      '<div class="ctl-row" style="margin-top:10px;">' +
-        '<input class="ctl" id="naInput" placeholder="Replace the next action…" ' +
-          'maxlength="500" style="min-width:300px;" />' +
-        '<button class="btn" id="btnSetNextAction">Set action</button>' +
+      '<div class="edit-panel" id="naEdit" hidden>' +
+        '<div class="ctl-row" style="margin-top:10px;">' +
+          '<input class="ctl" id="naInput" placeholder="Replace the next action…" ' +
+            'maxlength="500" style="min-width:300px;" />' +
+          '<button class="btn" id="btnSetNextAction">Set action</button>' +
+        '</div>' +
+        '<div class="ctl-row" style="margin-top:6px;">' +
+          '<input class="ctl" id="dueInput" type="datetime-local" />' +
+          '<input class="ctl" id="dueReason" placeholder="Reason (required)" style="min-width:200px;" />' +
+          '<button class="btn" id="btnSetDue">Override due date</button>' +
+        '</div>' +
       '</div>' +
-      '<div class="ctl-row" style="margin-top:6px;">' +
-        '<input class="ctl" id="dueInput" type="datetime-local" />' +
-        '<input class="ctl" id="dueReason" placeholder="Reason (required)" style="min-width:200px;" />' +
-        '<button class="btn" id="btnSetDue">Override due date</button>' +
-        ((ws.nextActionSetBy || ws.dueDateOverridden)
-          ? '<button class="btn" id="btnClearOverrides" title="Restore the computed action and due date">Reset to rule</button>'
-          : '') +
-      '</div>';
+      (hasOverride
+        ? '<div class="ctl-row" style="margin-top:8px;">' +
+            '<button class="btn" id="btnClearOverrides" title="Restore the computed action and due date">' +
+              'Reset to rule</button>' +
+          '</div>'
+        : '');
 
     return '<div class="na-block' + (ws.overdue ? ' na-overdue' : '') + '">' +
       '<div class="na-top">' +
-        '<span class="label">Next action</span>' + awaitedLabel() +
+        '<span class="label">Next action' +
+          tip('Computed from the protocol state and the work status when either changes. Offsets are ' +
+            'elapsed hours: there is no business-hours or holiday awareness, so these are working ' +
+            'defaults rather than contractual SLAs.') +
+        '</span>' + awaitedLabel() +
+        (readOnly ? '' : revealBtn('Edit', 'naEdit')) +
       '</div>' +
       '<div class="na-text">' + esc(ws.nextAction || 'None set') + marks + '</div>' +
       '<div class="na-due"><span class="label">Due</span> ' + dueLine + '</div>' +
-      '<div class="status-explain">Computed from the protocol state and the work status when either ' +
-        'changes. Offsets are elapsed hours &mdash; there is no business-hours or holiday awareness, ' +
-        'so these are working defaults rather than contractual SLAs.</div>' +
       controls +
       '<div class="msg" id="naMsg"></div>' +
     '</div>';
@@ -798,27 +877,31 @@
 
       '<div class="status-pair" style="margin-top:18px;">' +
         '<div class="status-block">' +
-          '<span class="label">360X Status</span>' +
+          '<span class="label">360X Status' +
+            tip('What the counterparty has been told. Externally authoritative: it changes only ' +
+              'through protocol actions, never from this page.') + '</span>' +
           protocolBadge(ref.state) +
-          '<div class="status-explain">What the counterparty has been told. Externally ' +
-            'authoritative — it changes only through protocol actions, never from this page.</div>' +
         '</div>' +
         '<div class="status-block">' +
-          '<span class="label">Work Status</span>' +
+          '<span class="label">Work Status' +
+            tip('Internal processing state. Ours alone; the counterparty never sees it.') + '</span>' +
           workChip(ws.workStatus) +
-          '<div class="status-explain">Internal processing state. Ours alone; the counterparty ' +
-            'never sees it.</div>' +
+          (readOnly ? '' : revealBtn('Change', 'wsStatusEdit')) +
           '<div class="status-meta">' + manualNote + '</div>' +
           (readOnly ? '' :
-            '<div class="ctl-row">' +
-              '<select class="ctl" id="workStatusSelect">' +
-                '<option value="">Change to…</option>' + opts +
-              '</select>' +
-              '<input class="ctl" id="workStatusReason" placeholder="Reason (optional)" ' +
-                'style="min-width:170px;" />' +
-              '<button class="btn btn-primary" id="btnSetStatus">Set</button>' +
-              resyncBtn +
-            '</div>') +
+            // The picker sits behind "Change"; "Follow protocol again" stays in
+            // view while a person is holding the status, as the way back.
+            '<div class="edit-panel" id="wsStatusEdit" hidden>' +
+              '<div class="ctl-row">' +
+                '<select class="ctl" id="workStatusSelect">' +
+                  '<option value="">Change to…</option>' + opts +
+                '</select>' +
+                '<input class="ctl" id="workStatusReason" placeholder="Reason (optional)" ' +
+                  'style="min-width:170px;" />' +
+                '<button class="btn btn-primary" id="btnSetStatus">Set</button>' +
+              '</div>' +
+            '</div>' +
+            (resyncBtn ? '<div class="ctl-row">' + resyncBtn + '</div>' : '')) +
           '<div class="msg" id="statusMsg"></div>' +
         '</div>' +
       '</div>' +
@@ -859,6 +942,7 @@
       var rb = document.getElementById('btnResync');
       if (rb) rb.addEventListener('click', resync);
     }
+    wireReveals(document.getElementById('wsHeader'));
     // "+N more" chips in the clinical summary reveal the rest in place.
     Array.prototype.forEach.call(document.querySelectorAll('#wsHeader .more-chip'), function (chip) {
       function reveal() {
