@@ -1,0 +1,24 @@
+{
+  // The deployable build: the app plus the demo-seed scripts that
+  // `start:hosted` runs on every cold start, compiled to plain JavaScript so a
+  // hosted start does not pay for compiling TypeScript.
+  //
+  // rootDir is the project root, so output lands at dist/src/... and
+  // dist/scripts/... and the scripts' `../src/...` imports still resolve.
+  // Views and fixtures are not compiled; src/paths.ts reads them from the
+  // source tree.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./dist",
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": [
+    "src/**/*",
+    "scripts/seed-if-empty.ts",
+    "scripts/seed-full-demo.ts",
+    "scripts/demo-patients.ts",
+    "scripts/demo-collaboration.ts"
+  ]
+}

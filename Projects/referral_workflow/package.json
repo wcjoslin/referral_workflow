@@ -5,13 +5,13 @@
   "engines": {
     "node": "22.x"
   },
-  "main": "dist/index.js",
+  "main": "dist/src/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "prestart": "ts-node src/db/migrate.ts",
     "start": "ts-node -r ./scripts/node-polyfill.js src/index.ts",
     "dev": "ts-node -r ./scripts/node-polyfill.js src/index.ts",
-    "start:hosted": "npm run db:migrate && ts-node -r ./scripts/node-polyfill.js scripts/seed-if-empty.ts && ts-node -r ./scripts/node-polyfill.js src/index.ts",
+    "start:hosted": "node dist/src/db/migrate.js && node -r ./scripts/node-polyfill.js dist/scripts/seed-if-empty.js && node -r ./scripts/node-polyfill.js dist/src/index.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
