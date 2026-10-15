@@ -360,9 +360,9 @@
   .act-transition { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.7rem; }
 
   .cols { display: grid; grid-template-columns: 1fr; gap: 16px; }
-  /* Main work on the left; documents and prior auth, which are reference, on
-     the right. Not sticky: the documents list can be taller than the screen. */
-  .cols.with-side { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+  /* Equal columns, balanced per referral by layoutColumns(). Not sticky: the
+     documents list can be taller than the screen. */
+  .cols.with-side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
   @media (max-width: 980px) { .cols.with-side { grid-template-columns: 1fr; } }
 
   /* ── At-a-glance strip in the header ─────────────────────────────────────── */
@@ -490,35 +490,25 @@
     The embedded C-CDA viewer was removed; the clinical disposition screen the
     header links to is where the full document is read.
   -->
+  <!--
+    Two equal columns. The cards start in the split below, the one that came
+    out most even across the seeded referral states, and layoutColumns() then
+    rebalances once for this referral after the cards have loaded. On narrow
+    screens they stack in CARD_ORDER: actions and the people involved first,
+    the collapsed audit sections last. Ownership and parties stay high in that
+    order on purpose: they were once buried under placeholders and an
+    unbounded message list (PRD-21, PRD-24 AC1).
+  -->
   <div class="cols with-side" id="wsCols">
-    <div>
-      <!--
-        Ownership lives in the MAIN column, high up, because it is an action
-        about the work rather than reference material — and because when a
-        referral has no C-CDA the layout collapses to one column and the side
-        column stacks after everything in this one. PRD-19 originally put this
-        slot in the side column; filling it in PRD-21 showed the consequence:
-        the claim and release controls sat a thousand pixels down, beneath three
-        empty placeholder panels.
-      -->
+    <div id="wsMain">
       <div class="card" id="wsAssertions"></div>
       <div class="card" id="wsOwner"></div>
-      <!--
-        Parties & participants also sits in the MAIN column, but for a different
-        reason than ownership above. Ownership moved because it is the primary
-        ACTION and was buried. This panel is mostly reference material, which
-        would normally justify the side column — except AC1's whole story is
-        "see who I am dealing with WITHOUT opening the raw message", and in the
-        single-column collapse the side column stacks after the message thread,
-        which can run to any length. Reference material you are meant to see on
-        arrival cannot live below an unbounded list.
-      -->
       <div class="card" id="wsParticipants"></div>
-      <div class="card" id="wsConversation"></div>
       <div class="card" id="wsThread"></div>
       <div class="card" id="wsActivity"></div>
     </div>
     <div id="wsSide">
+      <div class="card" id="wsConversation"></div>
       <div class="card" id="wsDocuments"></div>
       <div class="card" id="wsPriorAuth"></div>
     </div>
@@ -2622,21 +2612,79 @@
   document.title = 'Workspace #' + ws.id + ' — ' +
     (P.patient.lastName || 'Referral ' + ref.id);
 
+  // ── Two balanced columns ──────────────────────────────────────────────────
+  //
+  // Card heights swing with the referral: an Acknowledged referral has a tall
+  // 360X Actions card, a closed one a long Documents list. No fixed split kept
+  // the columns even — measured across the seeded states, the best left them
+  // ~240px apart on average and ~600px at worst. So the split is chosen per
+  // page, ONCE, after the cards have loaded: of every arrangement that keeps
+  // 360X Actions top-left, the one with the most even columns. Each column
+  // keeps the order below, so a card's position stays predictable.
+  //
+  // Once only, deliberately: rebalancing when a section is opened or a comment
+  // posted would move cards out from under the cursor.
+  var CARD_ORDER = ['wsAssertions', 'wsOwner', 'wsParticipants', 'wsConversation',
+    'wsDocuments', 'wsPriorAuth', 'wsThread', 'wsActivity'];
+  var twoColumns = window.matchMedia('(min-width: 981px)');
+
+  function layoutColumns() {
+    var cols = document.getElementById('wsCols');
+    var left = document.getElementById('wsMain');
+    var right = document.getElementById('wsSide');
+    var cards = CARD_ORDER.map(function (id) { return document.getElementById(id); }).filter(Boolean);
+
+    // One column on narrow screens: everything in reading order.
+    if (!twoColumns.matches) {
+      cards.forEach(function (c) { left.appendChild(c); });
+      return;
+    }
+
+    // Columns are equal width, so a card's height is the same in either.
+    var gap = 16;
+    var heights = cards.map(function (c) { return c.getBoundingClientRect().height + gap; });
+    var best = null;
+    var bestDiff = Infinity;
+    // The two collapsed audit sections stay together, at the foot of one column,
+    // rather than one under each — split, they read as stray rows.
+    var thread = cards.indexOf(document.getElementById('wsThread'));
+    var activityIdx = cards.indexOf(document.getElementById('wsActivity'));
+    // Bit i set = card i goes right. Card 0 (360X Actions) always stays left.
+    for (var mask = 0; mask < (1 << cards.length); mask += 2) {
+      if (thread >= 0 && activityIdx >= 0 &&
+          ((mask >> thread) & 1) !== ((mask >> activityIdx) & 1)) continue;
+      var l = 0;
+      var r = 0;
+      for (var i = 0; i < cards.length; i++) {
+        if (mask & (1 << i)) r += heights[i]; else l += heights[i];
+      }
+      var diff = Math.abs(l - r);
+      if (diff < bestDiff) { bestDiff = diff; best = mask; }
+    }
+    cards.forEach(function (c, i) { ((best & (1 << i)) ? right : left).appendChild(c); });
+    cols.dataset.balanced = String(Math.round(bestDiff));
+  }
+
   renderBanners();
   renderHeader();
   renderPriorAuth();
   renderSlots();
-  if (P.slots.owner) loadOwnerUsers();
-  if (P.slots.participants) { renderParties(); loadRoster(); reloadParties(); }
-  if (P.slots.conversation) { renderConversation(); loadConversation(); }
-  if (P.slots.documents) { renderDocuments(); void reloadDocuments(); }
-  if (P.slots.activity) renderActivity();
-  reloadAssertions();
-  // A link to #wsActivity or #wsThread opens that section; the browser's own
-  // jump happens before these load and shift the page, so scroll once they have.
-  Promise.all([P.slots.activity ? reloadActivity() : null, loadThread()]).then(function () {
+  var loads = [reloadAssertions(), loadThread()];
+  if (P.slots.owner) loads.push(loadOwnerUsers());
+  if (P.slots.participants) { renderParties(); loads.push(loadRoster(), reloadParties()); }
+  if (P.slots.conversation) { renderConversation(); loads.push(loadConversation()); }
+  if (P.slots.documents) { renderDocuments(); loads.push(reloadDocuments()); }
+  if (P.slots.activity) { renderActivity(); loads.push(reloadActivity()); }
+
+  // allSettled: one failed fetch must not leave the page unbalanced.
+  Promise.allSettled(loads).then(function () {
+    layoutColumns();
+    // A link to #wsActivity or #wsThread opens that section; the browser's own
+    // jump happens before the cards load and move, so scroll once they have.
     var target = location.hash && document.getElementById(location.hash.slice(1));
     if (target) target.scrollIntoView({ block: 'start' });
   });
+  // Crossing the breakpoint (a resized window, a rotated tablet) re-flows once.
+  twoColumns.addEventListener('change', layoutColumns);
 })();
 </script>
