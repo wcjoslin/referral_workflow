@@ -58,6 +58,15 @@ clinical disposition screen the workspace already links to.
 - **AC7:** The work-status picker and the next-action and due-date overrides are hidden behind
   "Change" and "Edit". "Follow protocol again" and "Reset to rule" stay visible whenever there is a
   manual hold or an override to undo.
+- **AC8:** The 360X status is shown once, by the journey: its title names the current state and the
+  current step is emphasised. There is no separate status badge in the banner.
+- **AC9:** The footnotes in 360X Actions, Ownership and Parties & Participants are ⓘ tips on the
+  heading they qualify. "Artifacts sent from here" is collapsed with its count, and opens after a
+  send so the new artifact is visible.
+- **AC10:** Each organization's invite address field is hidden behind "Invite…".
+- **AC11:** Once the banner's status area scrolls away, a compact bar shows the patient, referral
+  number, 360X status and work status, with "Back to top". It sits below the nav where the nav is
+  sticky and at the top of the window where it is not.
 
 ---
 

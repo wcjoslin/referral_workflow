@@ -408,6 +408,13 @@
   .glance-journey .tl-dot { width: 22px; height: 22px; border-width: 2px; font-size: 0.62rem; }
   .glance-journey .tl-connector { top: 11px; height: 2px; }
   .glance-journey .tl-label { font-size: 0.66rem; margin-top: 4px; }
+  /* The journey is the one place the 360X status is shown, so the current step
+     reads as the answer, and the title names it for anyone scanning. */
+  .glance-journey .tl-step.is-now .tl-label { color: var(--color-text); font-weight: 700; }
+  .glance-title { display: flex; align-items: center; gap: 2px; }
+  .journey-now { margin-left: 10px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0;
+                 text-transform: none; color: var(--color-text); background: #eef2f6;
+                 border-radius: 20px; padding: 2px 10px; }
   .more-chip { cursor: pointer; border-style: dashed; }
 
   /* ── Collapsible audit sections (Exchanged Messages, Activity History) ───── */
@@ -418,6 +425,26 @@
                                        transition: transform 0.15s; display: inline-block; }
   details.fold[open] > summary h2::before { transform: rotate(90deg); }
   details.fold[open] > summary { margin-bottom: 14px; }
+  /* A smaller fold inside a card (360X Actions' "Artifacts sent from here"). */
+  details.fold-sub { margin-top: 14px; }
+  details.fold-sub > summary .subhead { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+  details.fold-sub > summary .subhead::before { content: '\25B8'; font-size: 0.75rem;
+    color: var(--color-text-muted); transition: transform 0.15s; display: inline-block; }
+  details.fold-sub[open] > summary .subhead::before { transform: rotate(90deg); }
+  details.fold-sub[open] > summary { margin-bottom: 6px; }
+
+  /* ── Compact bar: who and where, once the banner has scrolled away ─────── */
+  .mini-bar { position: fixed; left: 0; right: 0; z-index: 90; background: var(--color-card);
+              border-bottom: 1px solid var(--color-border); box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+              transform: translateY(-120%); transition: transform 0.15s ease-out; }
+  .mini-bar.show { transform: none; }
+  .mini-inner { max-width: 1400px; margin: 0 auto; padding: 7px 16px; display: flex; align-items: center;
+                gap: 10px; flex-wrap: wrap; font-size: 0.82rem; }
+  .mini-name { font-weight: 700; }
+  .mini-sub { color: var(--color-text-muted); font-size: 0.76rem; }
+  .mini-top { margin-left: auto; font-size: 0.76rem; }
+  @media (prefers-reduced-motion: reduce) { .mini-bar { transition: none; } }
+
   /* A direct link scrolls the section to the top, which the sticky nav covers. */
   #wsActivity, #wsThread { scroll-margin-top: 84px; }
   .fold-hint { font-size: 0.72rem; font-weight: 400; color: var(--color-text-muted); margin-left: auto; }
@@ -507,6 +534,9 @@
 </style>
 
 <!--__NAV__-->
+
+<!-- Shown by renderMiniBar() once the banner has scrolled out of view. -->
+<div class="mini-bar" id="wsMini" aria-hidden="true"></div>
 
 <div class="wrap">
   <div id="wsBanners"></div>
@@ -875,13 +905,9 @@
         '</div>' +
       '</div>' +
 
+      // The 360X status is shown once, by the journey below (its current step).
+      // A badge here as well said the same thing twice.
       '<div class="status-pair" style="margin-top:18px;">' +
-        '<div class="status-block">' +
-          '<span class="label">360X Status' +
-            tip('What the counterparty has been told. Externally authoritative: it changes only ' +
-              'through protocol actions, never from this page.') + '</span>' +
-          protocolBadge(ref.state) +
-        '</div>' +
         '<div class="status-block">' +
           '<span class="label">Work Status' +
             tip('Internal processing state. Ours alone; the counterparty never sees it.') + '</span>' +
@@ -909,7 +935,12 @@
       // At a glance: where the referral is in the protocol, where it is routed,
       // and the clinical picture — the three things a person needs on arrival.
       '<div class="glance-box glance-journey">' +
-        '<div class="glance-title">360X protocol journey</div>' + journeySteps() +
+        '<div class="glance-title">360X Status' +
+          tip('What the counterparty has been told, and the path the referral has taken. Externally ' +
+            'authoritative: it changes only through protocol actions, never from this page. Work ' +
+            'status is tracked separately.') +
+          '<span class="journey-now">' + esc(ref.state) + '</span>' +
+        '</div>' + journeySteps() +
       '</div>' +
       '<div class="glance">' +
         '<div class="glance-box">' +
@@ -1041,15 +1072,15 @@
       else if (idx >= 0 && i < idx) cls += ' active';
 
       var conn = (idx >= 0 && i < idx) ? ' active' : '';
-      return '<div class="tl-step">' +
+      return '<div class="tl-step' + (i === idx ? ' is-now' : '') + '"' +
+        (i === idx ? ' aria-current="step"' : '') + '>' +
         '<div class="tl-connector' + conn + '"></div>' +
         '<div class="' + cls + '">' + (idx >= 0 && i < idx ? '✓' : String(i + 1)) + '</div>' +
         '<div class="tl-label">' + esc(label) + '</div>' +
       '</div>';
     }).join('');
 
-    return '<div class="tl" title="The externally authoritative lifecycle. Work status is tracked ' +
-      'separately and does not appear here.">' + steps + '</div>';
+    return '<div class="tl">' + steps + '</div>';
   }
 
   // ── Message thread (AC10) — same endpoints, unchanged ─────────────────────
@@ -1285,13 +1316,14 @@
     }
 
     document.getElementById('wsOwner').innerHTML =
-      '<h2>Ownership</h2>' +
+      '<h2>Ownership' +
+        (readOnly ? '' : tip('Releasing returns the work to its queue without reassigning it. The ' +
+          '360X status is unaffected either way.')) + '</h2>' +
       '<div class="owner-now">' + current + '</div>' +
+      // The archived note stays as text: it is the state of this workspace,
+      // not background a person can skip.
       (readOnly ? '<div class="owner-hint">This workspace is archived; ownership is fixed.</div>' : controls) +
-      '<div class="msg" id="ownerMsg"></div>' +
-      (readOnly ? '' :
-        '<div class="owner-hint">Releasing returns the work to its queue without ' +
-        'reassigning it. The 360X status is unaffected either way.</div>');
+      '<div class="msg" id="ownerMsg"></div>';
 
     if (readOnly) return;
     var claim = document.getElementById('btnClaim');
@@ -1352,6 +1384,7 @@
 
   var available = { available: [], partyRole: null, protocolState: null };
   var assertions = [];
+  var histOpen = false;
 
   function renderAssertions() {
     var readOnly = !!P.workspace.archivedAt;
@@ -1376,8 +1409,13 @@
       '</div>';
     }).join('');
 
+    // A record of what went out, not something acted on, so it is collapsed
+    // with its count showing. `histOpen` survives the re-render after a send,
+    // and a send opens it so the new artifact is visible.
     var history = assertions.length === 0 ? '' :
-      '<div class="subhead">Artifacts sent from here</div>' +
+      '<details class="fold fold-sub" id="histFold"' + (histOpen ? ' open' : '') + '>' +
+      '<summary><span class="subhead">Artifacts sent from here ' +
+        '<span class="thread-count">(' + assertions.length + ')</span></span></summary>' +
       '<ul class="hist">' + assertions.map(function (a) {
         // Recorded with an address to go to, but not sent: this deployment has
         // outbound mail turned off. Retrying cannot help, so no "Send now".
@@ -1398,10 +1436,13 @@
           (!readOnly && !mailOff && (a.deliveryMode === 'local-only' || a.deliveryStatus === 'Failed')
             ? '<button class="btn" data-transmit="' + esc(a.assertionId) + '">Send now</button>' : '') +
         '</li>';
-      }).join('') + '</ul>';
+      }).join('') + '</ul></details>';
 
     document.getElementById('wsAssertions').innerHTML =
-      '<h2>360X Actions</h2>' +
+      '<h2>360X Actions' +
+        tip('Each action is turned into a conformant 360X artifact and delivered to the other ' +
+          'organization’s Direct address. If they have no address on file it is still recorded ' +
+          'here, and you can send it later.') + '</h2>' +
       (available.protocolState
         ? '<div class="party-extra" style="margin-bottom:10px;">Acting for this organization as the <strong>' +
           esc(available.partyRole || '\u2014') + '</strong> party. The referral is ' +
@@ -1410,10 +1451,10 @@
       (options || '<div class="asrt-none">Nothing to send from this state. The other side acts next, ' +
         'or the referral is finished.</div>') +
       history +
-      '<div class="msg" id="asrtMsg"></div>' +
-      '<div class="party-extra">Each action is turned into a conformant 360X artifact and delivered to ' +
-      'the other organization\u2019s Direct address. If they have no address on file it is still ' +
-      'recorded here, and you can send it later.</div>';
+      '<div class="msg" id="asrtMsg"></div>';
+
+    var histFold = document.getElementById('histFold');
+    if (histFold) histFold.addEventListener('toggle', function () { histOpen = histFold.open; });
 
     if (readOnly) return;
 
@@ -1465,6 +1506,7 @@
       });
       var json = await res.json();
       if (!res.ok) { asrtMsg(json.error || 'Could not send that.', false); return; }
+      histOpen = true;
       await reloadAssertions();
       asrtMsg(json.deliveryMode !== 'local-only'
         ? 'Sent as a conformant 360X artifact.'
@@ -1578,16 +1620,17 @@
       '<h2>Parties &amp; Participants</h2>' +
       '<div class="subhead" style="margin-top:2px;">Organizations on this referral</div>' +
       partyHtml +
-      '<div class="subhead">People here who are involved</div>' +
+      // Stated on the page, not just in the code: somebody will otherwise
+      // assume Viewer is a permission. A tip on the heading it qualifies.
+      '<div class="subhead">People here who are involved' +
+        tip('Roles describe involvement and drive notifications. They are not access control yet: ' +
+          'queue membership (PRD-20) and guest scoping (PRD-30) are what will enforce who can see ' +
+          'what.') + '</div>' +
       listHtml +
       addCtl +
-      '<div class="msg" id="pMsg"></div>' +
-      // Stated on the page, not just in the code: somebody will otherwise
-      // assume Viewer is a permission.
-      '<div class="party-extra">Roles describe involvement and drive notifications. They are ' +
-      'not access control yet \u2014 queue membership (PRD-20) and guest scoping (PRD-30) are what ' +
-      'will enforce who can see what.</div>';
+      '<div class="msg" id="pMsg"></div>';
 
+    wireReveals(document.getElementById('wsParticipants'));
     if (readOnly) return;
 
 
@@ -1711,12 +1754,17 @@
 
     if (readOnly) return list;
 
+    // The address field appears only when someone means to invite; until then
+    // the card is just the organization and any invitations already sent.
     return list +
-      '<div class="ctl-row">' +
-        '<input class="ctl" id="inviteEmail-' + esc(p.id) + '" placeholder="' +
-          (p.directAddress ? esc(p.directAddress) : 'email address') +
-          '" style="min-width:220px;" />' +
-        '<button class="btn" data-invite="' + esc(p.id) + '">Invite</button>' +
+      '<div class="ctl-row">' + revealBtn('Invite…', 'invitePanel-' + p.id) + '</div>' +
+      '<div class="edit-panel" id="invitePanel-' + esc(p.id) + '" hidden>' +
+        '<div class="ctl-row">' +
+          '<input class="ctl" id="inviteEmail-' + esc(p.id) + '" placeholder="' +
+            (p.directAddress ? esc(p.directAddress) : 'email address') +
+            '" style="min-width:220px;" />' +
+          '<button class="btn" data-invite="' + esc(p.id) + '">Send invitation</button>' +
+        '</div>' +
       '</div>';
   }
 
@@ -2749,8 +2797,54 @@
     cols.dataset.balanced = String(Math.round(bestDiff));
   }
 
+  // ── Compact bar ───────────────────────────────────────────────────────────
+  //
+  // Once the banner's status area has scrolled under the nav, a thin bar keeps
+  // who this is and where the referral stands in view. It sits just below the
+  // nav when the nav is sticky (desktop) and at the very top when it is not
+  // (narrow screens, where the nav scrolls away).
+  function renderMiniBar() {
+    var bar = document.getElementById('wsMini');
+    var name = (P.patient.firstName + ' ' + P.patient.lastName).trim() || 'Unknown patient';
+    bar.innerHTML = '<div class="mini-inner">' +
+      '<span class="mini-name">' + esc(name) + '</span>' +
+      '<span class="mini-sub">Referral #' + esc(ref.id) + '</span>' +
+      protocolBadge(ref.state) +
+      workChip(ws.workStatus) +
+      '<a href="#" class="mini-top" id="miniTop" tabindex="-1">Back to top ↑</a>' +
+    '</div>';
+    document.getElementById('miniTop').addEventListener('click', function (e) {
+      e.preventDefault();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    var nav = document.querySelector('nav');
+    var anchor = document.querySelector('#wsHeader .status-pair') || document.getElementById('wsHeader');
+    var ticking = false;
+
+    function navOffset() {
+      return nav && getComputedStyle(nav).position === 'sticky' ? nav.getBoundingClientRect().height : 0;
+    }
+    function update() {
+      ticking = false;
+      var top = navOffset();
+      bar.style.top = top + 'px';
+      var show = anchor.getBoundingClientRect().bottom < top;
+      bar.classList.toggle('show', show);
+      bar.setAttribute('aria-hidden', String(!show));
+      document.getElementById('miniTop').tabIndex = show ? 0 : -1;
+    }
+    function schedule() {
+      if (!ticking) { ticking = true; requestAnimationFrame(update); }
+    }
+    window.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    update();
+  }
+
   renderBanners();
   renderHeader();
+  renderMiniBar();
   renderPriorAuth();
   renderSlots();
   var loads = [reloadAssertions(), loadThread()];
